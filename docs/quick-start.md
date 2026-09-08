@@ -131,7 +131,29 @@ To read what a run produced, use the ids `apify call` printed:
 
 `apify api` sends any request to the runtime API, so every Actor, build, run, log, and storage is available this way. The raw files are in the `data` directory. Read them freely, but change state through the API.
 
-## 5. Stop and reset the runtime
+## 5. Edit your Actor's code
+
+Edit the code of your Actor and see the results without rebuilding it.
+
+1. Change the source in your Actor directory, for example `src/main.ts`.
+
+2. Compile the code, if your language needs it:
+
+    ```
+    npm run build
+    ```
+
+3. Run the Actor again:
+
+    ```
+    apify call
+    ```
+
+The run starts from your edited source. There is no `apify push` and no build in between, so the loop takes seconds instead of the minute a build costs.
+
+Edits apply to the next run you start, not to a run already in progress. Changes to dependencies, such as `package.json` or `requirements.txt`, still need `apify push`, because dependencies are installed during the build.
+
+## 6. Stop and reset the runtime
 
 - To stop, run `apify local stop` or `docker stop actor-runtime`.
 - To keep your data, start the runtime again with the same `data` directory.
