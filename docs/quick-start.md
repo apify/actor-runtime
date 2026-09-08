@@ -16,11 +16,13 @@ Choose one of the following methods.
 
 ### Start with Apify CLI
 
-The `apify local` commands check that Docker works, download the runtime image, and start it:
+In your Actor directory, run:
 
 ```
 apify local start --detach --data-dir ./data
 ```
+
+The command checks that Docker works, downloads the runtime image, and starts it. Runtime data is stored in the `data` directory of your Actor, so each Actor has its own local platform state.
 
 To stop the runtime later, run `apify local stop`.
 
@@ -164,7 +166,37 @@ To read what a run produced, use the ids `apify call` printed:
 - To keep your data, start the runtime again with the same `data` directory.
 - To reset, stop the runtime and delete the `data` directory. Built Actor images stay in Docker and are reused when you push the same source again.
 
+## 6. Debug your Actor with your IDE
+
+To make every run of your Actor pause at start and wait for a debugger, turn on debug mode once. The Actor id is in the output of `apify push`:
+
+```
+ACTOR_ID=<your Actor id>
+apify api POST /actor-runtime/debug/$ACTOR_ID --body '{"enabled": true}'
+apify call --timeout 900
+```
+
+The run log prints one line with the detected language, the debug tool, the address to attach to, and the IDE action to use:
+
+| Language | Default port | Attach with                                                    |
+| -------- | ------------ | -------------------------------------------------------------- |
+| Node.js  | `9229`       | VS Code **Attach**                                             |
+| Python   | `5678`       | PyCharm **Attach to DAP** or VS Code **Python: Remote Attach** |
+
+The port is published on `127.0.0.1` only. After you attach, the Actor runs to your first breakpoint. The runtime sets no breakpoints of its own.
+
+To override the detected language or the port, or to turn debug mode off:
+
+```
+apify api POST /actor-runtime/debug/$ACTOR_ID --body '{"enabled": true, "language": "node", "port": 9230}'
+apify api POST /actor-runtime/debug/$ACTOR_ID --body '{"enabled": false}'
+```
+
+**Before you debug**
+
+- The run timeout is not extended while the run waits for you. Pass a generous `--timeout`.
+- The image's `CMD` must start the interpreter directly. `npm start` is refused because the debugger would attach to npm, not to your Actor. A Node.js Actor pushed without its own Dockerfile hits this, since the default Dockerfile uses `npm start`. Add a Dockerfile ending with `CMD ["node", "dist/main.js"]`, like the TypeScript sample.
+
 ## Next steps
 
-- Learn the full development loop in [Local development workflow](local-development.md), including iterating without rebuilds, debugging with your IDE, and testing migrations.
 - See `requirements/*.md` in this repository for the exact behaviour of the API, storages, and Actor driver.
