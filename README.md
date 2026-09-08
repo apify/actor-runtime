@@ -11,6 +11,16 @@ running them does.
 See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 `storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`).
 
+## Documentation
+
+- [Quick start](docs/quick-start.md) - prerequisites, starting the runtime (Apify CLI or Docker),
+  pointing the CLI at it, first push and run, and the proposed `apify local` experience.
+- [Local development workflow](docs/local-development.md) - the full dev loop: build, run, inspect,
+  iterate without rebuilds, IDE debugging, migration/abort rehearsal, multiple users, platform
+  fallback, limitations, and the ideal state this project is working towards.
+
+The sections below are the condensed reference; the docs above are the guided version.
+
 ## Quick start
 
 ```bash
