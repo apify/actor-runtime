@@ -17,7 +17,7 @@ See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
   push and run your Actor, and view the results.
 - [Local development workflow](docs/local-development.md) - build, run, view results, iterate without
   rebuilding, debug with your IDE, test platform events, simulate users, fall back to the platform,
-  limitations, and proposed improvements.
+  and limitations.
 
 The sections below are the condensed reference; the docs above are the guided version.
 

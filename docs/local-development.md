@@ -120,7 +120,7 @@ To clear the registration, submit an empty body: `--body '""'`.
 - The mount covers the working directory, but `node_modules` from the built image stays available underneath. Only source edits skip the rebuild. Dependency, Dockerfile, and `requirements.txt` changes still need `apify push`.
 - A running process does not reload. A recompile is picked up by the next run's container.
 - The runtime checks that the path exists on your host and is a directory when you register it. If the directory later disappears, the run fails visibly instead of mounting an empty directory.
-- The runtime can only mount a path you give it. Apify CLI does not tell it where your source lives, and the runtime itself runs in a container. See [Proposed improvements](#proposed-improvements).
+- The runtime can only mount a path you give it. Apify CLI does not tell it where your source lives, and the runtime itself runs in a container.
 
 ## Debug with your IDE
 
@@ -212,18 +212,3 @@ The runtime is a development tool for one developer: fewer than ten Actors, five
 
 - Read the exact behaviour in `requirements/api.md`, `requirements/actor-driver.md`, and `requirements/storage.md`.
 - When your Actor works locally, unset the environment variables and `apify push` to deploy it to the Apify platform.
-
-## Proposed improvements
-
-**Proposal**
-
-The items below are not implemented. They describe the developer experience this project is working towards, ordered by how much friction they remove.
-
-1. **`apify local` as the only tool.** `start`, `stop`, `status`, `connect`, `disconnect`, `reset`, and `logs` commands in the stable Apify CLI, with a published, versioned image and networking that works on every host.
-2. **No dev-folder registration.** Today [Iterate without rebuilding](#iterate-without-rebuilding) needs an absolute host path per Actor. Two ways to remove the step, both non-breaking:
-    - Apify CLI includes the Actor's local directory when pushing to a local runtime, and the runtime registers it. This needs a CLI change.
-    - The runtime is started with a projects root mounted, for example `-v ~/Projects:/dev-root`, and on each push it finds the directory whose files match the uploaded source, translates the path back to the host, and registers it itself. No CLI change.
-3. **A dev flag on `call`.** Something like `apify call --dev` that recompiles locally, ensures the dev folder is registered, and runs, so the iteration loop is one command.
-4. **Runtime-side fix for Docker Desktop networking.** The runtime's network attach should set the gateway priority so the bridge network stays the default route, which removes the workaround in the quick start.
-5. **Housekeeping.** `apify local reset` for data, and pruning of superseded build images so a long session does not fill the disk.
-6. **Accept Actor names where ids are required.** The `/actor-runtime/*` endpoints take an Actor id. Accepting the name from `.actor/actor.json` saves a lookup.
