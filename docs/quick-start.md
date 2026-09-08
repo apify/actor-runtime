@@ -16,13 +16,13 @@ Choose one of the following methods.
 
 ### Start with Apify CLI
 
-The `apify runtime` commands check that Docker works, download the runtime image, and start it:
+The `apify local` commands check that Docker works, download the runtime image, and start it:
 
 ```
-apify runtime start --detach --data-dir ./data
+apify local start --detach --data-dir ./data
 ```
 
-To stop the runtime later, run `apify runtime stop`.
+To stop the runtime later, run `apify local stop`.
 
 **In development**
 
@@ -64,7 +64,7 @@ docker run --rm --name actor-runtime \
   actor-runtime
 ```
 
-The startup warning that the runtime could not attach to the network is expected in this setup. `apify runtime start` does not have this option yet.
+The startup warning that the runtime could not attach to the network is expected in this setup. `apify local start` does not have this option yet.
 
 ### Check that it is running
 
@@ -160,7 +160,7 @@ To read what a run produced, use the ids `apify call` printed:
 
 ## 5. Stop and reset the runtime
 
-- To stop, run `apify runtime stop` or `docker stop actor-runtime`.
+- To stop, run `apify local stop` or `docker stop actor-runtime`.
 - To keep your data, start the runtime again with the same `data` directory.
 - To reset, stop the runtime and delete the `data` directory. Built Actor images stay in Docker and are reused when you push the same source again.
 
