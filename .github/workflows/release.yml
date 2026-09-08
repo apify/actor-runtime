@@ -12,7 +12,7 @@ on:
             image:
                 description: Docker Hub repository to push to
                 required: true
-                default: josefprochazka/actor-runtime-dev
+                default: apify/actor-runtime
             extra_tag:
                 description: Optional extra tag to publish alongside the branch tags (e.g. v0.1.0)
                 required: false
@@ -37,16 +37,19 @@ jobs:
             # exactly the branch picked in "Use workflow from".
             - uses: actions/checkout@v4
 
-            # Fail here rather than three slow build steps later, with the fix named.
+            # Fail here rather than three slow build steps later, with the fix named. The credentials
+            # are the Apify service account's, the same ones apify-actor-docker publishes with; they
+            # reach this repository's Actions secrets through the Doppler -> GitHub sync, so a missing
+            # value is fixed in Doppler, not by adding a secret here by hand.
             - name: Check Docker Hub credentials are configured
               env:
-                  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-                  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+                  DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
+                  DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
               run: |
                   if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-                    echo "::error::Missing DOCKERHUB_USERNAME / DOCKERHUB_TOKEN repository secrets." \
-                      "Create an access token at https://hub.docker.com/settings/security and add both" \
-                      "under Settings -> Secrets and variables -> Actions."
+                    echo "::error::Missing APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME / APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN" \
+                      "repository secrets. They are synced from Doppler - check that the Doppler -> GitHub" \
+                      "integration for this repository includes both."
                     exit 1
                   fi
 
@@ -88,10 +91,11 @@ jobs:
             - uses: docker/setup-qemu-action@v3
             - uses: docker/setup-buildx-action@v3
 
-            - uses: docker/login-action@v3
+            - name: Login to DockerHub
+              uses: docker/login-action@v4
               with:
-                  username: ${{ secrets.DOCKERHUB_USERNAME }}
-                  password: ${{ secrets.DOCKERHUB_TOKEN }}
+                  username: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
 
             - name: Build and push
               id: build
