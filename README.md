@@ -13,11 +13,11 @@ See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 
 ## Documentation
 
-- [Quick start](docs/quick-start.md) - prerequisites, starting the runtime (Apify CLI or Docker),
-  pointing the CLI at it, first push and run, and the proposed `apify local` experience.
-- [Local development workflow](docs/local-development.md) - the full dev loop: build, run, inspect,
-  iterate without rebuilds, IDE debugging, migration/abort rehearsal, multiple users, platform
-  fallback, limitations, and the ideal state this project is working towards.
+- [Quick start](docs/quick-start.md) - start the runtime with Apify CLI or Docker, connect the CLI,
+  push and run an Actor, view the results, and the proposed `apify local` commands.
+- [Local development workflow](docs/local-development.md) - build, run, view results, iterate without
+  rebuilding, debug with your IDE, test platform events, simulate users, fall back to the platform,
+  limitations, and proposed improvements.
 
 The sections below are the condensed reference; the docs above are the guided version.
 

@@ -1,54 +1,39 @@
 # Quick start
 
-`actor-runtime` is a local Apify platform in a single Docker container. It emulates the parts of the
-Apify API and Console that the Actor development loop needs, so you can `apify push`, build, run, and
-inspect an Actor entirely on your machine, without waiting for a platform build or paying for compute.
+Learn how to build, run, and inspect [Actors](https://docs.apify.com/actors) on your own machine with the local Actor runtime.
 
-What you get after this guide:
+The local Actor runtime is a single Docker container that emulates the parts of the Apify platform the Actor development loop needs. You use the same Apify CLI commands as against the platform, but builds and runs happen on your computer and no platform compute is used.
 
-| Component       | Where                   | Notes                                                                                                 |
-| --------------- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| API             | `http://localhost:3333` | A subset of the Apify API v2 (Actors, builds, runs, logs, datasets, key-value stores, request queues) |
-| Console         | `http://localhost:3000` | A small web UI over the same state: Actors, builds, runs, logs, storages, settings                    |
-| Builds and runs | Your own Docker daemon  | Actor images are built and run as containers next to the runtime, using the host's layer cache        |
-| Data            | `./data` on the host    | Every storage, build record, run record, and log, inspectable as files                                |
+## Before you start
 
-Both ports are fixed. Everything described here works offline once the images are present; only the
-sample Actors need the network, because they crawl the live web.
-
-## Prerequisites
-
-- **Docker.** Docker Desktop on macOS or Windows, or Docker Engine on Linux, running and reachable
-  through `/var/run/docker.sock`.
-- **Apify CLI.** `npm install -g apify-cli`. Any recent version works for the dev loop.
-- **A login.** Run `apify login` once if you have not. The runtime maps any non-empty token to a
-  local user, so you do not need a real Apify account. If the token is a real one and the platform is
-  reachable, the runtime adopts your real username, id, and proxy password on first contact. Offline,
-  or with a made-up token, you become `local-user-1`. Either way there is no error.
+- [Install Docker](https://docs.docker.com/get-docker/). Use Docker Desktop on macOS or Windows, or Docker Engine on Linux. Docker must be running.
+- [Install Apify CLI](https://docs.apify.com/cli/docs/installation).
+- Log in with `apify login`. You do not need a real Apify account: the runtime accepts any non-empty token and maps it to a local user. With a real token, the runtime adopts your username, id, and proxy password the first time it sees it.
 
 ## 1. Start the runtime
 
-You have two ways to start it. Pick one.
+Choose one of the following methods.
 
-### With the Apify CLI (opt-in channel)
+### Start with Apify CLI
 
-The Apify CLI ships `apify runtime` commands on the `runtime` npm dist-tag while they are in
-development. They verify Docker, pull the runtime image, and start it with the canonical flags.
+The `apify runtime` commands ship on the `runtime` npm tag while they are in development. They check that Docker works, download the runtime image, and start it.
 
-```bash
+```
 npm install -g apify-cli@runtime
 apify runtime start --detach --data-dir ./data
 ```
 
-Stop it later with `apify runtime stop`. The stable `apify-cli` does not have these commands yet, and
-the image tag they pull is a temporary developer repository. See
-[Ideal state: `apify local`](#ideal-state-apify-local) for where this is heading.
+To stop the runtime later, run `apify runtime stop`.
 
-### With plain Docker
+**Opt-in channel**
 
-Build the image from this repository, or pull the published one, then run it:
+The stable `apify-cli` does not have these commands yet, and the image they download comes from a temporary developer repository. See [Proposed: `apify local`](#proposed-apify-local) for the intended final form.
 
-```bash
+### Start with Docker
+
+Build the image from this repository and run it:
+
+```
 docker build -t actor-runtime .
 docker run --rm --name actor-runtime \
   -p 3333:3333 -p 3000:3000 \
@@ -57,132 +42,142 @@ docker run --rm --name actor-runtime \
   actor-runtime
 ```
 
-The Docker socket mount lets the runtime build and run Actor containers. The `./data` mount keeps
-state across restarts. Add `-d` to run it in the background and `docker stop actor-runtime` to stop it.
+The runtime needs two mounts:
 
-The startup log prints a banner with both ports, plus a warning if the Docker socket is unreachable.
-In that case storages and records still work, but builds and runs fail fast with a clear message.
+| Mount                                       | Purpose                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `/var/run/docker.sock:/var/run/docker.sock` | Lets the runtime build and run Actor containers on your Docker.    |
+| `$(pwd)/data:/data`                         | Keeps Actors, builds, runs, and storages across restarts as files. |
 
-> **Docker Desktop on macOS: ports hang.** On some Docker Desktop installations, requests to
-> `localhost:3333` and `localhost:3000` time out even though the runtime is healthy. The runtime joins
-> a second Docker network (`apify-local`) at startup so Actor containers can reach it, and Docker
-> Desktop then routes replies the wrong way. Start the container on that network directly, with the
-> alias Actor containers expect, so it has a single network:
->
-> ```bash
-> docker network create apify-local 2>/dev/null || true
-> docker run --rm --name actor-runtime \
->   --network apify-local --network-alias apify-api \
->   -p 3333:3333 -p 3000:3000 \
->   -v /var/run/docker.sock:/var/run/docker.sock \
->   -v "$(pwd)/data:/data" \
->   actor-runtime
-> ```
->
-> The startup warning that the runtime "could not self-attach" to the network is expected and harmless
-> in this setup. `apify runtime start` does not have this option yet; if it is affected, use the Docker
-> command above until the runtime handles it on its own.
+Add `-d` to run the container in the background. Stop it with `docker stop actor-runtime`.
 
-## 2. Point the Apify CLI at it
+**Docker Desktop on macOS**
 
-The CLI talks to whatever `APIFY_CLIENT_BASE_URL` and `APIFY_CONSOLE_URL` name. Set both in the shell
-you develop in:
+On some Docker Desktop installations, `localhost:3333` and `localhost:3000` time out even though the runtime is healthy. The runtime joins a second Docker network, `apify-local`, so Actor containers can reach it, and Docker Desktop then routes replies through the wrong network. Start the container on that network directly so it has only one:
 
-```bash
+```
+docker network create apify-local 2>/dev/null || true
+docker run --rm --name actor-runtime \
+  --network apify-local --network-alias apify-api \
+  -p 3333:3333 -p 3000:3000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd)/data:/data" \
+  actor-runtime
+```
+
+The startup warning that the runtime could not attach to the network is expected in this setup. `apify runtime start` does not have this option yet.
+
+### Check that it is running
+
+The runtime prints a banner with both ports when it is ready:
+
+| Component | URL                     |
+| --------- | ----------------------- |
+| API       | `http://localhost:3333` |
+| Console   | `http://localhost:3000` |
+
+Open the Console in your browser. If the banner warns that the Docker socket is unreachable, storages and records still work, but builds and runs fail with a clear message.
+
+## 2. Connect Apify CLI
+
+Apify CLI sends requests to the URLs in two environment variables. Set them in the terminal you develop in:
+
+```
 export APIFY_CLIENT_BASE_URL=http://localhost:3333
 export APIFY_CONSOLE_URL=http://localhost:3000
+```
+
+To verify, run:
+
+```
 apify info
 ```
 
-`apify info` prints the user the runtime resolved for your token. To talk to the real platform again,
-unset both variables. Nothing about your CLI login changes.
+The CLI prints the user the runtime created for your token, for example `local-user-1`.
+
+**Switch back to the Apify platform**
+
+Unset both variables to make the CLI talk to the Apify platform again. Your login is not affected.
 
 ## 3. Push and run an Actor
 
-Use one of the bundled samples, or your own Actor project:
+You can use one of the sample Actors in this repository or your own Actor project.
 
-```bash
-cd sample_actor_ts
-apify push
-apify call --input '{"maxPages": 3}'
-```
+1. Navigate to the Actor directory:
 
-`apify push` creates the Actor and its version from the local source and starts a build. The first
-build of an Actor downloads its base image and installs dependencies, so allow a minute; later builds
-reuse Docker's layer cache and typically take seconds. `apify call` starts a run, streams its log, waits
-for it to finish, and prints the run's default storage ids. Add `--json` to get them as JSON.
+    ```
+    cd sample_actor_ts
+    ```
 
-## 4. Inspect what happened
+2. Push the Actor to the runtime:
 
-Open the console at [http://localhost:3000](http://localhost:3000) for the Actor, its builds, the run,
-its log, and the dataset, key-value store, and request queue it produced. The same is available from
-the CLI:
+    ```
+    apify push
+    ```
 
-```bash
-apify runs ls
-apify datasets info <datasetId>
-apify api v2/datasets/<datasetId>/items
-apify api v2/key-value-stores/<storeId>/records/OUTPUT
-apify api v2/actor-runs/<runId>/log
-```
+    The CLI uploads the source code, creates the Actor, and shows the build log. The first build downloads the base image and installs dependencies, so it takes about a minute. Later builds reuse Docker's layer cache and take seconds.
 
-`apify api` sends any request to the runtime's API, so anything the console shows is reachable this
-way too. The raw state is under `./data` if you want to look at the files; edit through the API
-rather than on disk.
+3. Run the Actor:
 
-## 5. Stop and reset
+    ```
+    apify call --input '{"maxPages": 3}'
+    ```
 
-- **Stop:** `docker stop actor-runtime` (or Ctrl+C in the foreground), or `apify runtime stop`.
-- **Keep state:** start it again with the same `./data` mount, and every Actor, build, run, and
-  storage is still there.
-- **Reset:** stop the runtime and delete `./data`. The next start is a clean slate. Built Actor images
-  stay in your Docker daemon and are reused if you push the same source again.
+    The CLI streams the run log and prints the run's default storage ids when it finishes. Add `--json` to get them as JSON.
+
+## 4. View the results
+
+Open [http://localhost:3000](http://localhost:3000) to browse the Actor, its builds and runs, logs, and the dataset, key-value store, and request queue the run produced.
+
+You can also use the CLI:
+
+| Command                                                  | Shows                                   |
+| -------------------------------------------------------- | --------------------------------------- |
+| `apify runs ls`                                          | Runs of the Actor in the current folder |
+| `apify datasets info <datasetId>`                        | Dataset metadata, including item count  |
+| `apify api v2/datasets/<datasetId>/items`                | Dataset items                           |
+| `apify api v2/key-value-stores/<storeId>/records/OUTPUT` | One key-value store record              |
+| `apify api v2/actor-runs/<runId>/log`                    | The run log                             |
+
+`apify api` sends any request to the runtime API, so everything the Console shows is available this way. The raw files are in the `data` directory. Read them freely, but change state through the API.
+
+## 5. Stop and reset the runtime
+
+- To stop, run `apify runtime stop` or `docker stop actor-runtime`.
+- To keep your data, start the runtime again with the same `data` directory.
+- To reset, stop the runtime and delete the `data` directory. Built Actor images stay in Docker and are reused when you push the same source again.
 
 ## Next steps
 
-- [Local development workflow](local-development.md): the full dev loop, iterating without rebuilds,
-  IDE debugging, migration and abort testing, multiple users, platform fallback, and limitations.
-- `requirements/*.md` in this repository is the behavioural spec if you need the exact rules.
+- Learn the full development loop in [Local development workflow](local-development.md), including iterating without rebuilds, debugging with your IDE, and testing migrations.
+- See `requirements/*.md` in this repository for the exact behaviour of the API, console, storages, and Actor driver.
 
-## Ideal state: `apify local`
+## Proposed: `apify local`
 
-> **Proposal.** Nothing in this section exists yet. It describes the developer experience this
-> project is aiming for, so the gap is visible and can be closed piece by piece without breaking
-> anything that works today.
+**Proposal**
 
-The target is that the Apify CLI is the only tool you need, the way `supabase start` gives you a
-whole local stack:
+Nothing in this section exists yet. It describes the intended developer experience so the gap is visible and can be closed step by step without breaking what works today.
 
-```bash
+The goal is that Apify CLI is the only tool you need, in the same way `supabase start` gives you a whole local stack:
+
+```
 npm install -g apify-cli
-apify local start          # pull if needed, start, print how to connect
-apify push && apify call   # in your Actor folder
+apify local start
+apify push && apify call
 apify local stop
 ```
 
-Proposed command group, mirroring the shape of the shipped `apify runtime` commands and extending it:
+| Command                                     | What it does                                                                                                                                                                                                |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apify local start [--detach] [--data-dir]` | Checks Docker, downloads the runtime image from an Apify-owned registry if needed, starts it with the right flags for your host, and prints how to connect. Data defaults to `~/.apify/actor-runtime/data`. |
+| `apify local stop`                          | Stops the runtime.                                                                                                                                                                                          |
+| `apify local status`                        | Shows whether the runtime is running, its ports, data directory, image version, and running Actor containers. Exits non-zero when it is down.                                                               |
+| `apify local env`                           | Prints the `export` lines for `APIFY_CLIENT_BASE_URL` and `APIFY_CONSOLE_URL`, so `eval "$(apify local env)"` connects your shell.                                                                          |
+| `apify local reset`                         | Stops the runtime and clears its data directory after confirmation.                                                                                                                                         |
+| `apify local logs [-f]`                     | Shows the runtime's own log.                                                                                                                                                                                |
 
-| Command                                           | Does                                                                                                                                                                                                                                         |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apify local start [--detach] [--data-dir <dir>]` | Verifies Docker, pulls the runtime image from an Apify-owned registry if missing, starts the container with the correct flags for the host, and prints the connection details. Defaults the data directory to `~/.apify/actor-runtime/data`. |
-| `apify local stop`                                | Stops the runtime container.                                                                                                                                                                                                                 |
-| `apify local status`                              | Reports whether the runtime is up, its ports, the data directory, image version, and the number of running Actor containers. Exits non-zero when it is down, so scripts can rely on it.                                                      |
-| `apify local env`                                 | Prints the `export` lines for `APIFY_CLIENT_BASE_URL` and `APIFY_CONSOLE_URL`, so `eval "$(apify local env)"` points a shell at the local runtime, the way `supabase status -o env` does.                                                    |
-| `apify local reset`                               | Stops the runtime and clears its data directory after confirmation.                                                                                                                                                                          |
-| `apify local logs [-f]`                           | Tails the runtime's own log.                                                                                                                                                                                                                 |
+The commands also fix the Docker Desktop networking issue described in step 1, use a versioned image under Apify's own registry namespace, and ship in the stable `apify-cli` instead of an opt-in tag.
 
-Behaviours that go with it:
+**Why `local` instead of `runtime`**
 
-- **Correct networking on every host.** `apify local start` (and the runtime itself) handles the Docker
-  Desktop routing issue described in step 1, so the workaround disappears.
-- **One published image.** The image lives under Apify's own registry namespace with versioned tags,
-  and the CLI knows which version it expects.
-- **A stable channel.** The commands live in the stable `apify-cli`, not an opt-in dist-tag.
-
-**Why `local` when `apify runtime` already exists.** The `runtime` commands are the first step of this
-plan and already prove the mechanics: they are on the `runtime` npm dist-tag today, and a spec for them
-lives on the `claude/actor-runtime-cli-distribution-mo0u94` branch as `requirements/distribution.md`.
-The proposal is to graduate them under the name `local` when they reach the stable CLI: it names what
-the developer gets, a local platform, rather than the repository that implements it, and it reads the
-same way as the tools people already know. Until that decision is made, `apify runtime` is the
-working CLI path and this page documents it as such.
+The `apify runtime` commands are the first step of this plan. They are on the `runtime` npm tag today, and their spec is in `requirements/distribution.md` on the `claude/actor-runtime-cli-distribution-mo0u94` branch. The proposal is to graduate them under the name `local` when they reach the stable CLI, because it names what you get, a local platform, rather than the repository that implements it. Until that is decided, `apify runtime` is the working CLI path.
