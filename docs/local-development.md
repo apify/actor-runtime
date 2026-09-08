@@ -6,8 +6,8 @@ The development loop is the same as against the Apify platform: edit the source,
 
 ## Before you start
 
-- [Start the runtime and connect Apify CLI](quick-start.md). The commands below assume `APIFY_CLIENT_BASE_URL` and `APIFY_CONSOLE_URL` are set in your terminal.
-- Have an Actor project ready. The `sample_actor_ts`, `sample_actor_py`, and `sample_actor_crawler` directories in this repository are the tested examples.
+- [Start the runtime and connect Apify CLI](quick-start.md). The commands below assume Apify CLI is connected to the runtime.
+- Have your Actor project ready and run the commands below from its directory. If you do not have one, use `sample_actor_ts`, `sample_actor_py`, or `sample_actor_crawler` from this repository.
 
 ## Build the Actor
 
@@ -197,10 +197,9 @@ When fallback is on, the runtime forwards the token you authenticated with, for 
 
 ## Return to the Apify platform
 
-The runtime never changes your CLI credentials. To target the platform again, unset the two variables:
+The runtime never changes your CLI credentials. To target the platform again, disconnect the CLI as described in the [quick start](quick-start.md#2-connect-apify-cli), then push:
 
 ```
-unset APIFY_CLIENT_BASE_URL APIFY_CONSOLE_URL
 apify push
 ```
 

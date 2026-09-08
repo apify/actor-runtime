@@ -68,44 +68,55 @@ The startup warning that the runtime could not attach to the network is expected
 
 ### Check that it is running
 
-The runtime prints a banner with both ports when it is ready:
+To verify that the runtime is up, run:
 
-| Component | URL                     |
-| --------- | ----------------------- |
-| API       | `http://localhost:3333` |
-| Console   | `http://localhost:3000` |
+```
+apify local status
+```
 
-Open the Console in your browser. If the banner warns that the Docker socket is unreachable, storages and records still work, but builds and runs fail with a clear message.
+The command reports the API at `http://localhost:3333`, the Console at `http://localhost:3000`, and the data directory, and exits non-zero when the runtime is down.
+
+**Proposed command**
+
+`apify local status` does not exist yet. See [Proposed: `apify local`](#proposed-apify-local). Until it ships, run this instead:
+
+```
+APIFY_CLIENT_BASE_URL=http://localhost:3333 apify api v2/users/me
+```
+
+It prints your user as JSON when the runtime is up, and a connection error when it is not. You can also open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## 2. Connect Apify CLI
 
-Apify CLI sends requests to the URLs in two environment variables. Set them in the terminal you develop in:
+To send every Apify CLI command to the local runtime instead of the Apify platform, run:
+
+```
+apify local connect
+```
+
+Your login is not affected. To switch back to the Apify platform, run:
+
+```
+apify local disconnect
+```
+
+**Proposed commands**
+
+`apify local connect` and `apify local disconnect` do not exist yet. See [Proposed: `apify local`](#proposed-apify-local). Until they ship, Apify CLI reads the target URLs from two environment variables. Set them in the terminal you develop in:
 
 ```
 export APIFY_CLIENT_BASE_URL=http://localhost:3333
 export APIFY_CONSOLE_URL=http://localhost:3000
 ```
 
-To verify, run:
+Unset both variables to switch back to the Apify platform.
 
-```
-apify info
-```
+## 3. Push and run your Actor
 
-The CLI prints the user the runtime created for your token, for example `local-user-1`.
-
-**Switch back to the Apify platform**
-
-Unset both variables to make the CLI talk to the Apify platform again. Your login is not affected.
-
-## 3. Push and run an Actor
-
-You can use one of the sample Actors in this repository or your own Actor project.
-
-1. Navigate to the Actor directory:
+1. Navigate to your Actor directory:
 
     ```
-    cd sample_actor_ts
+    cd your-actor-name
     ```
 
 2. Push the Actor to the runtime:
@@ -114,15 +125,19 @@ You can use one of the sample Actors in this repository or your own Actor projec
     apify push
     ```
 
-    The CLI uploads the source code, creates the Actor, and shows the build log. The first build downloads the base image and installs dependencies, so it takes about a minute. Later builds reuse Docker's layer cache and take seconds.
+    The CLI uploads the source code, creates the Actor in the runtime, and shows the build log. The first build downloads the base image and installs dependencies, so it takes about a minute. Later builds reuse Docker's layer cache and take seconds.
 
 3. Run the Actor:
 
     ```
-    apify call --input '{"maxPages": 3}'
+    apify call
     ```
 
-    The CLI streams the run log and prints the run's default storage ids when it finishes. Add `--json` to get them as JSON.
+    The run uses the input from your local `storage/key_value_stores/default/INPUT.json`. To pass a different input, add `--input '{"key": "value"}'` or `--input-file input.json`. The CLI streams the run log and prints the run's default storage ids when it finishes. Add `--json` to get them as JSON.
+
+**No Actor yet?**
+
+Create one with [`apify create`](https://docs.apify.com/cli/docs/quick-start), or use `sample_actor_ts` in this repository, which takes `--input '{"maxPages": 3}'`.
 
 ## 4. View the results
 
@@ -171,7 +186,8 @@ apify local stop
 | `apify local start [--detach] [--data-dir]` | Checks Docker, downloads the runtime image from an Apify-owned registry if needed, starts it with the right flags for your host, and prints how to connect. Data defaults to `~/.apify/actor-runtime/data`. |
 | `apify local stop`                          | Stops the runtime.                                                                                                                                                                                          |
 | `apify local status`                        | Shows whether the runtime is running, its ports, data directory, image version, and running Actor containers. Exits non-zero when it is down.                                                               |
-| `apify local env`                           | Prints the `export` lines for `APIFY_CLIENT_BASE_URL` and `APIFY_CONSOLE_URL`, so `eval "$(apify local env)"` connects your shell.                                                                          |
+| `apify local connect`                       | Makes Apify CLI target the local runtime for every command, with no environment variables to set. Stored in the CLI's own config.                                                                           |
+| `apify local disconnect`                    | Makes Apify CLI target the Apify platform again.                                                                                                                                                            |
 | `apify local reset`                         | Stops the runtime and clears its data directory after confirmation.                                                                                                                                         |
 | `apify local logs [-f]`                     | Shows the runtime's own log.                                                                                                                                                                                |
 
