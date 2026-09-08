@@ -16,18 +16,17 @@ Choose one of the following methods.
 
 ### Start with Apify CLI
 
-The `apify runtime` commands ship on the `runtime` npm tag while they are in development. They check that Docker works, download the runtime image, and start it.
+The `apify runtime` commands check that Docker works, download the runtime image, and start it:
 
 ```
-npm install -g apify-cli@runtime
 apify runtime start --detach --data-dir ./data
 ```
 
 To stop the runtime later, run `apify runtime stop`.
 
-**Opt-in channel**
+**In development**
 
-The stable `apify-cli` does not have these commands yet, and the image they download comes from a temporary developer repository. See [Proposed: `apify local`](#proposed-apify-local) for the intended final form.
+These commands are still in development, and the image they download comes from a temporary developer repository. See [Proposed: `apify local`](#proposed-apify-local) for the intended final form.
 
 ### Start with Docker
 
