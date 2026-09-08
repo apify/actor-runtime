@@ -52,7 +52,7 @@ Add `-d` to run the container in the background. Stop it with `docker stop actor
 
 **Docker Desktop on macOS**
 
-On some Docker Desktop installations, `localhost:3333` and `localhost:3000` time out even though the runtime is healthy. The runtime joins a second Docker network, `apify-local`, so Actor containers can reach it, and Docker Desktop then routes replies through the wrong network. Start the container on that network directly so it has only one:
+On some Docker Desktop installations, requests to the runtime's ports time out even though the runtime is healthy. The runtime joins a second Docker network, `apify-local`, so Actor containers can reach it, and Docker Desktop then routes replies through the wrong network. Start the container on that network directly so it has only one:
 
 ```
 docker network create apify-local 2>/dev/null || true
@@ -74,7 +74,7 @@ To verify that the runtime is up, run:
 apify local status
 ```
 
-The command reports the API at `http://localhost:3333`, the Console at `http://localhost:3000`, and the data directory, and exits non-zero when the runtime is down.
+The command reports the runtime API URL, `http://localhost:3333`, and the data directory, and exits non-zero when the runtime is down.
 
 **Proposed command**
 
@@ -84,7 +84,7 @@ The command reports the API at `http://localhost:3333`, the Console at `http://l
 APIFY_CLIENT_BASE_URL=http://localhost:3333 apify api v2/users/me
 ```
 
-It prints your user as JSON when the runtime is up, and a connection error when it is not. You can also open [http://localhost:3000](http://localhost:3000) in your browser.
+It prints your user as JSON when the runtime is up, and a connection error when it is not.
 
 ## 2. Connect Apify CLI
 
@@ -141,19 +141,22 @@ Create one with [`apify create`](https://docs.apify.com/cli/docs/quick-start), o
 
 ## 4. View the results
 
-Open [http://localhost:3000](http://localhost:3000) to browse the Actor, its builds and runs, logs, and the dataset, key-value store, and request queue the run produced.
+To list the runs of your Actor, run:
 
-You can also use the CLI:
+```
+apify runs ls
+```
 
-| Command                                                  | Shows                                   |
-| -------------------------------------------------------- | --------------------------------------- |
-| `apify runs ls`                                          | Runs of the Actor in the current folder |
-| `apify datasets info <datasetId>`                        | Dataset metadata, including item count  |
-| `apify api v2/datasets/<datasetId>/items`                | Dataset items                           |
-| `apify api v2/key-value-stores/<storeId>/records/OUTPUT` | One key-value store record              |
-| `apify api v2/actor-runs/<runId>/log`                    | The run log                             |
+To read what a run produced, use the ids `apify call` printed:
 
-`apify api` sends any request to the runtime API, so everything the Console shows is available this way. The raw files are in the `data` directory. Read them freely, but change state through the API.
+| Command                                                  | Shows                                  |
+| -------------------------------------------------------- | -------------------------------------- |
+| `apify datasets info <datasetId>`                        | Dataset metadata, including item count |
+| `apify api v2/datasets/<datasetId>/items`                | Dataset items                          |
+| `apify api v2/key-value-stores/<storeId>/records/OUTPUT` | One key-value store record             |
+| `apify api v2/actor-runs/<runId>/log`                    | The run log                            |
+
+`apify api` sends any request to the runtime API, so every Actor, build, run, log, and storage is available this way. The raw files are in the `data` directory. Read them freely, but change state through the API.
 
 ## 5. Stop and reset the runtime
 

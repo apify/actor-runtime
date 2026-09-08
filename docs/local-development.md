@@ -73,11 +73,7 @@ To use Apify Proxy from local runs, set `APIFY_PROXY_PASSWORD` on the runtime co
 
 ## View the results
 
-Everything a run produced is available in three places.
-
-### Console
-
-Open [http://localhost:3000](http://localhost:3000). The Console lists Actors, builds, runs, logs, and storages. A run's detail page links to its default storages, and log views render ANSI colours. The Console accepts the URL shapes Apify CLI prints for the Apify Console, so links in `apify call` output open the right page.
+Everything a run produced is available in two places.
 
 ### CLI
 
@@ -117,7 +113,7 @@ For Actors with a slow build, such as browser images or heavy Python installs, t
     apify call --input '{"maxPages": 3}'
     ```
 
-To clear the registration, submit an empty body: `--body '""'`. The same field is on the Actor's page in the Console.
+To clear the registration, submit an empty body: `--body '""'`.
 
 **How the mount behaves**
 
@@ -160,13 +156,13 @@ apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'
 
 The platform stops, migrates, and aborts Actors. You can trigger these events against a `RUNNING` run to check that your Actor persists its state and resumes correctly.
 
-| Event          | How to trigger                                                                                       | What the Actor sees                                                                                                                                                                                                  |
-| -------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Migration      | `apify api POST /actor-runtime/migrate/<runId>`, or the **Migrate** button on the run's Console page | A `migrating` event, then its container stops about five seconds later and a new container starts for the same run with the same id, environment, and storages. In-memory state is gone. The status stays `RUNNING`. |
-| Reboot         | `apify api POST v2/actor-runs/<runId>/reboot`                                                        | An immediate stop and restart with no warning event. The SDKs call this from their default migration handler.                                                                                                        |
-| Graceful abort | `apify api POST 'v2/actor-runs/<runId>/abort?gracefully=true'`                                       | `aborting` and `persistState` events, then the container stops 30 seconds later.                                                                                                                                     |
-| Abort          | `apify api POST v2/actor-runs/<runId>/abort`                                                         | The container stops at once.                                                                                                                                                                                         |
-| Timeout        | `apify call --timeout 10`                                                                            | The run ends as `TIMED-OUT` when the deadline passes. The budget is per run, so a migrated run gets only the remaining time.                                                                                         |
+| Event          | How to trigger                                                 | What the Actor sees                                                                                                                                                                                                  |
+| -------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Migration      | `apify api POST /actor-runtime/migrate/<runId>`                | A `migrating` event, then its container stops about five seconds later and a new container starts for the same run with the same id, environment, and storages. In-memory state is gone. The status stays `RUNNING`. |
+| Reboot         | `apify api POST v2/actor-runs/<runId>/reboot`                  | An immediate stop and restart with no warning event. The SDKs call this from their default migration handler.                                                                                                        |
+| Graceful abort | `apify api POST 'v2/actor-runs/<runId>/abort?gracefully=true'` | `aborting` and `persistState` events, then the container stops 30 seconds later.                                                                                                                                     |
+| Abort          | `apify api POST v2/actor-runs/<runId>/abort`                   | The container stops at once.                                                                                                                                                                                         |
+| Timeout        | `apify call --timeout 10`                                      | The run ends as `TIMED-OUT` when the deadline passes. The budget is per run, so a migrated run gets only the remaining time.                                                                                         |
 
 The run log is cumulative across restarts, with a marker line between container incarnations.
 
@@ -178,8 +174,6 @@ Each distinct token gets its own user, and API responses are scoped to that user
 apify api v2/datasets -H '{"authorization": "Bearer another-token"}'
 ```
 
-The Console has no login and shows every user's objects with their owner, which helps you verify that scoping works.
-
 ## Fall back to the Apify platform
 
 If a call fails because the runtime does not have that Actor, run, or storage id, or does not implement the endpoint, you can have such calls relayed to the Apify platform:
@@ -189,7 +183,7 @@ apify api POST /actor-runtime/api-fallback --body '{"fallbackUnimplementedEnable
 apify api GET /actor-runtime/api-fallback
 ```
 
-Both toggles are off by default and reset on every restart. The same toggles are on the Console's Settings page. Relayed responses carry the `x-actor-runtime-fallback` and `x-actor-runtime-fallback-trigger` headers so you can tell where an answer came from.
+Both toggles are off by default and reset on every restart. Relayed responses carry the `x-actor-runtime-fallback` and `x-actor-runtime-fallback-trigger` headers so you can tell where an answer came from.
 
 **Use a token you trust with real writes**
 
@@ -210,13 +204,13 @@ The runtime is a development tool for one developer: fewer than ten Actors, five
 - **Not implemented:** Actor tasks, schedules, webhooks, and most of the API outside Actors, builds, runs, logs, and the three storage types. Unknown endpoints return `404` unless [fallback](#fall-back-to-the-apify-platform) is on.
 - **Request queues:** locks do not expire, so `head/lock` hands a request out until an explicit unlock, reclaim, or runtime restart. Request deletion returns `501`. `GET /requests` lists only requests this runtime process has seen and ignores filters. Counts on the queue object are authoritative.
 - **Storage metadata:** `hadMultipleClients` is always `false`, `stats` fields are zero, and dataset item options such as `fields` or `clean` apply after paging, so `total` counts unfiltered items.
-- **Users:** any non-empty token is accepted. There is no real authentication, and the Console shows every user's objects.
+- **Users:** any non-empty token is accepted. There is no real authentication.
 - **One runtime per data directory.** Do not start two runtimes on the same `data` directory.
 - **Operating systems:** Linux is tested. macOS works with the networking note in the [quick start](quick-start.md#start-with-docker). Windows with Docker Desktop and WSL 2 is untested.
 
 ## Next steps
 
-- Read the exact behaviour in `requirements/api.md`, `requirements/actor-driver.md`, `requirements/storage.md`, and `requirements/console.md`.
+- Read the exact behaviour in `requirements/api.md`, `requirements/actor-driver.md`, and `requirements/storage.md`.
 - When your Actor works locally, unset the environment variables and `apify push` to deploy it to the Apify platform.
 
 ## Proposed improvements
