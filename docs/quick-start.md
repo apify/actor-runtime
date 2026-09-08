@@ -19,7 +19,7 @@ Choose one of the following methods.
 In your Actor directory, run:
 
 ```
-apify local start --detach --data-dir ./data
+apify local start
 ```
 
 The command checks that Docker works, downloads the runtime image, and starts it. Runtime data is stored in the `data` directory of your Actor, so each Actor has its own local platform state.
@@ -42,31 +42,6 @@ docker run --rm --name actor-runtime \
   -v "$(pwd)/data:/data" \
   actor-runtime
 ```
-
-The runtime needs two mounts:
-
-| Mount                                       | Purpose                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------ |
-| `/var/run/docker.sock:/var/run/docker.sock` | Lets the runtime build and run Actor containers on your Docker.    |
-| `$(pwd)/data:/data`                         | Keeps Actors, builds, runs, and storages across restarts as files. |
-
-Add `-d` to run the container in the background. Stop it with `docker stop actor-runtime`.
-
-**Docker Desktop on macOS**
-
-On some Docker Desktop installations, requests to the runtime's ports time out even though the runtime is healthy. The runtime joins a second Docker network, `apify-local`, so Actor containers can reach it, and Docker Desktop then routes replies through the wrong network. Start the container on that network directly so it has only one:
-
-```
-docker network create apify-local 2>/dev/null || true
-docker run --rm --name actor-runtime \
-  --network apify-local --network-alias apify-api \
-  -p 3333:3333 -p 3000:3000 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd)/data:/data" \
-  actor-runtime
-```
-
-The startup warning that the runtime could not attach to the network is expected in this setup. `apify local start` does not have this option yet.
 
 ### Check that it is running
 
