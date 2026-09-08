@@ -116,9 +116,8 @@ three-field form (`enabled`/`language`/`port`) on the Actor's page in the consol
 
 ## Publishing the image
 
-Images currently go to the temporary dev repository
-[`josefprochazka/actor-runtime-dev`](https://hub.docker.com/r/josefprochazka/actor-runtime-dev) (it
-will move to an Apify-owned namespace later).
+Images go to [`apify/actor-runtime`](https://hub.docker.com/r/apify/actor-runtime) on Docker Hub by
+default; the target repository is a workflow input, so a one-off build can be pushed elsewhere.
 
 The **Release Docker image** workflow (`.github/workflows/release.yml`) is manual only: Actions ->
 Release Docker image -> Run workflow, pick the branch in **Use workflow from**, and run it. That is
@@ -128,9 +127,12 @@ to build.
 
 It pushes one multi-arch manifest per tag - `linux/amd64` and `linux/arm64` by default - so the same
 tag serves x86_64 and Apple Silicon. Every run publishes `<branch>-<short-sha>` (immutable) and
-`<branch>` (moving), with `/` in a branch name slugified to `-`. It needs two repository secrets:
-`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with Read/Write from
-<https://hub.docker.com/settings/security>).
+`<branch>` (moving), with `/` in a branch name slugified to `-`. It pushes as the Apify service
+account, using the same two repository secrets as
+[apify-actor-docker](https://github.com/apify/apify-actor-docker):
+`APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME` and `APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN`. They are
+synced into this repository's Actions secrets from Doppler, so they are managed there rather than
+added by hand.
 
 ## Development
 
