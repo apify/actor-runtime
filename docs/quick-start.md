@@ -26,7 +26,7 @@ To stop the runtime later, run `apify runtime stop`.
 
 **In development**
 
-These commands are still in development, and the image they download comes from a temporary developer repository. See [Proposed: `apify local`](#proposed-apify-local) for the intended final form.
+These commands are still in development, and the image they download comes from a temporary developer repository.
 
 ### Start with Docker
 
@@ -78,7 +78,7 @@ The command reports the runtime API URL, `http://localhost:3333`, and the data d
 
 **Proposed command**
 
-`apify local status` does not exist yet. See [Proposed: `apify local`](#proposed-apify-local). Until it ships, run this instead:
+`apify local status` does not exist yet. Until it ships, run this instead:
 
 ```
 APIFY_CLIENT_BASE_URL=http://localhost:3333 apify api v2/users/me
@@ -102,7 +102,7 @@ apify local disconnect
 
 **Proposed commands**
 
-`apify local connect` and `apify local disconnect` do not exist yet. See [Proposed: `apify local`](#proposed-apify-local). Until they ship, Apify CLI reads the target URLs from two environment variables. Set them in the terminal you develop in:
+`apify local connect` and `apify local disconnect` do not exist yet. Until they ship, Apify CLI reads the target URLs from two environment variables. Set them in the terminal you develop in:
 
 ```
 export APIFY_CLIENT_BASE_URL=http://localhost:3333
@@ -167,35 +167,4 @@ To read what a run produced, use the ids `apify call` printed:
 ## Next steps
 
 - Learn the full development loop in [Local development workflow](local-development.md), including iterating without rebuilds, debugging with your IDE, and testing migrations.
-- See `requirements/*.md` in this repository for the exact behaviour of the API, console, storages, and Actor driver.
-
-## Proposed: `apify local`
-
-**Proposal**
-
-Nothing in this section exists yet. It describes the intended developer experience so the gap is visible and can be closed step by step without breaking what works today.
-
-The goal is that Apify CLI is the only tool you need, in the same way `supabase start` gives you a whole local stack:
-
-```
-npm install -g apify-cli
-apify local start
-apify push && apify call
-apify local stop
-```
-
-| Command                                     | What it does                                                                                                                                                                                                |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apify local start [--detach] [--data-dir]` | Checks Docker, downloads the runtime image from an Apify-owned registry if needed, starts it with the right flags for your host, and prints how to connect. Data defaults to `~/.apify/actor-runtime/data`. |
-| `apify local stop`                          | Stops the runtime.                                                                                                                                                                                          |
-| `apify local status`                        | Shows whether the runtime is running, its ports, data directory, image version, and running Actor containers. Exits non-zero when it is down.                                                               |
-| `apify local connect`                       | Makes Apify CLI target the local runtime for every command, with no environment variables to set. Stored in the CLI's own config.                                                                           |
-| `apify local disconnect`                    | Makes Apify CLI target the Apify platform again.                                                                                                                                                            |
-| `apify local reset`                         | Stops the runtime and clears its data directory after confirmation.                                                                                                                                         |
-| `apify local logs [-f]`                     | Shows the runtime's own log.                                                                                                                                                                                |
-
-The commands also fix the Docker Desktop networking issue described in step 1, use a versioned image under Apify's own registry namespace, and ship in the stable `apify-cli` instead of an opt-in tag.
-
-**Why `local` instead of `runtime`**
-
-The `apify runtime` commands are the first step of this plan. They are on the `runtime` npm tag today, and their spec is in `requirements/distribution.md` on the `claude/actor-runtime-cli-distribution-mo0u94` branch. The proposal is to graduate them under the name `local` when they reach the stable CLI, because it names what you get, a local platform, rather than the repository that implements it. Until that is decided, `apify runtime` is the working CLI path.
+- See `requirements/*.md` in this repository for the exact behaviour of the API, storages, and Actor driver.

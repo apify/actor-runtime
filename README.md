@@ -14,7 +14,7 @@ See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 ## Documentation
 
 - [Quick start](docs/quick-start.md) - start the runtime with Apify CLI or Docker, connect the CLI,
-  push and run your Actor, view the results, and the proposed `apify local` commands.
+  push and run your Actor, and view the results.
 - [Local development workflow](docs/local-development.md) - build, run, view results, iterate without
   rebuilding, debug with your IDE, test platform events, simulate users, fall back to the platform,
   limitations, and proposed improvements.

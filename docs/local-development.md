@@ -219,7 +219,7 @@ The runtime is a development tool for one developer: fewer than ten Actors, five
 
 The items below are not implemented. They describe the developer experience this project is working towards, ordered by how much friction they remove.
 
-1. **`apify local` as the only tool.** Start, stop, status, env, reset, and logs commands in the stable Apify CLI, with a published, versioned image and networking that works on every host. See [Proposed: `apify local`](quick-start.md#proposed-apify-local).
+1. **`apify local` as the only tool.** `start`, `stop`, `status`, `connect`, `disconnect`, `reset`, and `logs` commands in the stable Apify CLI, with a published, versioned image and networking that works on every host. The `apify runtime` commands on the `runtime` npm tag are the first step; the proposal is to graduate them under the name `local`, which names what you get rather than the repository that implements it.
 2. **No dev-folder registration.** Today [Iterate without rebuilding](#iterate-without-rebuilding) needs an absolute host path per Actor. Two ways to remove the step, both non-breaking:
     - Apify CLI includes the Actor's local directory when pushing to a local runtime, and the runtime registers it. This needs a CLI change.
     - The runtime is started with a projects root mounted, for example `-v ~/Projects:/dev-root`, and on each push it finds the directory whose files match the uploaded source, translates the path back to the host, and registers it itself. No CLI change.
