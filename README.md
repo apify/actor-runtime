@@ -181,7 +181,7 @@ added by hand.
 pnpm install
 pnpm run build     # tsc
 pnpm test          # unit + integration (no Docker needed)
-pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker)
+pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker, or Podman with CONTAINER_CLI=podman)
 pnpm run dev       # run the server directly against ./data with tsx
 ```
 
