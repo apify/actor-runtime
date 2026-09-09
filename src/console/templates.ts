@@ -1,7 +1,7 @@
 /** Minimal server-rendered HTML helpers. No SPA, no bundler, no build step (`console.md`). */
 
 import { getApiFallbackState, type ApiFallbackState } from '../services/api-fallback.js';
-import type { ActorLocalDebug } from '../storage/entities.js';
+import type { ActorLocalBrowserView, ActorLocalDebug, RunRecord } from '../storage/entities.js';
 
 export function escapeHtml(value: unknown): string {
 	return String(value ?? '')
@@ -58,6 +58,8 @@ export function layout(title: string, body: string): string {
 	.warning { color: #94600b; }
 	.wide-input { width: 28rem; }
 	h1 { margin-top: 0; }
+	.browser-view-screen { width: 100%; height: 75vh; background: #222; }
+	.browser-view-screen canvas { outline: none; }
 </style>
 </head>
 <body>
@@ -152,6 +154,81 @@ export function debugModeForm(
 		'</form>' +
 		'<p class="empty">Uncheck "enabled" and submit to turn debug mode off. Leave "port" blank to use the ' +
 		"resolved language's own default port (5678 Python / 9229 Node) at run start.</p>"
+	);
+}
+
+/** The browser-view toggle form on the Actor detail view - full parity with the API body's two fields
+ * (`enabled`/`interactive`), submitted together like `debugModeForm`. */
+export function browserViewForm(
+	actorId: string,
+	current: ActorLocalBrowserView | null | undefined,
+	errorMessage?: string,
+): string {
+	const errorHtml = errorMessage ? `<p class="error"><strong>Error:</strong> ${escapeHtml(errorMessage)}</p>` : '';
+	return (
+		errorHtml +
+		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/browser-view">` +
+		`<label><input type="checkbox" name="enabled"${current ? ' checked' : ''}> enabled</label> ` +
+		`<label><input type="checkbox" name="interactive"${current?.interactive ? ' checked' : ''}> interactive ` +
+		'(deliver mouse/keyboard input from the viewer)</label> ' +
+		'<button type="submit">Save</button>' +
+		'</form>' +
+		'<p class="empty">When on, every run of this Actor gets a live mirror of its X display, linked from the ' +
+		"run's detail page. The Actor's container and browser are unchanged by it - a headless browser draws " +
+		'nothing on the display, so run it headful (Crawlee: <code>headless: false</code>) to see it. Uncheck ' +
+		'"enabled" and submit to turn browser view off.</p>'
+	);
+}
+
+/**
+ * The live viewer page for one run (`console.md`'s "Browser view page"): noVNC's `RFB` client (served
+ * from the runtime's own `node_modules` under `/vendor/novnc/`, see `console/server.ts`) connected to
+ * this console's own websocket bridge for the run (`console/browser-view-ws.ts`). The run id is embedded
+ * as a JSON literal with `<` escaped, so it can never break out of the script element.
+ */
+export function browserViewPage(
+	run: RunRecord & { localBrowserView: NonNullable<RunRecord['localBrowserView']> },
+): string {
+	const runIdLiteral = JSON.stringify(run.id).replace(/</g, '\\u003c');
+	const viewOnly = run.localBrowserView.interactive ? 'false' : 'true';
+	const mode = run.localBrowserView.interactive ? 'interactive' : 'view-only';
+	return (
+		`<p>Live mirror of the X display of run <a href="/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.id)}</a> ` +
+		`(${mode}). Nothing here reaches the Actor or its browser${run.localBrowserView.interactive ? ' except the input you send' : ''}; ` +
+		'the picture is read off the display the browser draws on.</p>' +
+		'<p id="browser-view-status" class="empty">Connecting…</p>' +
+		'<div id="browser-view-screen" class="browser-view-screen"></div>' +
+		`<script type="module">
+import RFB from '/vendor/novnc/core/rfb.js';
+const runId = ${runIdLiteral};
+const viewOnly = ${viewOnly};
+const status = document.getElementById('browser-view-status');
+const screen = document.getElementById('browser-view-screen');
+const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+const url = scheme + '://' + location.host + '/runs/' + encodeURIComponent(runId) + '/browser/ws';
+let attempts = 0;
+function connect() {
+	attempts += 1;
+	status.textContent = attempts === 1 ? 'Connecting…' : 'Reconnecting (attempt ' + attempts + ')…';
+	const rfb = new RFB(screen, url, { shared: true });
+	rfb.viewOnly = viewOnly;
+	rfb.scaleViewport = true;
+	rfb.background = '#222';
+	rfb.addEventListener('connect', () => {
+		attempts = 0;
+		status.textContent = "Connected - live view of the run's display" + (viewOnly ? ' (view-only).' : ' (interactive).');
+	});
+	rfb.addEventListener('disconnect', () => {
+		if (attempts >= 40) {
+			status.textContent = 'Disconnected - the run has ended, or its display never came up. Reload to try again.';
+			return;
+		}
+		status.textContent = 'Disconnected - the display is not up yet or went away; retrying…';
+		setTimeout(connect, 3000);
+	});
+}
+connect();
+</script>`
 	);
 }
 

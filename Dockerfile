@@ -29,6 +29,28 @@ import debugpy._version as v; \
 print(v.get_versions()['version'])" > /payload/debugpy-version.txt
 RUN tar -cf /payload/debugpy-payload.tar -C /payload/root .
 
+# --- Browser-view sidecar payload (`requirements/actor-driver.md`'s "Browser view" section): a complete
+# Alpine root filesystem with x11vnc plus `docker/browser-viewer.sh`, tarred so the runtime can
+# `docker import` it into a local image on first use - no registry pull, no network, at run time. NOT pinned
+# to $BUILDPLATFORM: the sidecar runs on the same daemon as the Actor containers, so its binaries must be
+# the *target* architecture's (on a multi-arch build this stage runs once per target, under QEMU).
+FROM alpine:3.21 AS browser-viewer-rootfs
+RUN apk add --no-cache x11vnc
+# The Actor container's own copy of this directory has the same mode (the Apify browser base images
+# pre-create it as 1777); the shared volume the runtime creates over both matches it too.
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+COPY docker/browser-viewer.sh /apify-browser-viewer.sh
+RUN chmod 755 /apify-browser-viewer.sh
+
+# Packs the stage above into a plain filesystem tar (the `docker import` input format) and records its
+# content hash - the tag the runtime imports it under (`config.ts: browserViewerVersionFilePath`).
+# Runs natively: it only tars files already built for the target above.
+FROM --platform=$BUILDPLATFORM alpine:3.21 AS browser-viewer-payload
+COPY --from=browser-viewer-rootfs / /rootfs
+RUN mkdir -p /payload \
+	&& tar -cf /payload/rootfs.tar -C /rootfs . \
+	&& sha256sum /payload/rootfs.tar | cut -c1-16 > /payload/version.txt
+
 # Also architecture-independent: this stage only runs `tsc`, and the `dist/` it hands to the final
 # stage is plain JavaScript. The final stage does its own `pnpm install --prod`, so the target
 # architecture's native bindings still come from a native (emulated) install there.
@@ -63,6 +85,10 @@ COPY --from=builder /usr/src/app/dist ./dist
 # Matches config.ts's debugpyPayloadDir() default.
 COPY --from=debugpy-payload /payload/debugpy-payload.tar /opt/apify-debug-payload/debugpy-payload.tar
 COPY --from=debugpy-payload /payload/debugpy-version.txt /opt/apify-debug-payload/debugpy-version.txt
+
+# Matches config.ts's browserViewerPayloadDir() default.
+COPY --from=browser-viewer-payload /payload/rootfs.tar /opt/apify-browser-viewer/rootfs.tar
+COPY --from=browser-viewer-payload /payload/version.txt /opt/apify-browser-viewer/version.txt
 
 # The runtime talks to the host Docker socket via dockerode (no docker CLI needed in-image) and
 # persists all storages under /data - mount both when running the container.

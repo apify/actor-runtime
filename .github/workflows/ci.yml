@@ -28,7 +28,9 @@ jobs:
     e2e:
         name: Actor dev-loop e2e (apify-cli + Docker)
         runs-on: ubuntu-latest
-        timeout-minutes: 30
+        # The browser-view case pulls the ~2 GB Playwright base image and builds the Playwright sample
+        # Actor against it, on top of the dev-loop and debug-mode cases.
+        timeout-minutes: 45
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v4
@@ -46,4 +48,7 @@ jobs:
             # (log-stream lifecycle included) is captured here for diagnosis.
             - name: Dump runtime container logs on failure
               if: failure()
-              run: docker logs actor-runtime-e2e --tail 300 || true
+              run: |
+                  docker logs actor-runtime-e2e --tail 300 || true
+                  docker logs actor-runtime-e2e-debug --tail 300 || true
+                  docker logs actor-runtime-e2e-browser-view --tail 300 || true

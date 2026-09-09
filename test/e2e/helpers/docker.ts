@@ -23,6 +23,15 @@ export function pullBaseImages(): void {
 	}
 }
 
+/** The Playwright sample Actor's base image (`sample_actor_playwright/Dockerfile`) - pulled only by the
+ * browser-view e2e file, not by `pullBaseImages`, since it is by far the largest image the suite touches
+ * and the other e2e files never build against it. */
+export const PLAYWRIGHT_BASE_IMAGE = 'apify/actor-node-playwright-chrome:24-1.61.1';
+
+export function pullPlaywrightBaseImage(): void {
+	execFileSync('docker', ['pull', PLAYWRIGHT_BASE_IMAGE], { stdio: 'inherit' });
+}
+
 export function startRuntimeContainer(tag: string, containerName: string): void {
 	execFileSync(
 		'docker',

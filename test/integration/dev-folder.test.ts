@@ -61,6 +61,10 @@ function devFolderDriver(
 		async ensureProbeImage() {
 			return STUB_PROBE_IMAGE_ID;
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -794,6 +798,10 @@ function devMountCapturingDriver(): {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},

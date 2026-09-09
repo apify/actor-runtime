@@ -57,8 +57,13 @@
           (`actor-driver.md`). When present: `{ language: "auto" | "node" | "python", port?: number }` -
           `port` absent means "resolve the language's own default port at run start", never a stored
           literal (`actor-driver.md`).
-        - Neither `localDevFolder`, `localDebug`, nor any build's `imageWorkingDirectory` is ever exposed
-          on the public `/v2` API.
+        - `localBrowserView` - **optional**. Absent means browser view has never been turned on (or was
+          explicitly cleared) for this Actor. Set or cleared only through
+          `POST /actor-runtime/browser-view/:actorId` or the console's equivalent form (`api.md`,
+          `console.md`), never as a side effect of any other Actor write, and never bumping `modifiedAt`
+          (`actor-driver.md`). When present: `{ interactive: boolean }`.
+        - Neither `localDevFolder`, `localDebug`, `localBrowserView`, nor any build's
+          `imageWorkingDirectory` is ever exposed on the public `/v2` API.
 - The system stores Actor runs in dedicated key-value store called `__RUNS__`:
     - `key` is the id of the Actor run `runId`
     - `value` is the metadata of the Actor
@@ -70,6 +75,11 @@
 number }`, both already resolved (never `"auto"`, never absent-meaning-default). Absent for
           every non-debug run, and for a debug run that was refused before a plan could be resolved.
           Never exposed on the emulated `/v2` run object.
+        - `localBrowserView` - **optional**, specific to this one run. Present once this run's browser-view
+          sidecar has started (`actor-driver.md`'s "Browser view" section): `{ interactive: boolean,
+vncHost: string, vncPort: number }` - where the sidecar's RFB server listens on `apify-local`, for
+          the console's websocket bridge (`console.md`). Absent for a run of an Actor without the toggle,
+          and for one whose sidecar failed to start. Never exposed on the emulated `/v2` run object.
 - The system stores Actor builds in dedicated key-value store called `__BUILDS__`:
     - `key` is the id of the Actor build (`buildId`)
     - `value` is the metadata of the Actor

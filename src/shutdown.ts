@@ -30,6 +30,8 @@ export interface ShutdownDeps {
 	consoleServer: Server;
 	/** Must be closed before `closeServer(apiServer)` is awaited - see `EventsWebSocketServer.close()`. */
 	eventsWebSocketServer?: { close(): void };
+	/** Same, for the console server: the browser-view bridge's connections (`console/browser-view-ws.ts`). */
+	browserViewWebSocketServer?: { close(): void };
 }
 
 /**
@@ -46,12 +48,14 @@ export async function gracefulShutdown({
 	apiServer,
 	consoleServer,
 	eventsWebSocketServer,
+	browserViewWebSocketServer,
 }: ShutdownDeps): Promise<void> {
 	stopLogFlusher();
 	await flushAllLogs();
 	await releaseAllBuffersForShutdown();
 	eventsWebSocketServer?.close();
 	await closeServer(apiServer);
+	browserViewWebSocketServer?.close();
 	await closeServer(consoleServer);
 	await shutdownStorage();
 }

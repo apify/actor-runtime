@@ -6,10 +6,10 @@
 - The console has no login of its own, so with multiple users it lists and shows every user's objects
   rather than scoping to one - the API's own endpoints stay strictly scoped to the calling token's user
   (`storage.md`'s "Users" section).
-- The console is unauthenticated. Every route is a read except the console's only four writes: the
-  dev-folder form, the debug-mode form, the run detail view's Migrate button, and the Settings form
-  (all below).
-- All four of those writes reject a submission that identifies itself as cross-site (via the
+- The console is unauthenticated. Every route is a read except the console's only five writes: the
+  dev-folder form, the debug-mode form, the browser-view form, the run detail view's Migrate button, and
+  the Settings form (all below).
+- All five of those writes reject a submission that identifies itself as cross-site (via the
   `Sec-Fetch-Site` header) with a plain `403`; a submission that does not is unaffected.
 - There are three types of objects: key-value store, dataset, request queue.
     - For each object type there must be exactly one widget for inspection.
@@ -40,6 +40,11 @@
 - A run whose debug plan resolved (`actor-driver.md`'s "Debug mode" section) gets one extra row on its
   detail view: `debug` - `<language>, attach at 127.0.0.1:<port>`. Absent entirely for a non-debug run.
   This field is local-only and never appears in the emulated `/v2` run object (`api.md`).
+- A run whose browser-view sidecar started (`actor-driver.md`'s "Browser view" section) gets one extra
+  row on its detail view: `browser view` - a link to the run's viewer page (below), labelled view-only or
+  interactive. Absent entirely for a run without a mirror. The row stays after the run ends; the page it
+  leads to then says the mirror is gone. This field is local-only and never appears in the emulated `/v2`
+  run object (`api.md`).
 - Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself.
 - The console accepts the real Apify Console's URL shapes (as printed by stock apify-cli, e.g. `/actors/:actorId/runs/:runId`, `/storage/datasets/:id`) via redirects to its own pages.
 
@@ -65,6 +70,33 @@
 - For any given input, the form and the API endpoint produce the same outcome.
 - A submission that fails validation redirects back to the same detail page with the classified error
   message shown inline, never silently applied.
+
+## Browser-view form (Actor detail view)
+
+- The Actor detail view shows the Actor's browser-view toggle status - `(browser view is off)`, or `on,
+view-only` / `on, interactive` - the same status the API endpoint reports (`api.md`).
+- A form on the same view exposes the same two fields the API body accepts - `enabled` and `interactive`,
+  both checkboxes. Submitting always sends both together: an unchecked `enabled` clears the toggle
+  regardless of `interactive`.
+- For any given input, the form and the API endpoint produce the same outcome; a rejected submission
+  redirects back with the classified error shown inline.
+
+## Browser view page (`/runs/:runId/browser`)
+
+- The console serves each mirrored run's live view itself, at `/runs/:runId/browser` on the console's own
+  fixed port: a page embedding the noVNC client (served from the runtime's own installed copy under
+  `/vendor/novnc/`, no build step) connected to `/runs/:runId/browser/ws` on the same port - a websocket the
+  console bridges byte-for-byte to the run's sidecar RFB server over `apify-local` (`actor-driver.md`).
+  Nothing is published on the host for this beyond the console's port (`system.md`).
+- The page is view-only or interactive according to the mirror the run started with, and says which. The
+  client reconnects on its own while the run is still starting (the Actor's display may come up seconds
+  after the run does; the bridge keeps re-dialing the sidecar for up to two minutes per connection).
+- A run that never had a mirror gets a `404` page saying so; a run that has ended gets a page saying the
+  mirror is gone, with no client. The websocket likewise completes the upgrade and closes `1008` with a
+  reason for an unknown run, a run without a mirror, or an ended run, and closes `1000` when the mirror goes
+  away mid-view (the run ended).
+- Like every other console route, this is unauthenticated: anyone who can reach the console can watch (and,
+  for an interactive mirror, drive) any run's display.
 
 ## Migrate button (run detail view)
 

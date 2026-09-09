@@ -35,6 +35,27 @@ export interface RunContext {
 	timeoutSecs: number;
 	devMount?: DevFolderMount;
 	debug?: DebugRunTarget;
+	/** Name of the volume a `startBrowserViewer` sidecar already shares (`BrowserViewerHandle`), to be
+	 * mounted over the Actor container's `/tmp/.X11-unix` so the sidecar can reach the Actor's own X
+	 * display socket. The only change a browser-view run makes to the Actor's container - no env, command,
+	 * network, or port differs from an ordinary run (`actor-driver.md`'s "Browser view" section). */
+	x11SocketVolume?: string;
+}
+
+/** What `Driver.startBrowserViewer` needs: the run whose display to mirror and whether the mirror
+ * accepts input (`ActorLocalBrowserView.interactive`). */
+export interface BrowserViewerTarget {
+	runId: string;
+	interactive: boolean;
+}
+
+/** A started browser-view sidecar: where its RFB (VNC) server listens on the `apify-local` network, and
+ * the name of the volume the Actor's container must mount at `/tmp/.X11-unix` (`RunContext.x11SocketVolume`)
+ * for the sidecar to see the Actor's X display. */
+export interface BrowserViewerHandle {
+	vncHost: string;
+	vncPort: number;
+	x11SocketVolume: string;
 }
 
 /** What `Driver.inspectDebugTarget` reads off a run's resolved build image, for
@@ -178,4 +199,15 @@ export interface Driver {
 	/** Reads back the image's `Config.Cmd`/`Config.Entrypoint` and env for
 	 * `services/debug-mode.ts: resolveDebugPlan`. Called only when the run's Actor has debug mode on. */
 	inspectDebugTarget(imageId: string): Promise<InspectedDebugTarget>;
+
+	/** Starts the browser-view sidecar for a run (`actor-driver.md`'s "Browser view" section): imports the
+	 * runtime's bundled x11vnc image on first use, creates the shared X-socket volume, and starts the
+	 * sidecar on `apify-local`. Called by `services/runs.ts` before the run's own container is created, so
+	 * a failure here fails the run before any Actor container exists. Rejects with a descriptive error
+	 * when the runtime is not running from its own built image (no sidecar payload on disk). */
+	startBrowserViewer(target: BrowserViewerTarget): Promise<BrowserViewerHandle>;
+
+	/** Removes the run's sidecar container and shared volume. Idempotent - a run that never started a
+	 * viewer, or whose viewer is already gone, is a no-op. Never rejects. */
+	stopBrowserViewer(runId: string): Promise<void>;
 }

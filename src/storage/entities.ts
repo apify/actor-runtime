@@ -64,6 +64,14 @@ export interface ActorLocalDebug {
 	port?: number;
 }
 
+/** The per-Actor browser-view toggle (`actor-driver.md`'s "Browser view" section). Set or cleared only
+ * through `services/browser-view.ts: setBrowserView`. */
+export interface ActorLocalBrowserView {
+	/** `true` lets the viewer send mouse/keyboard input into the mirrored display; `false` (the default)
+	 * runs the mirror strictly view-only. */
+	interactive: boolean;
+}
+
 export interface ActorRecord {
 	id: string;
 	userId: string;
@@ -83,6 +91,9 @@ export interface ActorRecord {
 	/** The per-Actor debug-mode toggle (`actor-driver.md`'s "Debug mode" section). Absent means off.
 	 * Same `modifiedAt`-preserving, never-`/v2`-exposed pattern as `localDevFolder` above. */
 	localDebug?: ActorLocalDebug;
+	/** The per-Actor browser-view toggle (`actor-driver.md`'s "Browser view" section). Absent means off.
+	 * Same `modifiedAt`-preserving, never-`/v2`-exposed pattern as `localDevFolder` above. */
+	localBrowserView?: ActorLocalBrowserView;
 }
 
 export type JobStatus = 'READY' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'ABORTING' | 'ABORTED' | 'TIMED-OUT';
@@ -164,4 +175,10 @@ export interface RunRecord {
 	 * and for a debug run that failed before resolving. Top-level (not nested under `options`) to stay
 	 * out of the emulated `/v2` run object automatically. */
 	localDebug?: { language: DebugLanguage; port: number };
+	/** This run's browser-view mirror, written once its sidecar is up and before the Actor's own container
+	 * starts (`actor-driver.md`'s "Browser view" section). `vncHost`/`vncPort` is where the sidecar's RFB
+	 * server listens on the `apify-local` network - the console's websocket bridge dials it. Absent for a
+	 * run of an Actor without the toggle, and for one whose sidecar failed to start. Top-level, like
+	 * `localDebug`, to stay out of the emulated `/v2` run object automatically. */
+	localBrowserView?: { interactive: boolean; vncHost: string; vncPort: number };
 }

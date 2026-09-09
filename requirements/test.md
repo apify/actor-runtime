@@ -13,11 +13,16 @@
   may connect directly to the published debug port to emulate an IDE attaching a debugger, since no
   `apify` command can express that. Every other assertion in that test (the pause, the attach log line,
   the abort) still goes through `apify` commands only, same as every other e2e case.
+- **A second narrow exception of the same kind**: the browser-view e2e test (`actor-driver.md`'s "Browser
+  view" section) may open the console's viewer websocket (`console.md`'s "Browser view page") directly and
+  read the mirror's RFB greeting off it, plus fetch the console pages it links, to emulate a developer's
+  browser opening the viewer - no `apify` command can express that either. The push, the toggle, the run
+  start, the log, the run status and the dataset count in that test all still go through `apify` commands.
 - For asserting the test results, the tests must inspect the return values of the Apify cli commands.
 - The e2e suite requires a reachable Docker daemon (it builds and runs real Actor containers) and
   detects its absence, failing in such case.
 - The sample Actors crawl a live site (`https://crawlee.dev/` by default), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
-- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls.
+- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls `sample_actor_playwright`'s own, much larger base image (`apify/actor-node-playwright-chrome:24-1.61.1`) itself, since no other e2e case builds against it.
 
 ## Actor full dev loop
 
@@ -27,3 +32,10 @@ Test case must verify full Actor development flow:
 - Push and build Actor in local actor runtime `apify push`
 - Run each sample Actor in the local actor runtime with `apify call --input '{"maxPages":N}'` for at least two different values of `N`, waiting for each run to finish
 - Assert via `apify datasets info <default dataset id>` that the default dataset's `itemCount` tracks `N` - the assertion is input-dependent, not just "some items exist"
+
+## Browser view
+
+- Use the Playwright sample Actor (`sample_actor_playwright`, headful Chrome under the base image's Xvfb)
+- Push and build it, turn browser view on for it (`apify api POST /actor-runtime/browser-view/<id>`), start a run
+- Assert the run log names the viewer URL, that the viewer websocket reaches a live RFB server while the run is going (the one permitted non-CLI probe above), that the run then finishes `SUCCEEDED` with an input-dependent `itemCount` - the mirror must not change the crawl - and that the mirror is gone once the run has ended
+- With the toggle cleared, a plain `apify call` of the same Actor runs as before, with no browser-view line in its log
