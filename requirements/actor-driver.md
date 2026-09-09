@@ -133,6 +133,10 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   additionally delivers the viewer's mouse and keyboard input to the display). A `POST` fully replaces the
   prior state (never a partial merge); `{"enabled": false}` clears the toggle regardless of what else the
   body names.
+- **The mirror reads the framebuffer over the X socket, never through shared memory** (x11vnc's `-noshm`):
+  MIT-SHM needs a shared-memory segment the X server can attach, which is impossible across container IPC
+  namespaces - the Actor's and the sidecar's are separate and stay separate (the Actor container's IPC
+  mode is never changed for this feature).
 - **The mirror is a passive observer of the display, never of the browser.** It is implemented as a separate
   **sidecar container** per run - the runtime's own bundled x11vnc image, started on `apify-local` before the
   run's own container is created - that shares exactly one thing with the Actor's container: a tmpfs volume

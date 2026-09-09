@@ -91,6 +91,10 @@ view-only` / `on, interactive` - the same status the API endpoint reports (`api.
 - The page is view-only or interactive according to the mirror the run started with, and says which. The
   client reconnects on its own while the run is still starting (the Actor's display may come up seconds
   after the run does; the bridge keeps re-dialing the sidecar for up to two minutes per connection).
+- A live run of an Actor with the toggle on whose mirror address is not recorded yet (its sidecar is still
+  starting - the first second or two after `apify call` returns the run id) is treated as "starting", on
+  both surfaces: the page renders the client, and the websocket waits for the address to appear (within
+  the same two-minute budget) before dialing, never reporting the mirror as off.
 - A run that never had a mirror gets a `404` page saying so; a run that has ended gets a page saying the
   mirror is gone, with no client. The websocket likewise completes the upgrade and closes `1008` with a
   reason for an unknown run, a run without a mirror, or an ended run, and closes `1000` when the mirror goes

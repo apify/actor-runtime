@@ -516,7 +516,7 @@ describe('console: viewer page, run row, noVNC client, and the websocket bridge'
 		const actor = await pushAndBuild(server, 'bv-ws-1008-actor');
 		const plain = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
 		const noView = await openWs(plain.id);
-		expect(await closeCode(noView)).toEqual({ code: 1008, reason: `Browser view is not on for run ${plain.id}` });
+		expect(await closeCode(noView)).toEqual({ code: 1008, reason: `Browser view was not on for run ${plain.id}` });
 
 		await post(server.baseUrl, actor.id, { enabled: true }, server.token);
 		const viewed = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
@@ -543,6 +543,69 @@ describe('console: viewer page, run row, noVNC client, and the websocket bridge'
 
 		expect((await greeting).toString()).toBe('RFB 003.008\n');
 		ws.close();
+	});
+
+	it('a live run of a toggled Actor whose sidecar is still starting: the page renders the client and the bridge waits for the mirror address instead of reporting "not on"', async () => {
+		await setUpConsole(viewerCapturingDriver().driver);
+		const { port } = await startFakeVnc();
+		const actor = await server.client.actors().create({ name: 'bv-ws-pending-actor' });
+		await post(server.baseUrl, actor.id, { enabled: true }, server.token);
+		const runId = 'bv-run-pending';
+		// The window `services/runs.ts` leaves between creating the record and the sidecar coming up.
+		await getRegistries().runs.set(runId, {
+			id: runId,
+			userId: actor.userId,
+			actorId: actor.id,
+			buildId: 'build-x',
+			buildNumber: '0.0.1',
+			status: 'RUNNING',
+			startedAt: new Date().toISOString(),
+			defaultDatasetId: 'ds',
+			defaultKeyValueStoreId: 'kv',
+			defaultRequestQueueId: 'rq',
+			options: { memoryMbytes: 256, timeoutSecs: 300 },
+			meta: { origin: 'API' },
+		});
+
+		const page = await axios.get(`${consoleBaseUrl}/runs/${runId}/browser`);
+		expect(page.status).toBe(200);
+		expect(page.data).toContain("import RFB from '/vendor/novnc/core/rfb.js'");
+
+		const ws = await openWs(runId);
+		const greeting = nextMessage(ws);
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		// The sidecar comes up: the record gets its mirror address, and the waiting bridge dials it.
+		await getRegistries().runs.update(runId, (current) =>
+			current
+				? { ...current, localBrowserView: { interactive: false, vncHost: '127.0.0.1', vncPort: port } }
+				: current,
+		);
+		expect((await greeting).toString()).toBe('RFB 003.008\n');
+		ws.close();
+	});
+
+	it('a live run without a mirror whose Actor has no toggle is refused at once with "not on", and its page is a 404', async () => {
+		await setUpConsole(viewerCapturingDriver().driver);
+		const actor = await server.client.actors().create({ name: 'bv-ws-untoggled-actor' });
+		const runId = 'bv-run-untoggled';
+		await getRegistries().runs.set(runId, {
+			id: runId,
+			userId: actor.userId,
+			actorId: actor.id,
+			buildId: 'build-x',
+			buildNumber: '0.0.1',
+			status: 'RUNNING',
+			startedAt: new Date().toISOString(),
+			defaultDatasetId: 'ds',
+			defaultKeyValueStoreId: 'kv',
+			defaultRequestQueueId: 'rq',
+			options: { memoryMbytes: 256, timeoutSecs: 300 },
+			meta: { origin: 'API' },
+		});
+		const ws = await openWs(runId);
+		expect(await closeCode(ws)).toEqual({ code: 1008, reason: `Browser view is not on for run ${runId}` });
+		const page = await axios.get(`${consoleBaseUrl}/runs/${runId}/browser`, { validateStatus: () => true });
+		expect(page.status).toBe(404);
 	});
 
 	it('an upgrade on any other console path is refused outright', async () => {

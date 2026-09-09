@@ -16,7 +16,9 @@ import { connect, type Socket } from 'node:net';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 
 import { getRunById } from '../services/runs.js';
+import { getActorById } from '../services/actors.js';
 import { isTerminalJobStatus } from '../services/job-status.js';
+import type { RunRecord } from '../storage/entities.js';
 
 // A trailing slash is a different path, not a second spelling of this one.
 const BROWSER_VIEW_WS_PATH_PATTERN = /^\/runs\/([^/]+)\/browser\/ws$/;
@@ -69,28 +71,54 @@ function toBuffer(data: RawData): Buffer {
 	return Buffer.from(data);
 }
 
+type MirroredRun = RunRecord & { localBrowserView: NonNullable<RunRecord['localBrowserView']> };
+
+/**
+ * The run's mirror address, or a `1008` reason. A run whose Actor has the toggle on gets its
+ * `localBrowserView` only once its sidecar is up - a second or two after `apify call` returns the run id
+ * (`services/runs.ts`) - so a viewer opened straight from the run id must wait for it rather than be
+ * told the mirror is off (`console.md`'s "Browser view page": `isBrowserViewPending`).
+ */
+async function awaitMirroredRun(runId: string, isCancelled: () => boolean): Promise<MirroredRun | string> {
+	const deadline = Date.now() + VNC_CONNECT_TIMEOUT_MS;
+	for (;;) {
+		const run = await getRunById(runId);
+		if (!run) return `Unknown run id: ${runId}`;
+		if (run.localBrowserView) {
+			if (isTerminalJobStatus(run.status)) return `Run ${runId} has already ended`;
+			return run as MirroredRun;
+		}
+		if (isTerminalJobStatus(run.status)) return `Browser view was not on for run ${runId}`;
+		if (!(await isBrowserViewPending(run))) return `Browser view is not on for run ${runId}`;
+		if (isCancelled() || Date.now() >= deadline) return `The display mirror of run ${runId} did not start in time`;
+		await new Promise((resolve) => setTimeout(resolve, VNC_CONNECT_RETRY_MS));
+	}
+}
+
+/** True for a live run that has no mirror address *yet* but whose Actor has the toggle on - its sidecar
+ * is still starting (`services/runs.ts` writes `localBrowserView` once it is up). Shared with the console's
+ * viewer page so both surfaces treat that window the same way. */
+export async function isBrowserViewPending(run: RunRecord): Promise<boolean> {
+	if (run.localBrowserView || isTerminalJobStatus(run.status)) return false;
+	const actor = await getActorById(run.actorId);
+	return actor?.localBrowserView !== undefined;
+}
+
 async function handleConnection(ws: WebSocket, runId: string): Promise<void> {
 	// Must come first: an `'error'` with no listener crashes the process (see `api/events-ws.ts`).
 	ws.on('error', () => undefined);
-
-	const run = await getRunById(runId);
-	if (!run) {
-		ws.close(1008, `Unknown run id: ${runId}`);
-		return;
-	}
-	if (!run.localBrowserView) {
-		ws.close(1008, `Browser view is not on for run ${runId}`);
-		return;
-	}
-	if (isTerminalJobStatus(run.status)) {
-		ws.close(1008, `Run ${runId} has already ended`);
-		return;
-	}
 
 	let closed = false;
 	ws.once('close', () => {
 		closed = true;
 	});
+
+	const run = await awaitMirroredRun(runId, () => closed);
+	if (typeof run === 'string') {
+		if (!closed) ws.close(1008, run);
+		return;
+	}
+
 	const socket = await dialWithRetry(run.localBrowserView.vncHost, run.localBrowserView.vncPort, () => closed);
 	if (!socket) {
 		if (!closed) ws.close(1011, `The display mirror of run ${runId} is not reachable`);

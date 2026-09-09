@@ -34,6 +34,7 @@ import { getBuildById, listAllBuilds } from '../services/builds.js';
 import { getRunById, listAllRuns } from '../services/runs.js';
 import { migrateRun } from '../services/migrations.js';
 import { isTerminalJobStatus } from '../services/job-status.js';
+import { isBrowserViewPending } from './browser-view-ws.js';
 import { getFullLog } from '../services/logs.js';
 import { getStorageById, listAllStorages } from '../services/storages.js';
 import { listRequests } from '../services/request-queues.js';
@@ -464,6 +465,25 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			return;
 		}
 		const backLink = `<p><a href="/runs/${encodeURIComponent(run.id)}">Back to the run</a></p>`;
+		// A live run of a toggled Actor whose sidecar is still starting: render the client, which retries
+		// (and whose websocket bridge waits for the mirror address) - never a misleading "not on".
+		if (!run.localBrowserView && (await isBrowserViewPending(run))) {
+			const actor = await getActorById(run.actorId);
+			res.send(
+				layout(
+					`Browser view of run ${run.id}`,
+					browserViewPage({
+						...run,
+						localBrowserView: {
+							interactive: actor?.localBrowserView?.interactive ?? false,
+							vncHost: '',
+							vncPort: 0,
+						},
+					}),
+				),
+			);
+			return;
+		}
 		if (!run.localBrowserView) {
 			res.status(404).send(
 				layout(
