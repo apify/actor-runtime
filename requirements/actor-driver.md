@@ -56,6 +56,12 @@
 - **The mount is applied only when both a registered dev folder and a known working directory exist**
   for the run's resolved build; either missing means the run starts exactly as if the feature did not
   exist.
+- **A single run can opt out** with `POST /v2/actors/:actorId/runs?devFolder=false` (`api.md`): that run
+  starts from the built image alone, the registration stays as it was, and - when a mount would otherwise
+  have applied - the run's log says so and names the folder that was skipped. The stock `apify push`
+  registers the pushed folder automatically when pointed at this runtime, and `apify call
+  --no-dev-folder` sends this opt-out, so the default CLI loop is "push once, edit, recompile, call"
+  with the mount on, and one flag turns it off for a run.
 - The registration status the console and API report is the registered folder alone - never that a
   mount "will apply", since that depends on which build a given run resolves.
 - If the registered folder has since been deleted, moved, or made unreadable, the run must **fail

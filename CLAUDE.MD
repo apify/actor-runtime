@@ -23,13 +23,16 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - Use `apify cli api ...` to send API calls and inspect the Actors, builds, runs, storages and other objects.
 - To simulate multiple users use custom token and in additional authorization header. For example: `apify cli api v2/datasets -H '{"authorization": "Bearer TOKEN"}'`
 - You can use already authenticated CLI or call `apify login --token TOKEN`
-- To iterate on an Actor's source without a rebuild for every change: push and build the Actor once, then
-  register its local source folder with
+- To iterate on an Actor's source without a rebuild for every change: push and build the Actor once with
+  `apify push`. When the CLI is pointed at this runtime it registers the pushed folder as the Actor's
+  local dev folder automatically (`apify push --no-dev-folder` skips that and clears any earlier
+  registration). From then on, edit locally, recompile locally (`tsc` or the language-appropriate
+  equivalent), and `apify call` again - no `apify push`/build in between. `apify call --no-dev-folder`
+  runs once from the built image alone without touching the registration. Dependency changes still need
+  a real rebuild. To register a folder by hand (e.g. a different one than the pushed directory), use
   `apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/src"'` (this runtime's own
   `/actor-runtime/*` endpoint - also reachable at `/v2/actor-runtime/*`, purely because `apify api`
-  hardcodes a `/v2`-suffixed base URL). From then on, edit locally, recompile locally (`tsc` or the
-  language-appropriate equivalent), and `apify call` again - no `apify push`/build in between. Submitting
-  `--body '""'` clears the registration. Dependency changes still need a real rebuild.
+  hardcodes a `/v2`-suffixed base URL); submitting `--body '""'` clears the registration.
 - To debug an Actor with a real IDE debugger, turn on debug mode for it once:
   `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": true}'` (add `"language": "node"` or
   `"python"` if auto-detection can't classify the image, and/or `"port": <n>` to override the language

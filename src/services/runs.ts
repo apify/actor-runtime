@@ -68,6 +68,11 @@ export interface StartRunOptions {
 	 * imports that same constant as its local `DEFAULT_TAG` and always resolves and passes the actual tag
 	 * it used, so this default only matters for direct service-layer callers, e.g. tests. */
 	build?: string;
+	/** Whether this run applies the Actor's registered local dev folder (`actor-driver.md`'s bind-mount
+	 * feature). Defaults to `true`; `false` - `POST .../runs?devFolder=false`, this runtime's own
+	 * extension of the run-start route - makes this one run start from the built image alone, leaving
+	 * the Actor's registration itself untouched. */
+	devFolder?: boolean;
 	proxyPassword?: string;
 	apiBaseUrl: string;
 	token: string;
@@ -291,10 +296,20 @@ export async function runInBackground(
 	// directory, gets `devMount: undefined`, which `docker-driver.ts`'s `startRun` treats identically to
 	// "no `Mounts` key at all" - the regression guarantee that an unregistered/cleared Actor's run
 	// container is unaffected.
-	const devMount =
+	// A per-run `devFolder: false` (`?devFolder=false` on run start) skips the mount for this run only -
+	// the Actor's registration is untouched, so the very next run without the opt-out mounts again.
+	const devMountApplicable =
 		actor.localDevFolder && build.imageWorkingDirectory
 			? { localDevFolder: actor.localDevFolder, imageWorkingDirectory: build.imageWorkingDirectory }
 			: undefined;
+	const devMount = options.devFolder === false ? undefined : devMountApplicable;
+	if (devMountApplicable && !devMount) {
+		appendLog(
+			record.id,
+			`Skipping the registered local dev folder ${devMountApplicable.localDevFolder} for this run ` +
+				`(started with devFolder=false) - running from the built image alone.\n`,
+		);
+	}
 
 	// Re-check right before creating the container: an abort issued while the registry/version lookups
 	// above were in flight may have already moved the record to ABORTING. Closing this window is the fix

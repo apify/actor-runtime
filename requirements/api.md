@@ -144,6 +144,19 @@
 - The console's own dev-folder form (`console.md`) does **not** go through this endpoint - it posts to a
   console-local, unauthenticated route on the console's own port - but the two surfaces accept and
   reject exactly the same inputs with the same outcomes.
+- **`POST /v2/actors/:actorId/runs?devFolder=false`** - a per-run opt-out of the registered dev folder,
+  this runtime's own extension of the otherwise spec-shaped run-start route (the only `/actor-runtime`
+  feature that lives on a `/v2` path, because it has to travel with the run-start request itself).
+    - `devFolder=false` starts that one run from the built image alone, exactly as if the Actor had no
+      dev folder registered; the registration itself is untouched, so the next run without the parameter
+      mounts again. When a mount would otherwise have applied, the run's own log records the skip and
+      names the folder that was not mounted.
+    - Absent, or any value other than `false` (e.g. `true`), means the default: the mount applies whenever
+      the Actor has a registered folder and the run's resolved build has a known working directory
+      (`actor-driver.md`). Real-platform clients never send this parameter, so their runs are unaffected.
+    - `apify-client`'s `start()` rejects unknown options, so callers send it on the raw request (`apify
+      api POST actors/<actorId>/runs --params devFolder=false`; `apify call --no-dev-folder` does the
+      same on the CLI).
 - **`POST /actor-runtime/debug/:actorId`** - sets (or clears) the Actor's persistent debug-mode toggle
   (`actor-driver.md`'s "Debug mode" section). `:actorId` accepts the same forms as the rest of the API.
     - **Authenticated** the same way as every `/v2` route, and scoped to the caller's own Actors.
