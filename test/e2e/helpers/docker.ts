@@ -28,8 +28,13 @@ export function pullBaseImages(): void {
  * and the other e2e files never build against it. */
 export const PLAYWRIGHT_BASE_IMAGE = 'apify/actor-node-playwright-chrome:24-1.61.1';
 
-export function pullPlaywrightBaseImage(): void {
-	execFileSync('docker', ['pull', PLAYWRIGHT_BASE_IMAGE], { stdio: 'inherit' });
+/** `sample_actor_playwright_py/Dockerfile`'s base image - same treatment as `PLAYWRIGHT_BASE_IMAGE`. */
+export const PYTHON_PLAYWRIGHT_BASE_IMAGE = 'apify/actor-python-playwright:3.14-1.61.0';
+
+export function pullPlaywrightBaseImages(): void {
+	for (const image of [PLAYWRIGHT_BASE_IMAGE, PYTHON_PLAYWRIGHT_BASE_IMAGE]) {
+		execFileSync('docker', ['pull', image], { stdio: 'inherit' });
+	}
 }
 
 export function startRuntimeContainer(tag: string, containerName: string): void {

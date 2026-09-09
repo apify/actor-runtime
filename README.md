@@ -117,7 +117,9 @@ three-field form (`enabled`/`language`/`port`) on the Actor's page in the consol
 ## Watching an Actor's browser (Playwright, Puppeteer, ...)
 
 `sample_actor_playwright` is a `PlaywrightCrawler` Actor built from Apify's `ts-crawlee-playwright-chrome`
-template. Turn **browser view** on for an Actor once, and every `apify call` against it gets a live,
+template, and `sample_actor_playwright_py` is its Crawlee for Python twin (from `python-crawlee-playwright`;
+same workflow, input keys `start_urls`/`max_requests_per_crawl`). Turn **browser view** on for an Actor once,
+and every `apify call` against it gets a live,
 view-only mirror of the X display its browser draws on, served by the console - no change to the Actor's
 source, Dockerfile, or environment:
 
@@ -144,11 +146,15 @@ being watched is not observable from inside the browser. The only detectable tra
 be input you choose to send through an interactive mirror.
 
 Two things follow from that design. The runtime **never changes the browser's headless/headful mode** - a
-headless browser draws nothing, so its mirror is blank; an Actor that wants to be watchable runs its browser
-headful _always_ (the sample sets `headless: false`; Crawlee also honours `CRAWLEE_HEADLESS=0`), so that
-watching never becomes a behavioural difference. And the mirror needs an X display socket in
-`/tmp/.X11-unix`: the `apify/actor-node-playwright-chrome` / `actor-node-puppeteer-chrome` base images
-provide one through their `xvfb-run` entrypoint (with access control off, which the mirror relies on); an
+headless browser draws nothing, so its mirror is blank - **this is the first thing to check when the viewer
+connects but shows only black**: Apify's templates default to headless (`python-crawlee-playwright` even
+hard-codes `headless=True`; Crawlee for JS defaults to `headless: true`; the Python SDK's `Actor.config.headless`
+defaults to `True`). An Actor that wants to be watchable runs its browser headful _always_ (the samples set
+`headless: false` / `headless=False`; Crawlee for JS also honours `CRAWLEE_HEADLESS=0`), so that watching never
+becomes a behavioural difference. And the mirror needs an X display socket in
+`/tmp/.X11-unix`: the `apify/actor-node-playwright-chrome`, `actor-node-puppeteer-chrome` and
+`actor-python-playwright` base images provide one through their `xvfb-run` entrypoint (with access control
+off, which the mirror relies on); an
 image that starts its own X server needs to do the same. Like Python debug mode, this needs the runtime to
 run from its own built image (the sidecar is baked in). Full mechanics: `requirements/actor-driver.md`'s
 "Browser view" section; endpoint/console details: `requirements/api.md` and `requirements/console.md`.

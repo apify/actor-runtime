@@ -22,7 +22,7 @@
 - The e2e suite requires a reachable Docker daemon (it builds and runs real Actor containers) and
   detects its absence, failing in such case.
 - The sample Actors crawl a live site (`https://crawlee.dev/` by default), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
-- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls `sample_actor_playwright`'s own, much larger base image (`apify/actor-node-playwright-chrome:24-1.61.1`) itself, since no other e2e case builds against it.
+- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls the two Playwright samples' own, much larger base images (`apify/actor-node-playwright-chrome:24-1.61.1` for `sample_actor_playwright`, `apify/actor-python-playwright:3.14-1.61.0` for `sample_actor_playwright_py`) itself, since no other e2e case builds against them.
 
 ## Actor full dev loop
 
@@ -35,7 +35,7 @@ Test case must verify full Actor development flow:
 
 ## Browser view
 
-- Use the Playwright sample Actor (`sample_actor_playwright`, headful Chrome under the base image's Xvfb)
-- Push and build it, turn browser view on for it (`apify api POST /actor-runtime/browser-view/<id>`), start a run
+- Use both Playwright sample Actors (`sample_actor_playwright` in TypeScript, `sample_actor_playwright_py` in Python; headful Chrome/Chromium under the base image's Xvfb)
+- For each: push and build it, turn browser view on for it (`apify api POST /actor-runtime/browser-view/<id>`), start a run
 - Assert the run log names the viewer URL, that the viewer websocket reaches a live RFB server while the run is going (the one permitted non-CLI probe above), that the run then finishes `SUCCEEDED` with an input-dependent `itemCount` - the mirror must not change the crawl - and that the mirror is gone once the run has ended
 - With the toggle cleared, a plain `apify call` of the same Actor runs as before, with no browser-view line in its log

@@ -51,9 +51,10 @@ Local Actor runtime is an Actor development tool for developing, running, and de
   browser draws on, served by the console. The Actor's container is unchanged apart from sharing its
   `/tmp/.X11-unix` socket directory with a runtime-owned x11vnc sidecar, so nothing about the browser differs
   whether the mirror is on, off, or watched. The browser must run headful to show anything (Crawlee:
-  `headless: false`, or `CRAWLEE_HEADLESS=0`) and the image must provide an Xvfb display, which the
-  `apify/actor-node-playwright-chrome` base image does; see `sample_actor_playwright`. Clear the toggle with
-  `--body '{"enabled": false}'`.
+  `headless: false` / Python `headless=False` - the Apify templates default to headless, which shows as a black
+  mirror) and the image must provide an Xvfb display, which the `apify/actor-node-playwright-chrome` and
+  `apify/actor-python-playwright` base images do; see `sample_actor_playwright` (TypeScript) and
+  `sample_actor_playwright_py` (Python). Clear the toggle with `--body '{"enabled": false}'`.
 - To test how an Actor handles platform migrations: while a run is `RUNNING`, call
   `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
   detail page. The run gets the platform migration experience: a `migrating` event, its container

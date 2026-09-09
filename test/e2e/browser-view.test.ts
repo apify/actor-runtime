@@ -1,7 +1,7 @@
 /**
  * E2E coverage for per-Actor browser view (`actor-driver.md`'s "Browser view" section) against a real
- * Docker daemon: the Playwright sample Actor is pushed, browser view is turned on, a run is started, and
- * its display mirror is reached the way the console's viewer page reaches it. Driven by `apify` commands
+ * Docker daemon: each Playwright sample Actor (TypeScript and Python) is pushed, browser view is turned on, a
+ * run is started, and its display mirror is reached the way the console's viewer page reaches it. Driven by `apify` commands
  * per `requirements/test.md`'s CLI-only rule, with the one narrow exception that rule documents for this
  * test: it opens the console's viewer websocket (`/runs/:id/browser/ws`) directly and reads the RFB
  * greeting off it, because the workflow under test is "a browser connects to the mirror" and no `apify`
@@ -18,7 +18,7 @@ import WebSocket from 'ws';
 import {
 	buildRuntimeImage,
 	isDockerAvailable,
-	pullPlaywrightBaseImage,
+	pullPlaywrightBaseImages,
 	startRuntimeContainer,
 	stopRuntimeContainer,
 	waitForHttpOk,
@@ -125,7 +125,7 @@ describe('per-Actor browser view: live mirror of the Playwright sample Actor (re
 				);
 			}
 
-			pullPlaywrightBaseImage();
+			pullPlaywrightBaseImages();
 			buildRuntimeImage(REPO_ROOT, IMAGE_TAG);
 			startRuntimeContainer(IMAGE_TAG, CONTAINER_NAME);
 			await waitForHttpOk('http://localhost:3333/v2/users/me?token=x');
@@ -141,79 +141,86 @@ describe('per-Actor browser view: live mirror of the Playwright sample Actor (re
 		if (isolatedApifyHome) removeIsolatedApifyHome(isolatedApifyHome);
 	});
 
-	it(
-		'push -> toggle on -> run: the log names the viewer URL, the viewer websocket reaches a live RFB server while the run crawls, the console links to the page, and the run finishes with the input-dependent item count',
-		async () => {
-			const env = apifyEnv(isolatedApifyHome);
-			const actorDir = join(REPO_ROOT, 'sample_actor_playwright');
+	const samples = [
+		{ dir: 'sample_actor_playwright', label: 'TypeScript', input: (n: number) => ({ maxRequestsPerCrawl: n }) },
+		{ dir: 'sample_actor_playwright_py', label: 'Python', input: (n: number) => ({ max_requests_per_crawl: n }) },
+	];
 
-			const pushOutput = apify(['push', '--json'], { cwd: actorDir, env });
-			const push = JSON.parse(pushOutput) as PushResult;
-			expect(push.build.status).toBe('SUCCEEDED');
-			const actorId = push.actor.id;
+	for (const sample of samples) {
+		it(
+			`${sample.label} sample: push -> toggle on -> run: the log names the viewer URL, the viewer websocket reaches a live RFB server while the run crawls, the console links to the page, and the run finishes with the input-dependent item count`,
+			async () => {
+				const env = apifyEnv(isolatedApifyHome);
+				const actorDir = join(REPO_ROOT, sample.dir);
 
-			const toggle = apify(
-				['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": true}'],
-				{ cwd: REPO_ROOT, env },
-			);
-			expect(JSON.parse(toggle).data.localBrowserView).toEqual({ interactive: false });
+				const pushOutput = apify(['push', '--json'], { cwd: actorDir, env });
+				const push = JSON.parse(pushOutput) as PushResult;
+				expect(push.build.status).toBe('SUCCEEDED');
+				const actorId = push.actor.id;
 
-			// Enough pages to keep the browser busy while the mirror is probed below.
-			const run = startRun(actorId, { maxRequestsPerCrawl: 4 }, env);
+				const toggle = apify(
+					['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": true}'],
+					{ cwd: REPO_ROOT, env },
+				);
+				expect(JSON.parse(toggle).data.localBrowserView).toEqual({ interactive: false });
 
-			const log = await waitFor(
-				() => {
-					const text = currentLog(run.id, env);
-					return text.includes('Browser view:') ? text : undefined;
-				},
-				60_000,
-				'the browser-view line to appear in the run log',
-			);
-			expect(log).toContain(`${CONSOLE_URL}/runs/${run.id}/browser`);
-			expect(log).toContain('view-only');
+				// Enough pages to keep the browser busy while the mirror is probed below.
+				const run = startRun(actorId, sample.input(4), env);
 
-			// The mirror: the console's own websocket bridge reaches the sidecar's x11vnc, which greets with the
-			// RFB protocol version once the Actor's Xvfb display exists. Chrome starting inside a fresh
-			// container can take a while, hence the generous bound.
-			const greeting = await readMirrorGreeting(run.id, 120_000);
-			expect(greeting.startsWith('RFB 003.')).toBe(true);
+				const log = await waitFor(
+					() => {
+						const text = currentLog(run.id, env);
+						return text.includes('Browser view:') ? text : undefined;
+					},
+					60_000,
+					'the browser-view line to appear in the run log',
+				);
+				expect(log).toContain(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				expect(log).toContain('view-only');
 
-			// The console's run page links to the viewer, and the viewer page embeds the noVNC client.
-			const runPage = await fetch(`${CONSOLE_URL}/runs/${run.id}`);
-			expect(await runPage.text()).toContain(`href="/runs/${run.id}/browser"`);
-			const viewerPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
-			expect(viewerPage.status).toBe(200);
-			expect(await viewerPage.text()).toContain('/vendor/novnc/core/rfb.js');
-			const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
-			expect(client.status).toBe(200);
+				// The mirror: the console's own websocket bridge reaches the sidecar's x11vnc, which greets with the
+				// RFB protocol version once the Actor's Xvfb display exists. Chrome starting inside a fresh
+				// container can take a while, hence the generous bound.
+				const greeting = await readMirrorGreeting(run.id, 120_000);
+				expect(greeting.startsWith('RFB 003.')).toBe(true);
 
-			// Mirroring changed nothing about the crawl itself: the run finishes and the item count tracks input.
-			const finished = await waitFor(
-				() => {
-					const current = getRun(run.id, env);
-					return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
-						? current
-						: undefined;
-				},
-				4 * 60 * 1000,
-				'the browser-view run to finish',
-			);
-			expect(finished.status).toBe('SUCCEEDED');
-			const runDetail = JSON.parse(
-				apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
-			) as ApiEnvelope<{ defaultDatasetId: string }>;
-			const info = JSON.parse(
-				apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], { cwd: actorDir, env }),
-			) as DatasetInfoResult;
-			expect(info.itemCount).toBe(4);
+				// The console's run page links to the viewer, and the viewer page embeds the noVNC client.
+				const runPage = await fetch(`${CONSOLE_URL}/runs/${run.id}`);
+				expect(await runPage.text()).toContain(`href="/runs/${run.id}/browser"`);
+				const viewerPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				expect(viewerPage.status).toBe(200);
+				expect(await viewerPage.text()).toContain('/vendor/novnc/core/rfb.js');
+				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
+				expect(client.status).toBe(200);
 
-			// Once the run is over its mirror is gone: the viewer page says so, and the websocket is refused.
-			const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
-			expect(await endedPage.text()).toContain('This run has ended');
-			await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
-		},
-		10 * 60 * 1000,
-	);
+				// Mirroring changed nothing about the crawl itself: the run finishes and the item count tracks input.
+				const finished = await waitFor(
+					() => {
+						const current = getRun(run.id, env);
+						return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
+							? current
+							: undefined;
+					},
+					4 * 60 * 1000,
+					'the browser-view run to finish',
+				);
+				expect(finished.status).toBe('SUCCEEDED');
+				const runDetail = JSON.parse(
+					apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
+				) as ApiEnvelope<{ defaultDatasetId: string }>;
+				const info = JSON.parse(
+					apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], { cwd: actorDir, env }),
+				) as DatasetInfoResult;
+				expect(info.itemCount).toBe(4);
+
+				// Once the run is over its mirror is gone: the viewer page says so, and the websocket is refused.
+				const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				expect(await endedPage.text()).toContain('This run has ended');
+				await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
+			},
+			10 * 60 * 1000,
+		);
+	}
 
 	it(
 		'with the toggle cleared, a plain `apify call` of the same Actor runs exactly as before (no mirror, same crawl)',

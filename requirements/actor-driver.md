@@ -159,8 +159,10 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - **The runtime never changes the browser's headless/headful mode.** A headless browser draws nothing on the
   display, so a mirror of it is blank; an Actor that wants to be watched runs its browser headful (Crawlee:
   `headless: false`, or `CRAWLEE_HEADLESS=0` in its own environment) - _always_, not only when watched, so
-  that watching never becomes a behavioral difference. The bundled `sample_actor_playwright` does exactly
-  this.
+  that watching never becomes a behavioral difference. The bundled `sample_actor_playwright` (TypeScript) and
+  `sample_actor_playwright_py` (Python) do exactly this; note that Apify's own templates default to headless -
+  the Python Crawlee template hard-codes `headless=True` - so an unmodified template Actor mirrors as a
+  black display.
 - **If the runtime cannot supply the sidecar image** (e.g. it is not running from its own built image), the
   run fails before any container is created, with a clear message naming the clear command - never a
   silent run without the mirror. The sidecar image is imported into the daemon from the runtime's bundled
