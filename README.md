@@ -40,6 +40,51 @@ the real platform is reachable, the runtime also adopts that account's real user
 the first time it sees the token; fully offline (or with any other non-empty token) it just keeps using
 the single local user, with no error either way - see `requirements/cli.md`'s User bootstrap section.
 
+## Running with Podman instead of Docker
+
+The runtime never shells out to a `docker` binary - everything goes through the Docker Engine API on
+the socket mounted at `/var/run/docker.sock`, and Podman serves that same API (`podman system service`
+/ the `podman.socket` systemd unit). So the only change is which socket you mount. Verified end to end
+against rootful Podman 4.9 on Linux (push/build/call for the Node and Python samples, dev-folder bind
+mounts, debug mode, migrations); rootless Podman and `podman machine` are best-effort.
+
+```bash
+# one-time: have Podman serve its Docker-compatible API socket
+sudo systemctl enable --now podman.socket       # rootful socket: /run/podman/podman.sock
+# (no systemd? `sudo podman system service --time=0 &` serves the same path)
+
+podman build -t actor-runtime .
+sudo podman run --rm -p 3333:3333 -p 3000:3000 \
+  -v /run/podman/podman.sock:/var/run/docker.sock \
+  -v "$(pwd)/data:/data" \
+  actor-runtime
+```
+
+Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
+(`systemctl --user enable --now podman.socket`), so mount that path; every Actor container then runs
+rootless too. Instead of mounting at `/var/run/docker.sock` you can mount the socket anywhere and pass
+`-e DOCKER_HOST=unix:///that/path` - the runtime's Docker client honours `DOCKER_HOST`.
+
+Things worth knowing:
+
+- The socket you mount decides where Actors run: the runtime builds and starts Actor containers as
+  siblings on that engine, so a dev folder registered for the bind-mount dev loop below is a path on
+  the machine that engine runs on (inside the VM for `podman machine`, where the socket lives at
+  `/run/podman/podman.sock` for a rootful machine or `/run/user/<uid>/podman/podman.sock` for a rootless
+  one - untested here).
+- You are bind-mounting a socket _file_. If you restart a hand-started `podman system service`, the
+  socket inode changes and the runtime's mounted one goes stale (builds and runs fail with
+  `ECONNREFUSED`): restart the runtime container too. The `podman.socket` unit avoids this - systemd owns
+  the socket and hands it to the service.
+- `podman images` lists the images the runtime builds as `docker.io/actor-runtime/<actor>:<buildId>` -
+  Podman's Docker-compatible short-name normalisation, cosmetic only.
+- Rootless Podman on a cgroups v1 host ignores the per-run memory/CPU limits (with a warning in its
+  own log); cgroups v2 with delegation applies them like Docker does.
+- Podman's Docker-compatible API silently creates a missing bind-mount source directory instead of
+  rejecting it. The runtime works around this for dev folders (it validates the path itself, both at
+  registration and again at every run start), so a deleted dev folder still fails the run visibly
+  rather than running against an empty directory.
+
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
 After the one push+build above, register your Actor's local source folder so every future run picks up
@@ -50,10 +95,11 @@ apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/sample_
 ```
 
 `<actorId>` is the id `apify push --json` printed (`.actor.id`); the path must be absolute and must
-already exist on the **host** - the runtime verifies this by actually trying to mount it, and rejects
-the call with a clear error if the Actor has no build tagged `latest` yet (a stock `apify push` always
-tags its build `latest`, so this is normally just "build at least once first") or the path can't be
-confirmed.
+already exist on the **host** - the runtime verifies this through the engine itself (a throwaway,
+never-started probe container that binds the host's `/` read-only and stats the path beneath it, so it
+works identically on Docker and Podman and never creates anything on the host), and rejects the call
+with a clear error if the path can't be confirmed. The same check runs again at every run start, so a
+folder deleted after registration fails the run instead of running against an empty directory.
 The same thing is also a single-field form on the Actor's page in the console (`http://localhost:3000`).
 
 From then on:

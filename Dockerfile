@@ -64,8 +64,9 @@ COPY --from=builder /usr/src/app/dist ./dist
 COPY --from=debugpy-payload /payload/debugpy-payload.tar /opt/apify-debug-payload/debugpy-payload.tar
 COPY --from=debugpy-payload /payload/debugpy-version.txt /opt/apify-debug-payload/debugpy-version.txt
 
-# The runtime talks to the host Docker socket via dockerode (no docker CLI needed in-image) and
-# persists all storages under /data - mount both when running the container.
+# The runtime talks to the host's Docker-Engine-API socket via dockerode (no docker CLI needed in-image;
+# Podman's Docker-compatible socket works the same way) and persists all storages under /data - mount
+# both when running the container.
 VOLUME ["/data"]
 ENV ACTOR_RUNTIME_DATA_DIR=/data
 

@@ -61,10 +61,22 @@ function stubDockerForSampler() {
 	};
 }
 
-/** A minimal, valid `dockerode` `ContainerStats`-shaped object with just the fields the sampler reads. */
-function containerStats(totalUsage: number, systemUsage: number, memoryUsage: number, onlineCpus = 1) {
+/**
+ * A minimal, valid `dockerode` `ContainerStats`-shaped object with just the fields the sampler reads.
+ * `totalUsageMs` is the container's cumulative CPU time in MILLISECONDS (the daemon reports nanoseconds -
+ * scaled here), so with the suite's one-second fake-timer ticks a delta of 200 between two successive
+ * samples reads as 20% of one core. No `read` timestamp: the sampler then stamps each read with the
+ * (fake) process clock, which is exactly what the ticks advance. `systemUsage`/`onlineCpus` are still
+ * accepted so every caller's shape stays realistic, but the sampler no longer reads either (see
+ * `cpuUsageSnapshotOf`'s doc comment in `docker-driver.ts`).
+ */
+function containerStats(totalUsageMs: number, systemUsage: number, memoryUsage: number, onlineCpus = 1) {
 	return {
-		cpu_stats: { cpu_usage: { total_usage: totalUsage }, system_cpu_usage: systemUsage, online_cpus: onlineCpus },
+		cpu_stats: {
+			cpu_usage: { total_usage: totalUsageMs * 1_000_000 },
+			system_cpu_usage: systemUsage,
+			online_cpus: onlineCpus,
+		},
 		memory_stats: { usage: memoryUsage },
 	};
 }
@@ -138,14 +150,16 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await outcomePromise;
 	});
 
-	it('scales cpuPercentOfOneCore by online_cpus (the docker stats convention), not just the raw usage-time ratio', async () => {
+	it("computes cpuPercentOfOneCore as CPU time over wall time - never docker stats' system_cpu_usage/online_cpus formula, whose inputs Podman reports on a different scale", async () => {
 		const stub = stubDockerForSampler();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
+		// The Podman-shaped trap: `system_cpu_usage` advancing ~3s and `online_cpus: 4` over a one-second
+		// tick. The Docker formula would read a full second of CPU time (1000ms) as 1000/3000*4*100 = 133%;
+		// CPU time over wall time correctly reads it as one core busy the whole tick - 100%.
 		stub.queueStatsResponse(containerStats(0, 0, 100, 4));
-		// cpuDelta=1000, systemDelta=4000 -> ratio 0.25, * 4 online cpus * 100 = 100% of one core.
-		stub.queueStatsResponse(containerStats(1000, 4000, 100, 4));
+		stub.queueStatsResponse(containerStats(1000, 3_000_000_000, 100, 4));
 
 		const samples: RunResourceSample[] = [];
 		const outcomePromise = driver.startRun(
@@ -164,13 +178,14 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await outcomePromise;
 	});
 
-	it('reports 0% (never NaN/Infinity) for the degenerate case of a zero system-time delta between two samples', async () => {
+	it('reports 0% (never NaN/Infinity) for the degenerate case of a zero wall-time delta between two samples', async () => {
 		const stub = stubDockerForSampler();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		stub.queueStatsResponse(containerStats(0, 1000, 100));
-		stub.queueStatsResponse(containerStats(0, 1000, 100)); // identical - zero delta on both axes
+		// Both reads stamped by the daemon with the very same instant - zero delta on both axes.
+		stub.queueStatsResponse({ ...containerStats(0, 1000, 100), read: '2026-01-01T00:00:00.000000000Z' });
+		stub.queueStatsResponse({ ...containerStats(0, 1000, 100), read: '2026-01-01T00:00:00.000000000Z' });
 
 		const samples: RunResourceSample[] = [];
 		const outcomePromise = driver.startRun(
@@ -189,19 +204,19 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await outcomePromise;
 	});
 
-	it('treats a reported online_cpus of 0 as 1 - `@types/dockerode` declares the field non-optional, but this defends against a daemon that reports it as 0 anyway', async () => {
+	it("measures wall time between the daemon's own `read` timestamps when they parse, not between this process's request times", async () => {
 		const stub = stubDockerForSampler();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		stub.queueStatsResponse(containerStats(0, 0, 100, 0));
-		// cpuDelta=200, systemDelta=1000 -> ratio 0.2. With the online_cpus=0 -> 1 fallback that's 20%;
-		// without it (multiplying by the raw 0 instead), it would be 0%.
-		stub.queueStatsResponse(containerStats(200, 1000, 150, 0));
+		// The two reads are one fake-timer second apart on this process's clock, but the daemon stamps
+		// them two seconds apart: 200ms of CPU time over 2s of daemon wall time is 10%, not 20%.
+		stub.queueStatsResponse({ ...containerStats(0, 0, 100), read: '2026-01-01T00:00:00.000000000Z' });
+		stub.queueStatsResponse({ ...containerStats(200, 1000, 150), read: '2026-01-01T00:00:02.000000000Z' });
 
 		const samples: RunResourceSample[] = [];
 		const outcomePromise = driver.startRun(
-			{ runId: 'run-sampler-online-cpus-0', imageId: 'fake-image', env: {}, memoryMbytes: 1024, timeoutSecs: 60 },
+			{ runId: 'run-sampler-daemon-read', imageId: 'fake-image', env: {}, memoryMbytes: 1024, timeoutSecs: 60 },
 			() => {},
 			(sample) => samples.push(sample),
 		);
@@ -209,7 +224,7 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await vi.advanceTimersByTimeAsync(1000);
 
 		expect(samples).toHaveLength(1);
-		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(20);
+		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(10);
 
 		stub.triggerContainerExit(0);
 		stub.endLogStream();
@@ -317,10 +332,11 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		expect(samples).toHaveLength(0);
 
 		// Tick 2 succeeds again, diffed against the BASELINE (the rejected tick returned before ever
-		// updating `previous`, so this is not diffed against anything from the failed tick).
+		// updating `previous`, so this is not diffed against anything from the failed tick): 200ms of CPU
+		// time over the two seconds since the baseline is 10%.
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(samples).toHaveLength(1);
-		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(20);
+		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(10);
 
 		stub.triggerContainerExit(0);
 		stub.endLogStream();
@@ -372,7 +388,7 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(samples).toHaveLength(1);
 		expect(samples[0]?.memoryBytes).toBe(150);
-		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(((250 - 0) / (1500 - 0)) * 100);
+		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(12.5); // 250ms of CPU time over the 2s since the baseline
 
 		expect(frames).toHaveLength(1);
 		const data = frames[0]!.data;
@@ -458,10 +474,10 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await vi.advanceTimersByTimeAsync(1000); // tick 1: missing total_usage - skipped
 		expect(samples).toHaveLength(0);
 
-		// Tick 2 is diffed against the BASELINE, not the skipped tick.
+		// Tick 2 is diffed against the BASELINE, not the skipped tick: 200ms of CPU time over 2s is 10%.
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(samples).toHaveLength(1);
-		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(20);
+		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(10);
 		expect(samples[0]?.memoryBytes).toBe(180);
 
 		stub.triggerContainerExit(0);
@@ -469,65 +485,31 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		await outcomePromise;
 	});
 
-	it("skips a tick outright when cpu_stats.system_cpu_usage is missing while total_usage is present and valid - the shape the guard's second clause exists for", async () => {
+	it('never reads cpu_stats.system_cpu_usage or online_cpus - a missing, NaN, or absurd value there neither skips the tick nor changes the result', async () => {
 		const stub = stubDockerForSampler();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
 		stub.queueStatsResponse(containerStats(0, 0, 100)); // baseline
-		// BAD: total_usage present and finite, but system_cpu_usage is absent entirely - covered because
-		// the daemon's own stats shape is not guaranteed (docker-driver.ts's cpuUsageSnapshotOf doc
-		// comment), distinct from - and never reaching the same code path as - the already-tested
-		// "total_usage missing" case above, which returns before system_cpu_usage is even read.
+		// Three ticks of exactly 200ms CPU time each, with the fields the old formula depended on absent,
+		// NaN, and nonsensical in turn - all three must still read as 20% of one core.
 		stub.queueStatsResponse({
-			cpu_stats: { cpu_usage: { total_usage: 250 }, online_cpus: 1 },
+			cpu_stats: { cpu_usage: { total_usage: 200_000_000 } },
 			memory_stats: { usage: 150 },
 		});
-		stub.queueStatsResponse(containerStats(200, 1000, 180)); // recovers on the next tick
+		stub.queueStatsResponse({
+			cpu_stats: { cpu_usage: { total_usage: 400_000_000 }, system_cpu_usage: Number.NaN, online_cpus: 1 },
+			memory_stats: { usage: 160 },
+		});
+		stub.queueStatsResponse({
+			cpu_stats: { cpu_usage: { total_usage: 600_000_000 }, system_cpu_usage: 1, online_cpus: 0 },
+			memory_stats: { usage: 170 },
+		});
 
 		const samples: RunResourceSample[] = [];
 		const outcomePromise = driver.startRun(
 			{
-				runId: 'run-sampler-missing-system-usage',
-				imageId: 'fake-image',
-				env: {},
-				memoryMbytes: 1024,
-				timeoutSecs: 60,
-			},
-			() => {},
-			(sample) => samples.push(sample),
-		);
-
-		await vi.advanceTimersByTimeAsync(1000); // tick 1: missing system_cpu_usage - skipped
-		expect(samples).toHaveLength(0);
-
-		// Tick 2 is diffed against the BASELINE, not the skipped tick - proves `previous` was left untouched.
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(samples).toHaveLength(1);
-		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(20);
-		expect(samples[0]?.memoryBytes).toBe(180);
-
-		stub.triggerContainerExit(0);
-		stub.endLogStream();
-		await outcomePromise;
-	});
-
-	it('skips a tick outright when cpu_stats.system_cpu_usage is present but not a finite number (e.g. NaN) - the same guard as a missing field, not just an absent one', async () => {
-		const stub = stubDockerForSampler();
-		const driver = new DockerDriver(stub.docker);
-		driver.available = true;
-
-		stub.queueStatsResponse(containerStats(0, 0, 100)); // baseline
-		stub.queueStatsResponse({
-			cpu_stats: { cpu_usage: { total_usage: 250 }, system_cpu_usage: Number.NaN, online_cpus: 1 },
-			memory_stats: { usage: 150 },
-		});
-		stub.queueStatsResponse(containerStats(200, 1000, 180)); // recovers on the next tick
-
-		const samples: RunResourceSample[] = [];
-		const outcomePromise = driver.startRun(
-			{
-				runId: 'run-sampler-nan-system-usage',
+				runId: 'run-sampler-no-system-usage',
 				imageId: 'fake-image',
 				env: {},
 				memoryMbytes: 1024,
@@ -538,12 +520,11 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 		);
 
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(samples).toHaveLength(0);
-
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(samples).toHaveLength(1);
-		expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(20);
-		expect(samples[0]?.memoryBytes).toBe(180);
+		await vi.advanceTimersByTimeAsync(1000);
+
+		expect(samples.map((s) => s.cpuPercentOfOneCore)).toEqual([20, 20, 20].map((n) => expect.closeTo(n)));
+		expect(samples.map((s) => s.memoryBytes)).toEqual([150, 160, 170]);
 
 		stub.triggerContainerExit(0);
 		stub.endLogStream();
@@ -588,7 +569,7 @@ describe('DockerDriver.startRun - per-run resource sampler (onSample)', () => {
 
 			await vi.advanceTimersByTimeAsync(1000);
 			expect(samples).toHaveLength(1);
-			expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(20);
+			expect(samples[0]?.cpuPercentOfOneCore).toBeCloseTo(10); // 200ms of CPU time over the 2s since the baseline
 
 			stub.triggerContainerExit(0);
 			stub.endLogStream();

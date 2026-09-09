@@ -497,6 +497,9 @@ describe('DockerDriver.startRun - debug mode (actor-driver.md: "Debug mode")', (
 			const stub = stubDockerForRun();
 			const driver = new DockerDriver(stub.docker);
 			driver.available = true;
+			// The run-start dev-folder re-check (`assertDevFolderStillPresent`) is not under test here.
+			vi.spyOn(driver, 'ensureProbeImage').mockResolvedValue('probe:image');
+			vi.spyOn(driver, 'probeDevFolder').mockResolvedValue({ ok: true });
 
 			const outcomePromise = driver.startRun(
 				{

@@ -30,7 +30,7 @@
   port published on the host, bound to `127.0.0.1` (`5678` Python / `9229` Node by default, per-Actor
   overridable) - the runtime's own two ports above are unaffected, and no port is published for an Actor
   that never turned debug mode on.
-- Required `docker run` flags: mount the host Docker socket read-write
+- Required `docker run` flags: mount the host's Docker-Engine-API socket read-write
   (`-v /var/run/docker.sock:/var/run/docker.sock`) so the runtime can build and run Actor containers,
   and mount a persistent data directory (`-v <host-dir>:/data`, e.g. `-v "$(pwd)/data:/data"`) so
   storages survive a restart and are easy to inspect from the host. Publish both fixed ports
@@ -40,6 +40,26 @@
     docker build -t actor-runtime .
     docker run --rm -p 3333:3333 -p 3000:3000 \
       -v /var/run/docker.sock:/var/run/docker.sock \
+      -v "$(pwd)/data:/data" \
+      actor-runtime
+    ```
+
+- **Supported container engines: Docker, and Podman through its Docker-compatible API.** The runtime
+  talks only the Docker Engine API over that socket - it never shells out to a `docker` or `podman`
+  binary - so Podman is used by mounting the socket `podman system service` / the `podman.socket` unit
+  serves (`/run/podman/podman.sock` rootful, `$XDG_RUNTIME_DIR/podman/podman.sock` rootless) at the same
+  in-container path, or at any path named by a `DOCKER_HOST=unix://...` environment variable. Every
+  feature in `actor-driver.md` must behave identically on both engines; where the two engines' APIs
+  genuinely differ (Podman auto-creates a missing bind-mount source that Docker rejects; Podman's
+  container stats report `system_cpu_usage` on a different scale), the runtime must not depend on the
+  engine-specific behaviour. Verified against Docker Engine and rootful Podman 4.9 on Linux; rootless
+  Podman and `podman machine` are best-effort.
+
+    ```bash
+    sudo systemctl enable --now podman.socket
+    podman build -t actor-runtime .
+    sudo podman run --rm -p 3333:3333 -p 3000:3000 \
+      -v /run/podman/podman.sock:/var/run/docker.sock \
       -v "$(pwd)/data:/data" \
       actor-runtime
     ```

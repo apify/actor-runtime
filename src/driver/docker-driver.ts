@@ -22,12 +22,18 @@
  * so `abortBuild` can call `.abort()` on the live one. Runs are cancelled the same way as before -
  * `container.stop()` - since there is no HTTP request to abort there.
  *
- * Unverified in this sandbox: there is no Docker socket here, so `init()` always finds
- * `available: false` and every build/run fails fast with a clear status message instead of hanging.
- * The rest of the runtime (storages, actors-as-records, console) is unaffected.
+ * Daemon neutrality: everything here goes through the Docker Engine API, which Podman also serves
+ * (`podman system service` / the `podman.socket` unit), so the same driver runs Actors on either. The
+ * two places the daemons genuinely differ are handled explicitly and documented at the code: Podman
+ * auto-creates a missing bind-mount source where Docker rejects it (`probeDevFolder`,
+ * `assertDevFolderStillPresent`), and Podman's `system_cpu_usage` stat is not on Docker's scale
+ * (`cpuUsageSnapshotOf`). Without any reachable socket, `init()` finds `available: false` and every
+ * build/run fails fast with a clear status message instead of hanging; the rest of the runtime
+ * (storages, actors-as-records, console) is unaffected.
  */
 import { PassThrough } from 'node:stream';
 import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
 import Docker from 'dockerode';
 import * as tar from 'tar-stream';
 
@@ -68,21 +74,24 @@ const PROBE_IMAGE_TAG = 'actor-runtime/dev-folder-probe:probe';
  * HTTP 400 "no command specified" (moby refuses to create a container for an image with no `Cmd`/
  * `Entrypoint`) - which would look exactly like a bad candidate path if left undiagnosed. `CMD` fixes
  * that; the command itself is never exec'd, since `probeDevFolder`'s container is created but never
- * started. Verified empirically against a real daemon: builds and creates with no network access.
+ * started. Verified empirically against real Docker and Podman daemons: builds and creates with no
+ * network access.
  */
 const PROBE_DOCKERFILE = 'FROM scratch\nCMD ["/nonexistent"]\n';
-/** The daemon's own fixed error-message substring for a `Mounts`-type bind whose source is missing
- * (moby's `daemon/volume/mounts/validate.go: errBindSourceDoesNotExist`) - the one rejection shape
- * `classifyProbeError` reports as "does not exist" rather than a generic "could not verify". */
-const BIND_SOURCE_MISSING_SUBSTRING = 'bind source path does not exist';
-/** The daemon's own fixed error-message substring (moby's mount validation, `stat <path>: not a
- * directory`) for a bind source that exists but is a regular file, not a directory - reachable only
- * because the probe below appends `/.` to the candidate path (see `probeDevFolder`'s doc comment): a
- * trailing `/.` on a file path forces the stat that produces exactly this message, discriminating a file
- * from a directory in the same create-only call that already discriminates missing from present. The one
- * rejection shape `classifyProbeError` reports as "not a directory" rather than a generic "could not
- * verify", and never as "does not exist". */
-const NOT_A_DIRECTORY_SUBSTRING = 'not a directory';
+/** The host path the probe container binds read-only at `PROBE_MOUNT_TARGET`: the host's root, so the
+ * mount source always exists and the daemon never has to validate (or, on Podman, auto-create - see
+ * `probeDevFolder`) the candidate path itself. */
+const PROBE_MOUNT_SOURCE = '/';
+/** Response header of `HEAD /containers/{id}/archive?path=...` - base64 JSON of moby's
+ * `ContainerPathStat` (`name`, `size`, `mode`, `mtime`, `linkTarget`), identical on Podman. */
+const PATH_STAT_HEADER = 'x-docker-container-path-stat';
+/** Go `os.FileMode` type bits, as serialized into the stat header's `mode`. `GO_MODE_DIR` is bit 31, so a
+ * JS bitwise AND against it yields a negative int32 for a directory - non-zero, which is all the checks
+ * below need. */
+const GO_MODE_DIR = 0x80000000;
+const GO_MODE_SYMLINK = 0x08000000;
+/** Bounds `probeDevFolder`'s manual symlink following - a longer chain is reported `unknown`. */
+const MAX_SYMLINK_HOPS = 16;
 /** Docker daemon rejection substrings for "host port already bound" - covers both the classic and
  * newer moby wording. */
 const PORT_IN_USE_SUBSTRINGS = ['port is already allocated', 'address already in use'];
@@ -115,16 +124,83 @@ function hasStatusCode(error: unknown): error is Error & { statusCode: number } 
 	);
 }
 
-/** Classifies a `createContainer` rejection from `probeDevFolder`, most specific first - see
- * `DevFolderProbeFailureReason`'s doc comment in `driver/types.ts` for what each outcome means and why
- * a permission error/Docker Desktop file-sharing denial must never be asserted as "does not exist" or
- * "not a directory". */
-function classifyProbeError(error: unknown): DevFolderProbeFailureReason {
+/** Classifies a `createContainer` rejection from `probeDevFolder` - see `DevFolderProbeFailureReason`'s
+ * doc comment in `driver/types.ts`. The probe's mount source is always `/`, so a create rejection is
+ * never about the candidate path: it is either the daemon being gone or the probe image being gone. */
+function classifyProbeCreateError(error: unknown): DevFolderProbeFailureReason {
 	if (!hasStatusCode(error)) return 'unreachable';
 	if (error.statusCode === 404) return 'image-missing';
-	if (error.message.includes(BIND_SOURCE_MISSING_SUBSTRING)) return 'not-found';
-	if (error.message.includes(NOT_A_DIRECTORY_SUBSTRING)) return 'not-a-directory';
 	return 'unknown';
+}
+
+/** One parsed `PATH_STAT_HEADER`. `linkTarget` is only meaningful when `mode` carries `GO_MODE_SYMLINK`. */
+interface ProbeStat {
+	mode: number;
+	linkTarget: string;
+}
+
+type ProbeStatOutcome = { ok: true; stat: ProbeStat } | { ok: false; reason: DevFolderProbeFailureReason };
+
+/** Classifies an `infoArchive` (`HEAD .../archive`) rejection: the daemon answers 404 for a path that
+ * does not exist under the probe mount - the one case allowed to say "does not exist". Anything else the
+ * daemon answered is "could not verify" (a permission problem, a Docker Desktop file-sharing denial); no
+ * answer at all is `unreachable`. */
+function classifyProbeStatError(error: unknown): DevFolderProbeFailureReason {
+	if (!hasStatusCode(error)) return 'unreachable';
+	if (error.statusCode === 404) return 'not-found';
+	return 'unknown';
+}
+
+/** Reads `PATH_STAT_HEADER` off the response `container.infoArchive` resolves with (dockerode hands back
+ * the raw `http.IncomingMessage` for this `HEAD` call). A response without a parseable header is
+ * `unknown`, never a guess. */
+function parseProbeStatResponse(response: unknown): ProbeStatOutcome {
+	const headers = (response as { headers?: Record<string, string | string[] | undefined> } | undefined)?.headers;
+	const raw = headers?.[PATH_STAT_HEADER];
+	const encoded = Array.isArray(raw) ? raw[0] : raw;
+	if (!encoded) return { ok: false, reason: 'unknown' };
+	try {
+		const parsed = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) as {
+			mode?: unknown;
+			linkTarget?: unknown;
+		};
+		if (typeof parsed.mode !== 'number') return { ok: false, reason: 'unknown' };
+		return {
+			ok: true,
+			stat: { mode: parsed.mode, linkTarget: typeof parsed.linkTarget === 'string' ? parsed.linkTarget : '' },
+		};
+	} catch {
+		return { ok: false, reason: 'unknown' };
+	}
+}
+
+/** Stats one path inside the (never-started) probe container, through the daemon's own archive-stat
+ * endpoint - the same resolution `docker cp` uses, which both Docker and Podman perform on a stopped
+ * container's bind mounts too. */
+async function statInProbe(container: Docker.Container, containerPath: string): Promise<ProbeStatOutcome> {
+	let response: unknown;
+	try {
+		response = await container.infoArchive({ path: containerPath });
+	} catch (error) {
+		return { ok: false, reason: classifyProbeStatError(error) };
+	}
+	// A `HEAD` response has no body, but the socket is only released once the message is consumed.
+	(response as { resume?: () => void } | undefined)?.resume?.();
+	return parseProbeStatResponse(response);
+}
+
+/**
+ * Maps the `linkTarget` a symlink stat reports back to a host path. Docker resolves a link's target in
+ * the scope of the container's root filesystem and reports that absolute container path: a target that
+ * landed under the probe mount is reported with the `PROBE_MOUNT_TARGET` prefix (a relative link, or an
+ * absolute one pointing back inside), while a host-absolute target that escaped the mount is reported
+ * verbatim - which, since the mount source is the host's `/`, is already the host path. Podman follows
+ * symlinks itself before answering, so this never runs there.
+ */
+function hostPathOfLinkTarget(linkTarget: string): string {
+	if (linkTarget === PROBE_MOUNT_TARGET) return '/';
+	if (linkTarget.startsWith(`${PROBE_MOUNT_TARGET}/`)) return linkTarget.slice(PROBE_MOUNT_TARGET.length);
+	return linkTarget;
 }
 
 /** True when a `container.start()` rejection means the host debug port is already bound. */
@@ -156,10 +232,11 @@ function dockerfileTarball(contents: string): NodeJS.ReadableStream {
 	return pack;
 }
 
-/** The `cpu_stats` fields the sampler diffs between two of its own successive samples. */
+/** What the sampler diffs between two of its own successive samples: the container's cumulative CPU time
+ * (`cpu_stats.cpu_usage.total_usage`, nanoseconds on every daemon) and when the daemon read it. */
 interface CpuUsageSnapshot {
-	totalUsage: number;
-	systemUsage: number;
+	totalUsageNs: number;
+	readAtMs: number;
 }
 
 /**
@@ -177,15 +254,22 @@ function memoryUsageBytesExcludingCache(stats: Docker.ContainerStats): number | 
 }
 
 /**
- * Presence-and-finiteness guard for the two `cpu_stats` fields the delta reads. A missing field skips the
- * tick instead of throwing or producing a `NaN`. `online_cpus` is excluded: it has a sane `|| 1` fallback.
+ * Presence-and-finiteness guard for the one `cpu_stats` field the delta reads. A missing or non-finite
+ * `total_usage` skips the tick instead of throwing or producing a `NaN`. The read time is the daemon's own
+ * `read` timestamp when it parses, else this process's clock - the two differ only by the request's
+ * latency, which a one-second cadence makes negligible.
+ *
+ * Deliberately NOT `docker stats`' `cpu_delta / system_cpu_delta * online_cpus` formula: that one is only
+ * right when `system_cpu_usage` is the sum over all CPUs of the host's `/proc/stat` time, which Docker
+ * reports but Podman's Docker-compatible API does not (measured against a real Podman 4.9 daemon: a run
+ * throttled to 0.25 core came out as ~66% of one core, not ~25%). CPU-time-over-wall-time needs no
+ * daemon-specific field and agrees with the Docker formula on Docker to within a fraction of a percent.
  */
 function cpuUsageSnapshotOf(stats: Docker.ContainerStats): CpuUsageSnapshot | undefined {
-	const totalUsage = stats.cpu_stats?.cpu_usage?.total_usage;
-	const systemUsage = stats.cpu_stats?.system_cpu_usage;
-	if (typeof totalUsage !== 'number' || !Number.isFinite(totalUsage)) return undefined;
-	if (typeof systemUsage !== 'number' || !Number.isFinite(systemUsage)) return undefined;
-	return { totalUsage, systemUsage };
+	const totalUsageNs = stats.cpu_stats?.cpu_usage?.total_usage;
+	if (typeof totalUsageNs !== 'number' || !Number.isFinite(totalUsageNs)) return undefined;
+	const daemonReadAtMs = typeof stats.read === 'string' ? Date.parse(stats.read) : Number.NaN;
+	return { totalUsageNs, readAtMs: Number.isFinite(daemonReadAtMs) ? daemonReadAtMs : Date.now() };
 }
 
 /**
@@ -228,13 +312,11 @@ function startResourceSampler(
 		}
 
 		if (emit && previous) {
-			const cpuDelta = current.totalUsage - previous.totalUsage;
-			const systemDelta = current.systemUsage - previous.systemUsage;
-			const onlineCpus = stats.cpu_stats.online_cpus || 1;
-			// `systemDelta` is 0 only in a degenerate case (no host-wide CPU time elapsed between two
-			// samples, e.g. two calls landing on the very same daemon tick) - reported as 0% rather than
-			// producing NaN/Infinity.
-			const cpuPercentOfOneCore = systemDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus * 100 : 0;
+			const cpuDeltaNs = current.totalUsageNs - previous.totalUsageNs;
+			const wallDeltaNs = (current.readAtMs - previous.readAtMs) * 1_000_000;
+			// `wallDeltaNs` is 0 only in a degenerate case (two reads stamped with the very same instant) -
+			// reported as 0% rather than producing NaN/Infinity.
+			const cpuPercentOfOneCore = wallDeltaNs > 0 ? (cpuDeltaNs / wallDeltaNs) * 100 : 0;
 			onSample({
 				cpuPercentOfOneCore,
 				memoryBytes,
@@ -316,7 +398,9 @@ export class DockerDriver implements Driver {
 			await this.docker.ping();
 		} catch (error) {
 			this.available = false;
-			this.unavailableReason = `Docker socket is not reachable: ${(error as Error).message}`;
+			this.unavailableReason =
+				`Docker API socket is not reachable (mount your Docker or Podman socket at /var/run/docker.sock, ` +
+				`or point DOCKER_HOST at it): ${(error as Error).message}`;
 			return;
 		}
 
@@ -392,7 +476,11 @@ export class DockerDriver implements Driver {
 
 		const network = this.docker.getNetwork(NETWORK_NAME);
 		const info = await network.inspect().catch(() => undefined);
-		if (info?.Containers?.[selfId]) return; // already attached
+		// `Containers` is keyed by full container id on both Docker and Podman, while `HOSTNAME` is the
+		// short (12-char) one - a prefix match is what "already attached" actually means here. Without it
+		// every restart of the runtime container re-attempted the connect and logged the daemon's
+		// "already connected" rejection as a warning.
+		if (Object.keys(info?.Containers ?? {}).some((id) => id.startsWith(selfId))) return; // already attached
 
 		await network
 			.connect({ Container: selfId, EndpointConfig: { Aliases: [CONTAINER_API_ALIAS] } })
@@ -547,9 +635,12 @@ export class DockerDriver implements Driver {
 		const overCapacityWarning = this.buildOverCapacityWarning(ctx);
 		if (overCapacityWarning) onLog(overCapacityWarning);
 
-		// A secondary diagnostic for the residual risk that a folder verified at registration later
-		// vanishes: written before `createContainer` so it lands even if that call is what fails.
+		// Re-verified on every dev-mount run, before any container exists: Docker would reject a `Mounts`
+		// bind whose source vanished since registration, but Podman's Docker-compatible API auto-creates the
+		// missing source instead - which would silently start the run against an empty directory, exactly
+		// what `actor-driver.md` forbids ("fail visibly - never silently mount an empty directory").
 		if (ctx.devMount) {
+			await this.assertDevFolderStillPresent(ctx.devMount.localDevFolder);
 			onLog(
 				`Mounting local dev folder ${ctx.devMount.localDevFolder} over the image's working directory ` +
 					`${ctx.devMount.imageWorkingDirectory} (node_modules preserved via an anonymous volume).\n`,
@@ -721,6 +812,28 @@ export class DockerDriver implements Driver {
 		}
 	}
 
+	/** `startRun`'s pre-container check that a registered dev folder is still a directory on the host -
+	 * the same probe registration used (`probeDevFolder`), so the two can never disagree on what counts as
+	 * present. Throws (failing the run, with this as its status message) on every non-ok outcome, including
+	 * "could not verify": a run that cannot prove its folder exists must not start against whatever the
+	 * daemon would put there instead. */
+	private async assertDevFolderStillPresent(localDevFolder: string): Promise<void> {
+		const outcome = await this.probeDevFolder(localDevFolder, await this.ensureProbeImage());
+		if (outcome.ok) return;
+		const problem =
+			outcome.reason === 'not-found'
+				? 'no longer exists on the host'
+				: outcome.reason === 'not-a-directory'
+					? 'is no longer a directory on the host'
+					: `could not be verified on the host (${outcome.reason})`;
+		throw new Error(
+			`The registered local dev folder ${localDevFolder} ${problem} - the run was not started, so that a ` +
+				`missing folder is never silently replaced by an empty directory. Restore the folder, or clear the ` +
+				`registration (POST /actor-runtime/dev-folder/<actorId> with an empty string body) to run from the ` +
+				`built image alone.`,
+		);
+	}
+
 	/** The two `HostConfig.Mounts` entries for a `devMount` run: a read-write bind for the dev folder
 	 * itself (`Mounts`, not `Binds` - a `Mounts`-type bind errors on a missing source instead of silently
 	 * auto-creating one), plus an anonymous volume (empty `Source`) over `node_modules` - Docker copies
@@ -827,26 +940,30 @@ export class DockerDriver implements Driver {
 	}
 
 	/**
-	 * Host-side existence-and-directory check for a candidate dev-folder path: a create-only probe
-	 * container, never started. `fs.existsSync` would test this process's own filesystem, not the host's;
-	 * the only Engine API surface that validates an arbitrary host path is the mount-validation moby runs
-	 * inside `POST /containers/create`. `BindOptions.CreateMountpoint` (which would auto-create a missing
-	 * source and defeat this check) is never set. `imageId` is always `ensureProbeImage`'s own image
-	 * above - never an Actor's build (registration must work for an Actor with no build at all), a
-	 * self-inspected runtime image (`HOSTNAME` is unset in bare local dev, per `selfAttachToNetwork`
-	 * above), or a pulled one (would break offline-after-first-build).
+	 * Host-side existence-and-directory check for a candidate dev-folder path: a probe container that
+	 * binds the host's `/` read-only at `PROBE_MOUNT_TARGET`, is never started, and is stat'ed through
+	 * `HEAD /containers/{id}/archive?path=/probe<candidate>` (`container.infoArchive`) - the same
+	 * resolution `docker cp` uses, which both Docker and Podman perform on a stopped container's bind
+	 * mounts too. `fs.existsSync` would test this process's own filesystem, not the host's. `imageId` is
+	 * always `ensureProbeImage`'s own image above - never an Actor's build (registration must work for an
+	 * Actor with no build at all), a self-inspected runtime image (`HOSTNAME` is unset in bare local dev,
+	 * per `selfAttachToNetwork` above), or a pulled one (would break offline-after-first-build).
 	 *
-	 * The mount `Source` is the candidate path with a literal `/.` appended, never the bare path -
-	 * verified empirically against a real daemon (a `FROM scratch` probe image, no network pull needed):
-	 * appending `/.` forces the same `stat` moby already performs to also reject a regular file (`invalid
-	 * mount config for type "bind": stat <path>/.: not a directory`, classified below as
-	 * `not-a-directory`) while leaving every other outcome unchanged - a real directory (or a symlink
-	 * resolving to one) still succeeds, and a missing path still rejects with the same
-	 * `BIND_SOURCE_MISSING_SUBSTRING` (now trailed by `/.`, which the substring match ignores). Since the
-	 * daemon's rejection message and this call's own `Source` therefore always carry the `/.` suffix, the
-	 * caller (`services/dev-folder.ts`) never echoes either back to the user - only this function's own
-	 * classified `DevFolderProbeFailureReason` crosses that boundary, so the path stored and displayed
-	 * anywhere is always exactly what the caller submitted.
+	 * Why the host root rather than the candidate itself as the mount source: Docker rejects a `Mounts`
+	 * bind whose source is missing, but Podman's Docker-compatible API instead auto-creates the missing
+	 * source directory on the host (its `containers_create` compat handler `MkdirAll`s every bind source
+	 * and ignores `BindOptions.CreateMountpoint`), so a create-only probe would report a typo'd path as
+	 * present *and* leave a root-owned empty directory behind. Mounting `/` (which always exists) and
+	 * stat'ing beneath it has no such side effect on either daemon, and one code path serves both.
+	 *
+	 * The candidate is walked component by component so a symlink anywhere in it still resolves to what
+	 * it points at on the host: Docker reports a symlink component as such (with the daemon's
+	 * container-scoped `linkTarget`, mapped back to a host path by `hostPathOfLinkTarget`) instead of
+	 * following it, while Podman follows symlinks itself. A regular file, or a symlink to one, is
+	 * `not-a-directory`; a missing component is `not-found`; anything the daemon would not confirm is
+	 * `unknown`, never a guess. Only the classified `DevFolderProbeFailureReason` crosses back to the
+	 * caller (`services/dev-folder.ts`), so the path stored and displayed anywhere is always exactly what
+	 * the caller submitted.
 	 */
 	async probeDevFolder(candidatePath: string, imageId: string): Promise<DevFolderProbeOutcome> {
 		if (!this.available) return { ok: false, reason: 'unreachable' };
@@ -857,23 +974,63 @@ export class DockerDriver implements Driver {
 				Image: imageId,
 				Labels: { [PROBE_LABEL]: 'true' },
 				HostConfig: {
-					Mounts: [
-						{ Type: 'bind', Source: `${candidatePath}/.`, Target: PROBE_MOUNT_TARGET, ReadOnly: true },
-					],
+					Mounts: [{ Type: 'bind', Source: PROBE_MOUNT_SOURCE, Target: PROBE_MOUNT_TARGET, ReadOnly: true }],
 				},
 			});
 		} catch (error) {
 			// Creation itself failed, so there is nothing to clean up.
-			return { ok: false, reason: classifyProbeError(error) };
+			return { ok: false, reason: classifyProbeCreateError(error) };
 		}
 
-		// Creation succeeded, so this container genuinely exists on the daemon now - unlike the rejected
-		// path above, a failed removal here would leak a real container. Logged rather than swallowed so
-		// the leak is discoverable; `PROBE_LABEL` also lets `reconcileOrphans` sweep it on next startup.
-		await container.remove().catch((error: Error) => {
-			console.warn(`Could not remove dev-folder probe container ${container.id}: ${error.message}`);
-		});
-		return { ok: true };
+		try {
+			return await this.resolveDirectoryInProbe(container, candidatePath);
+		} finally {
+			// This container genuinely exists on the daemon now - a failed removal here would leak a real
+			// container. Logged rather than swallowed so the leak is discoverable; `PROBE_LABEL` also lets
+			// `reconcileOrphans` sweep it on next startup.
+			await container.remove().catch((error: Error) => {
+				console.warn(`Could not remove dev-folder probe container ${container.id}: ${error.message}`);
+			});
+		}
+	}
+
+	/** The component walk `probeDevFolder`'s doc comment describes, against an already-created probe
+	 * container. Restarts from the link's target whenever a component turns out to be a symlink, bounded
+	 * by `MAX_SYMLINK_HOPS`. */
+	private async resolveDirectoryInProbe(
+		container: Docker.Container,
+		candidatePath: string,
+	): Promise<DevFolderProbeOutcome> {
+		let pending = candidatePath.split('/').filter((component) => component !== '');
+		let resolved = '';
+		let hops = 0;
+		let stat: ProbeStat | undefined;
+		while (pending.length > 0) {
+			const [component, ...rest] = pending;
+			const current = `${resolved}/${component}`;
+			const outcome = await statInProbe(container, `${PROBE_MOUNT_TARGET}${current}`);
+			if (!outcome.ok) return outcome;
+			stat = outcome.stat;
+			if ((stat.mode & GO_MODE_SYMLINK) !== 0) {
+				if (++hops > MAX_SYMLINK_HOPS || stat.linkTarget === '') return { ok: false, reason: 'unknown' };
+				const target = hostPathOfLinkTarget(stat.linkTarget);
+				// A relative target is relative to the link's own directory; an absolute one restarts at `/`.
+				const base = target.startsWith('/') ? '' : resolved;
+				const normalized = path.posix.normalize(`${base}/${target}`);
+				pending = [...normalized.split('/').filter((part) => part !== ''), ...rest];
+				resolved = '';
+				continue;
+			}
+			resolved = current;
+			pending = rest;
+		}
+		// `/` itself (no components) stats the mount root, which is always a directory.
+		if (!stat) {
+			const outcome = await statInProbe(container, PROBE_MOUNT_TARGET);
+			if (!outcome.ok) return outcome;
+			stat = outcome.stat;
+		}
+		return (stat.mode & GO_MODE_DIR) !== 0 ? { ok: true } : { ok: false, reason: 'not-a-directory' };
 	}
 
 	async abortRun(runId: string): Promise<void> {

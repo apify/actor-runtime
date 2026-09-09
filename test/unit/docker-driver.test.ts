@@ -243,6 +243,8 @@ describe('DockerDriver.startRun - dev-folder mount composition (actor-driver.md:
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
+		allowDevMountRecheck(driver);
+
 		const outcomePromise = driver.startRun(
 			{
 				runId: 'run-mount-1',
@@ -293,6 +295,8 @@ describe('DockerDriver.startRun - dev-folder mount composition (actor-driver.md:
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 		const chunks: string[] = [];
+
+		allowDevMountRecheck(driver);
 
 		const outcomePromise = driver.startRun(
 			{
@@ -671,38 +675,103 @@ describe('DockerDriver.ensureProbeImage (actor-driver.md: registration needs no 
 	});
 });
 
+/** Go `os.FileMode` type bits as they appear in the stat header's `mode` (`docker-driver.ts`'s
+ * `GO_MODE_DIR`/`GO_MODE_SYMLINK`); `0o755`/`0o644` below are the permission bits real daemons add. */
+const GO_DIR = 0x80000000 + 0o755;
+const GO_FILE = 0o644;
+const GO_SYMLINK = 0x08000000 + 0o777;
+
+/** One stat answer per in-container path the probe may ask about: a mode (+ optional Docker-style
+ * `linkTarget`), or an Error to reject with. A path with no entry rejects 404 like a real daemon does. */
+type ProbeStatTable = Record<string, { mode: number; linkTarget?: string } | Error>;
+
+function statHeader(mode: number, linkTarget = ''): string {
+	const stat = { name: 'x', size: 0, mode, mtime: '2026-01-01T00:00:00Z', linkTarget };
+	return Buffer.from(JSON.stringify(stat), 'utf8').toString('base64');
+}
+
+function http404(message: string): Error {
+	return Object.assign(new Error(`(HTTP code 404) no such container - ${message} `), { statusCode: 404 });
+}
+
+/**
+ * A stub `dockerode`-shaped object covering what `probeDevFolder` calls: `createContainer`, then
+ * `container.infoArchive({ path })` (the `HEAD .../archive` stat - answered from `table`, with the
+ * header a real daemon sets) and `container.remove()`. `infoArchive` resolves with the raw
+ * `http.IncomingMessage`-shaped `{ headers, resume }` dockerode hands back for that `HEAD` call.
+ */
+function stubDockerForProbe(table: ProbeStatTable, options: { createError?: Error; removeError?: Error } = {}) {
+	const start = vi.fn();
+	const resume = vi.fn();
+	const remove = vi.fn(async () => {
+		if (options.removeError) throw options.removeError;
+	});
+	const infoArchive = vi.fn(async ({ path: containerPath }: { path: string }) => {
+		const entry = table[containerPath];
+		if (!entry) throw http404(`Could not find the file ${containerPath} in container probe-id`);
+		if (entry instanceof Error) throw entry;
+		return { headers: { 'x-docker-container-path-stat': statHeader(entry.mode, entry.linkTarget) }, resume };
+	});
+	const createContainer = vi.fn(async (_options: Docker.ContainerCreateOptions) => {
+		if (options.createError) throw options.createError;
+		return { id: 'probe-id', remove, start, infoArchive };
+	});
+	return {
+		docker: { createContainer } as unknown as Docker,
+		createContainer,
+		infoArchive,
+		remove,
+		start,
+		resume,
+		statedPaths: () => infoArchive.mock.calls.map(([call]) => call.path),
+	};
+}
+
 describe('DockerDriver.probeDevFolder (actor-driver.md: "A host-side existence-and-directory check")', () => {
-	it('returns ok and removes the (never-started) probe container on success, without ever calling .start()', async () => {
-		const start = vi.fn();
-		const remove = vi.fn(async () => undefined);
-		// Typed with the real `dockerode` parameter shape so `mock.calls[0]` is genuinely a
-		// `[Docker.ContainerCreateOptions]` tuple below - no unsound cast needed to read it back.
-		const createContainer = vi.fn(async (_options: Docker.ContainerCreateOptions) => ({ remove, start }));
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it('binds the host root read-only at /probe (never the candidate itself - Podman would auto-create a missing one), stats the candidate component by component, and removes the never-started container', async () => {
+		const stub = stubDockerForProbe({ '/probe/abs': { mode: GO_DIR }, '/probe/abs/path': { mode: GO_DIR } });
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
 		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
 
 		expect(outcome).toEqual({ ok: true });
-		expect(createContainer).toHaveBeenCalledTimes(1);
-		const [options] = createContainer.mock.calls[0]!;
+		expect(stub.createContainer).toHaveBeenCalledTimes(1);
+		const [options] = stub.createContainer.mock.calls[0]!;
 		expect(options.Image).toBe('image:tag');
-		// `/.` appended to the candidate path (directive: "the probe must accept ONLY directories") - the
-		// stored/returned path itself is never affected, only this internal probe `Source`.
-		expect(options.HostConfig?.Mounts).toEqual([
-			{ Type: 'bind', Source: '/abs/path/.', Target: '/probe', ReadOnly: true },
-		]);
-		expect(remove).toHaveBeenCalledTimes(1);
-		expect(start).not.toHaveBeenCalled();
+		expect(options.HostConfig?.Mounts).toEqual([{ Type: 'bind', Source: '/', Target: '/probe', ReadOnly: true }]);
 		expect(options.Labels).toEqual({ 'actor-runtime.devFolderProbe': 'true' });
+		expect(stub.statedPaths()).toEqual(['/probe/abs', '/probe/abs/path']);
+		expect(stub.remove).toHaveBeenCalledTimes(1);
+		expect(stub.start).not.toHaveBeenCalled();
+		// The bodiless HEAD response is still consumed so its socket is released.
+		expect(stub.resume).toHaveBeenCalled();
+	});
+
+	it('normalizes a trailing slash and repeated separators away rather than stat-ing empty components', async () => {
+		const stub = stubDockerForProbe({ '/probe/abs': { mode: GO_DIR }, '/probe/abs/path': { mode: GO_DIR } });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		expect(await driver.probeDevFolder('/abs//path/', 'image:tag')).toEqual({ ok: true });
+		expect(stub.statedPaths()).toEqual(['/probe/abs', '/probe/abs/path']);
+	});
+
+	it('accepts / itself by stat-ing the mount root', async () => {
+		const stub = stubDockerForProbe({ '/probe': { mode: GO_DIR } });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		expect(await driver.probeDevFolder('/', 'image:tag')).toEqual({ ok: true });
+		expect(stub.statedPaths()).toEqual(['/probe']);
 	});
 
 	it('still reports ok when the probe container was created but its removal fails, and logs the failure instead of swallowing it', async () => {
-		const remove = vi.fn(async () => {
-			throw new Error('removal failed: container already stopping');
-		});
-		const createContainer = vi.fn(async () => ({ id: 'probe-id', remove, start: vi.fn() }));
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+		const stub = stubDockerForProbe(
+			{ '/probe/abs': { mode: GO_DIR }, '/probe/abs/path': { mode: GO_DIR } },
+			{ removeError: new Error('removal failed: container already stopping') },
+		);
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -714,107 +783,260 @@ describe('DockerDriver.probeDevFolder (actor-driver.md: "A host-side existence-a
 		warn.mockRestore();
 	});
 
-	it('never even calls createContainer when the driver already knows Docker is unavailable - short-circuits to unreachable', async () => {
-		const createContainer = vi.fn(async () => ({ remove: vi.fn() }));
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it('never even calls createContainer when the driver already knows the daemon is unavailable - short-circuits to unreachable', async () => {
+		const stub = stubDockerForProbe({});
+		const driver = new DockerDriver(stub.docker);
 		// driver.available defaults to false - init() never ran.
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
-
-		expect(outcome).toEqual({ ok: false, reason: 'unreachable' });
-		expect(createContainer).not.toHaveBeenCalled();
+		expect(await driver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'unreachable' });
+		expect(stub.createContainer).not.toHaveBeenCalled();
 	});
 
-	it('classifies a rejection with no .statusCode as unreachable (a raw transport failure), never as "does not exist"', async () => {
-		const createContainer = vi.fn(async () => {
-			throw new Error('connect ECONNREFUSED /var/run/docker.sock');
-		});
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it('classifies a createContainer rejection with no .statusCode as unreachable (a raw transport failure), never as "does not exist"', async () => {
+		const stub = stubDockerForProbe({}, { createError: new Error('connect ECONNREFUSED /var/run/docker.sock') });
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
-
-		expect(outcome).toEqual({ ok: false, reason: 'unreachable' });
+		expect(await driver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'unreachable' });
 	});
 
-	it("classifies a 404 rejection as image-missing (the probe's own image is gone, an operational fault)", async () => {
-		const createContainer = vi.fn(async () => {
-			throw Object.assign(new Error('(HTTP code 404) no such image: image:tag'), { statusCode: 404 });
-		});
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it("classifies a 404 createContainer rejection as image-missing (the probe's own image is gone, an operational fault) - the mount source is always /, so a create rejection is never about the candidate", async () => {
+		const stub = stubDockerForProbe({}, { createError: http404('no such image: image:tag') });
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
-
-		expect(outcome).toEqual({ ok: false, reason: 'image-missing' });
+		expect(await driver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'image-missing' });
 	});
 
-	it('classifies the exact "bind source path does not exist" substring as not-found - the one case allowed to say so', async () => {
-		const createContainer = vi.fn(async () => {
-			throw Object.assign(
-				new Error(
-					'(HTTP code 400) client error - invalid mount config for type "bind": bind source path does not exist: /abs/path ',
-				),
-				{ statusCode: 400 },
-			);
-		});
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it('classifies any other answered createContainer rejection as unknown', async () => {
+		const stub = stubDockerForProbe(
+			{},
+			{ createError: Object.assign(new Error('(HTTP code 500) server error - boom'), { statusCode: 500 }) },
+		);
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
-
-		expect(outcome).toEqual({ ok: false, reason: 'not-found' });
+		expect(await driver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'unknown' });
 	});
 
-	it('classifies a differently-worded "must be a directory" rejection as unknown, never as not-a-directory - only the exact "not a directory" substring is', async () => {
-		const createContainer = vi.fn(async () => {
-			throw Object.assign(
-				new Error(
-					'(HTTP code 400) client error - invalid mount config for type "bind": source path must be a directory',
-				),
-				{ statusCode: 400 },
-			);
-		});
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it("classifies the daemon's 404 for the final component as not-found - the one case allowed to say so - and still removes the probe container", async () => {
+		const stub = stubDockerForProbe({ '/probe/abs': { mode: GO_DIR } });
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
-
-		expect(outcome).toEqual({ ok: false, reason: 'unknown' });
+		expect(await driver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'not-found' });
+		expect(stub.statedPaths()).toEqual(['/probe/abs', '/probe/abs/path']);
+		expect(stub.remove).toHaveBeenCalledTimes(1);
 	});
 
-	it('classifies the exact "not a directory" substring as not-a-directory - a regular file candidate, discriminated by the appended "/." (verified empirically against a real daemon)', async () => {
-		const createContainer = vi.fn(async () => {
-			throw Object.assign(
-				new Error(
-					'(HTTP code 400) bad parameter - invalid mount config for type "bind": stat /abs/path/.: not a directory',
-				),
-				{ statusCode: 400 },
-			);
-		});
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it('stops at the first missing intermediate component, also as not-found', async () => {
+		const stub = stubDockerForProbe({});
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
-
-		expect(outcome).toEqual({ ok: false, reason: 'not-a-directory' });
+		expect(await driver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'not-found' });
+		expect(stub.statedPaths()).toEqual(['/probe/abs']);
 	});
 
-	it('classifies a Docker Desktop file-sharing denial (a real, existing path) as unknown, never as not-found - the false-negative this design deliberately avoids', async () => {
-		const createContainer = vi.fn(async () => {
-			throw Object.assign(
-				new Error(
-					'(HTTP code 400) client error - Mounts denied: The path /abs/path is not shared from the host and is not known to Docker.',
-				),
-				{ statusCode: 400 },
-			);
-		});
-		const driver = new DockerDriver({ createContainer } as unknown as Docker);
+	it('classifies a regular file candidate as not-a-directory, never as not-found', async () => {
+		const stub = stubDockerForProbe({ '/probe/abs': { mode: GO_DIR }, '/probe/abs/file.txt': { mode: GO_FILE } });
+		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
-		const outcome = await driver.probeDevFolder('/abs/path', 'image:tag');
+		expect(await driver.probeDevFolder('/abs/file.txt', 'image:tag')).toEqual({
+			ok: false,
+			reason: 'not-a-directory',
+		});
+	});
 
-		expect(outcome).toEqual({ ok: false, reason: 'unknown' });
+	it('classifies a stat rejection with no .statusCode as unreachable, and any other answered non-404 rejection as unknown - never as "does not exist"', async () => {
+		const transport = stubDockerForProbe({ '/probe/abs': new Error('socket hang up') });
+		const transportDriver = new DockerDriver(transport.docker);
+		transportDriver.available = true;
+		expect(await transportDriver.probeDevFolder('/abs/path', 'image:tag')).toEqual({
+			ok: false,
+			reason: 'unreachable',
+		});
+
+		const denied = stubDockerForProbe({
+			'/probe/abs': Object.assign(new Error('(HTTP code 500) server error - permission denied'), {
+				statusCode: 500,
+			}),
+		});
+		const deniedDriver = new DockerDriver(denied.docker);
+		deniedDriver.available = true;
+		expect(await deniedDriver.probeDevFolder('/abs/path', 'image:tag')).toEqual({ ok: false, reason: 'unknown' });
+	});
+
+	it('classifies a stat response without a parseable X-Docker-Container-Path-Stat header as unknown', async () => {
+		const stub = stubDockerForProbe({});
+		stub.infoArchive.mockResolvedValueOnce({ headers: {}, resume: vi.fn() });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		expect(await driver.probeDevFolder('/abs', 'image:tag')).toEqual({ ok: false, reason: 'unknown' });
+	});
+
+	describe('symlinks (Docker reports a symlink component as such, with a container-scoped linkTarget; Podman follows it itself)', () => {
+		it('follows a symlink whose target the daemon reports under the probe mount, then keeps walking the remaining components', async () => {
+			const stub = stubDockerForProbe({
+				'/probe/home': { mode: GO_DIR },
+				'/probe/home/link': { mode: GO_SYMLINK, linkTarget: '/probe/data/real' },
+				'/probe/data': { mode: GO_DIR },
+				'/probe/data/real': { mode: GO_DIR },
+				'/probe/data/real/sub': { mode: GO_DIR },
+			});
+			const driver = new DockerDriver(stub.docker);
+			driver.available = true;
+
+			expect(await driver.probeDevFolder('/home/link/sub', 'image:tag')).toEqual({ ok: true });
+			expect(stub.statedPaths()).toEqual([
+				'/probe/home',
+				'/probe/home/link',
+				'/probe/data',
+				'/probe/data/real',
+				'/probe/data/real/sub',
+			]);
+		});
+
+		it('treats a linkTarget that escaped the probe mount (a host-absolute target, reported verbatim) as a host path and re-stats it under the mount', async () => {
+			const stub = stubDockerForProbe({
+				'/probe/home': { mode: GO_DIR },
+				'/probe/home/link': { mode: GO_SYMLINK, linkTarget: '/data/real' },
+				'/probe/data': { mode: GO_DIR },
+				'/probe/data/real': { mode: GO_DIR },
+			});
+			const driver = new DockerDriver(stub.docker);
+			driver.available = true;
+
+			expect(await driver.probeDevFolder('/home/link', 'image:tag')).toEqual({ ok: true });
+			expect(stub.statedPaths()).toEqual(['/probe/home', '/probe/home/link', '/probe/data', '/probe/data/real']);
+		});
+
+		it('a symlink to a regular file is not-a-directory; a dangling symlink is not-found', async () => {
+			const toFile = stubDockerForProbe({
+				'/probe/link': { mode: GO_SYMLINK, linkTarget: '/probe/file.txt' },
+				'/probe/file.txt': { mode: GO_FILE },
+			});
+			const toFileDriver = new DockerDriver(toFile.docker);
+			toFileDriver.available = true;
+			expect(await toFileDriver.probeDevFolder('/link', 'image:tag')).toEqual({
+				ok: false,
+				reason: 'not-a-directory',
+			});
+
+			const dangling = stubDockerForProbe({ '/probe/link': { mode: GO_SYMLINK, linkTarget: '/probe/nowhere' } });
+			const danglingDriver = new DockerDriver(dangling.docker);
+			danglingDriver.available = true;
+			expect(await danglingDriver.probeDevFolder('/link', 'image:tag')).toEqual({
+				ok: false,
+				reason: 'not-found',
+			});
+		});
+
+		it('gives up on a symlink loop as unknown after a bounded number of hops, never spinning forever', async () => {
+			const stub = stubDockerForProbe({ '/probe/loop': { mode: GO_SYMLINK, linkTarget: '/probe/loop' } });
+			const driver = new DockerDriver(stub.docker);
+			driver.available = true;
+
+			expect(await driver.probeDevFolder('/loop', 'image:tag')).toEqual({ ok: false, reason: 'unknown' });
+			expect(stub.infoArchive.mock.calls.length).toBeLessThanOrEqual(20);
+			expect(stub.remove).toHaveBeenCalledTimes(1);
+		});
+
+		it('a symlink reported with an empty linkTarget is unknown - never followed to /', async () => {
+			const stub = stubDockerForProbe({ '/probe/link': { mode: GO_SYMLINK, linkTarget: '' } });
+			const driver = new DockerDriver(stub.docker);
+			driver.available = true;
+
+			expect(await driver.probeDevFolder('/link', 'image:tag')).toEqual({ ok: false, reason: 'unknown' });
+		});
+	});
+});
+
+/** Lets a `startRun` test with a `devMount` get past the run-start dev-folder re-check
+ * (`assertDevFolderStillPresent`) when that check is not what the test is about. */
+function allowDevMountRecheck(driver: DockerDriver): void {
+	vi.spyOn(driver, 'ensureProbeImage').mockResolvedValue('probe:image');
+	vi.spyOn(driver, 'probeDevFolder').mockResolvedValue({ ok: true });
+}
+
+describe('DockerDriver.startRun - run-start dev-folder re-check (actor-driver.md: "If the registered folder has since been deleted ... the run must fail visibly - never silently mount an empty directory")', () => {
+	const devMountRun = {
+		runId: 'run-recheck',
+		imageId: 'fake-image',
+		env: {},
+		memoryMbytes: 128,
+		timeoutSecs: 60,
+		devMount: { localDevFolder: '/host/src', imageWorkingDirectory: '/usr/src/app' },
+	};
+
+	it('re-probes the registered folder with the same probe registration used, before creating any container', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const ensureProbeImage = vi.spyOn(driver, 'ensureProbeImage').mockResolvedValue('probe:image');
+		const probeDevFolder = vi.spyOn(driver, 'probeDevFolder').mockResolvedValue({ ok: true });
+
+		const outcomePromise = driver.startRun(devMountRun, () => {});
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(ensureProbeImage).toHaveBeenCalledTimes(1);
+		expect(probeDevFolder).toHaveBeenCalledWith('/host/src', 'probe:image');
+		expect(probeDevFolder.mock.invocationCallOrder[0]).toBeLessThan(
+			stub.createContainer.mock.invocationCallOrder[0]!,
+		);
+
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+	});
+
+	it('fails the run before any container exists when the folder is gone, naming the folder, the reason, and how to clear the registration', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		vi.spyOn(driver, 'ensureProbeImage').mockResolvedValue('probe:image');
+		vi.spyOn(driver, 'probeDevFolder').mockResolvedValue({ ok: false, reason: 'not-found' });
+
+		await expect(driver.startRun(devMountRun, () => {})).rejects.toThrow(
+			/registered local dev folder \/host\/src no longer exists on the host.*run was not started.*\/actor-runtime\/dev-folder\//,
+		);
+		expect(stub.createContainer).not.toHaveBeenCalled();
+	});
+
+	it('fails the same way for a folder that became a file, and for one the daemon could not verify at all - never starting against whatever the daemon would mount instead', async () => {
+		for (const [reason, phrase] of [
+			['not-a-directory', 'is no longer a directory'],
+			['unreachable', 'could not be verified on the host (unreachable)'],
+			['unknown', 'could not be verified on the host (unknown)'],
+		] as const) {
+			const stub = stubDockerForRun();
+			const driver = new DockerDriver(stub.docker);
+			driver.available = true;
+			vi.spyOn(driver, 'ensureProbeImage').mockResolvedValue('probe:image');
+			vi.spyOn(driver, 'probeDevFolder').mockResolvedValue({ ok: false, reason });
+
+			await expect(driver.startRun(devMountRun, () => {})).rejects.toThrow(phrase);
+			expect(stub.createContainer).not.toHaveBeenCalled();
+		}
+	});
+
+	it('does not touch the probe at all for a run with no devMount', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const ensureProbeImage = vi.spyOn(driver, 'ensureProbeImage');
+		const probeDevFolder = vi.spyOn(driver, 'probeDevFolder');
+
+		const outcomePromise = driver.startRun({ ...devMountRun, devMount: undefined }, () => {});
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		expect(ensureProbeImage).not.toHaveBeenCalled();
+		expect(probeDevFolder).not.toHaveBeenCalled();
 	});
 });
 
