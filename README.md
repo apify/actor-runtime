@@ -61,9 +61,34 @@ sudo podman run --rm -p 3333:3333 -p 3000:3000 \
 ```
 
 Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
-(`systemctl --user enable --now podman.socket`), so mount that path; every Actor container then runs
-rootless too. Instead of mounting at `/var/run/docker.sock` you can mount the socket anywhere and pass
-`-e DOCKER_HOST=unix:///that/path` - the runtime's Docker client honours `DOCKER_HOST`.
+(`systemctl --user enable --now podman.socket`), so mount that path (and drop the `sudo`); every Actor
+container then runs rootless too. Rootless Docker (`dockerd-rootless-setuptool.sh install`) works the
+same way with its `$XDG_RUNTIME_DIR/docker.sock`. Instead of mounting at `/var/run/docker.sock` you can
+mount the socket anywhere and pass `-e DOCKER_HOST=unix:///that/path` - the runtime's Docker client
+honours `DOCKER_HOST`.
+
+```bash
+podman run --rm -p 3333:3333 -p 3000:3000 \
+  -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
+  -v "$(pwd)/data:/data" \
+  actor-runtime
+```
+
+Rootless engines have two things to know about on top of the notes below:
+
+- **Under rootless Podman the runtime container cannot join the `apify-local` network** (it runs in
+  Podman's slirp4netns/pasta network mode, which cannot attach to a second network), so the `apify-api`
+  DNS alias Actors normally use does not resolve to it. The runtime detects this at startup, logs a
+  warning, and instead points every Actor container's `apify-api` at the host (`host-gateway`), where
+  the runtime's own published port 3333 answers - so keep `-p 3333:3333` published on all interfaces,
+  not bound to `127.0.0.1`. If you would rather keep the direct route, pre-create the network and start
+  the runtime on it: `podman network create apify-local` once, then add `--network apify-local` to the
+  `podman run` above. Rootless Docker is not affected: its containers sit on a bridge and the attach
+  works.
+- **Paths must be readable by the rootless user.** Actor containers, the dev-folder bind mount, and the
+  registration probe all run as that user, so a dev folder it cannot read is reported as "could not
+  verify" at registration (never as missing) and would be unreadable inside the container anyway.
+  Per-run memory/CPU limits are also silently unavailable to a rootless engine on a cgroups v1 host.
 
 Things worth knowing:
 
@@ -78,8 +103,6 @@ Things worth knowing:
   the socket and hands it to the service.
 - `podman images` lists the images the runtime builds as `docker.io/actor-runtime/<actor>:<buildId>` -
   Podman's Docker-compatible short-name normalisation, cosmetic only.
-- Rootless Podman on a cgroups v1 host ignores the per-run memory/CPU limits (with a warning in its
-  own log); cgroups v2 with delegation applies them like Docker does.
 - Podman's Docker-compatible API silently creates a missing bind-mount source directory instead of
   rejecting it. The runtime works around this for dev folders (it validates the path itself, both at
   registration and again at every run start), so a deleted dev folder still fails the run visibly

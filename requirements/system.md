@@ -52,8 +52,11 @@
   feature in `actor-driver.md` must behave identically on both engines; where the two engines' APIs
   genuinely differ (Podman auto-creates a missing bind-mount source that Docker rejects; Podman's
   container stats report `system_cpu_usage` on a different scale), the runtime must not depend on the
-  engine-specific behaviour. Verified against Docker Engine and rootful Podman 4.9 on Linux; rootless
-  Podman and `podman machine` are best-effort.
+  engine-specific behaviour. Rootless engines (rootless Podman, rootless Docker) are supported the same
+  way, with the runtime's own container mounting the rootless socket; the one rootless-specific
+  accommodation is `actor-driver.md`'s host-gateway fallback for reaching the API when the runtime
+  container cannot join the `apify-local` network. Verified against Docker Engine (rootful and
+  rootless) and Podman 4.9 (rootful and rootless) on Linux; `podman machine` is best-effort.
 
     ```bash
     sudo systemctl enable --now podman.socket

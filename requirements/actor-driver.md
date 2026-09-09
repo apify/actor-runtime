@@ -137,6 +137,13 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - On startup, the runtime ensures a Docker network `apify-local` exists and joins it under the fixed
   DNS alias `apify-api`. Every Actor container is started on that network, so it can reach the
   runtime's API at `http://apify-api:3333` regardless of the host's own networking.
+- When the runtime cannot join that network itself - it is not running in a container at all, or the
+  engine refuses the attach (rootless Podman runs the runtime container under slirp4netns/pasta, where
+  joining a second network is unsupported) - it must still make `http://apify-api:3333` reachable from
+  every Actor container: it logs a warning naming the cause and the `--network apify-local` alternative,
+  and gives each Actor container an `apify-api -> host-gateway` extra host, so the alias lands on the
+  runtime's port 3333 as published on the host (`system.md`'s mandatory `-p 3333:3333`). The extra host
+  is never added when the alias resolves through the network, since a hosts-file entry would override it.
 
 # Actor run
 

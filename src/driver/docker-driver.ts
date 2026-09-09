@@ -37,7 +37,7 @@ import * as path from 'node:path';
 import Docker from 'dockerode';
 import * as tar from 'tar-stream';
 
-import { CONTAINER_API_ALIAS, debugpyPayloadTarPath, debugpyVersionFilePath } from '../config.js';
+import { API_PORT, CONTAINER_API_ALIAS, debugpyPayloadTarPath, debugpyVersionFilePath } from '../config.js';
 import { CPU_PERIOD_US, cpuQuotaFor, dedicatedCpusFor } from '../resources.js';
 import { normalizeEntryName } from './tar-entry-name.js';
 import type { SourceFile } from '../storage/entities.js';
@@ -383,6 +383,13 @@ export class DockerDriver implements Driver {
 	private probeImageBuild: Promise<string> | undefined;
 	/** Python debug payload tar + debugpy version, read from disk at most once and cached. */
 	private debugPayload: { tar: Buffer; debugpyVersion: string } | undefined;
+	/** True once this process's own container is confirmed on the `apify-local` network under the
+	 * `apify-api` alias (`selfAttachToNetwork`), so Actor containers on that network resolve the alias
+	 * through the engine's DNS. False - the fallback `startRun` compensates for with an `ExtraHosts`
+	 * entry - whenever that could not be arranged: this process is not in a container at all (`pnpm dev`),
+	 * or the engine refused the attach (rootless Podman runs the runtime container under
+	 * slirp4netns/pasta, where joining a second network is unsupported). */
+	private apiReachableByAlias = false;
 
 	available = false;
 	unavailableReason: string | undefined;
@@ -470,9 +477,17 @@ export class DockerDriver implements Driver {
 	private async selfAttachToNetwork(): Promise<void> {
 		// Docker sets the container hostname to its own short id by default; this is a best-effort
 		// self-identification that only matters when this process itself runs inside a container
-		// (the shipped runtime image) - a bare `node dist/index.js` on the host skips it harmlessly.
+		// (the shipped runtime image) - a bare `node dist/index.js` on the host has nothing to attach.
 		const selfId = process.env.HOSTNAME;
-		if (!selfId) return;
+		if (!selfId) {
+			this.apiReachableByAlias = false;
+			console.warn(
+				`Not running inside a container (no HOSTNAME): Actor containers will reach this API through ` +
+					`the host's port ${API_PORT} (${CONTAINER_API_ALIAS} -> host-gateway) instead of the ${NETWORK_NAME} ` +
+					`network alias.`,
+			);
+			return;
+		}
 
 		const network = this.docker.getNetwork(NETWORK_NAME);
 		const info = await network.inspect().catch(() => undefined);
@@ -480,17 +495,27 @@ export class DockerDriver implements Driver {
 		// short (12-char) one - a prefix match is what "already attached" actually means here. Without it
 		// every restart of the runtime container re-attempted the connect and logged the daemon's
 		// "already connected" rejection as a warning.
-		if (Object.keys(info?.Containers ?? {}).some((id) => id.startsWith(selfId))) return; // already attached
+		if (Object.keys(info?.Containers ?? {}).some((id) => id.startsWith(selfId))) {
+			this.apiReachableByAlias = true;
+			return;
+		}
 
-		await network
-			.connect({ Container: selfId, EndpointConfig: { Aliases: [CONTAINER_API_ALIAS] } })
-			.catch((error: Error) => {
-				// Not fatal: most likely we are not actually running inside a container right now
-				// (local dev). Actor containers still get the network; only the alias resolution from
-				// inside those containers back to us would be affected.
-
-				console.warn(`Could not self-attach to the ${NETWORK_NAME} network: ${error.message}`);
-			});
+		try {
+			await network.connect({ Container: selfId, EndpointConfig: { Aliases: [CONTAINER_API_ALIAS] } });
+			this.apiReachableByAlias = true;
+		} catch (error) {
+			// Not fatal: `startRun` falls back to routing Actor containers to this API through the host's
+			// published port (`ExtraHosts: apify-api -> host-gateway`). The usual cause is rootless Podman,
+			// whose default slirp4netns/pasta network mode cannot join a second network at runtime.
+			this.apiReachableByAlias = false;
+			console.warn(
+				`Could not attach the runtime's own container to the ${NETWORK_NAME} network: ${(error as Error).message}. ` +
+					`Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
+					`(${CONTAINER_API_ALIAS} -> host-gateway), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
+					`To use the network alias anyway, pre-create the network (\`podman network create ${NETWORK_NAME}\`) ` +
+					`and start the runtime container with \`--network ${NETWORK_NAME}\`.`,
+			);
+		}
 	}
 
 	async startBuild(ctx: BuildContext, onLog: (chunk: string) => void): Promise<BuildOutcome> {
@@ -671,6 +696,12 @@ export class DockerDriver implements Driver {
 			...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 			HostConfig: {
 				NetworkMode: NETWORK_NAME,
+				// Only when the alias cannot resolve through the network's own DNS (`apiReachableByAlias`'s
+				// doc comment): `host-gateway` is the engine's own keyword for the host's address as seen from
+				// the container, on Docker and Podman alike, so the alias then lands on the host's published
+				// API port. Never added when the alias works - a hosts-file entry would override the DNS
+				// alias and force every Actor through the host even when the direct route exists.
+				...(this.apiReachableByAlias ? {} : { ExtraHosts: [`${CONTAINER_API_ALIAS}:host-gateway`] }),
 				Memory: ctx.memoryMbytes * 1024 * 1024,
 				// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 				// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
