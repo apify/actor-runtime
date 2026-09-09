@@ -45,8 +45,12 @@ the single local user, with no error either way - see `requirements/cli.md`'s Us
 The runtime never shells out to a `docker` binary - everything goes through the Docker Engine API on
 the socket mounted at `/var/run/docker.sock`, and Podman serves that same API (`podman system service`
 / the `podman.socket` systemd unit). So the only change is which socket you mount. Verified end to end
-against rootful Podman 4.9 on Linux (push/build/call for the Node and Python samples, dev-folder bind
-mounts, debug mode, migrations); rootless Podman and `podman machine` are best-effort.
+on Linux with Podman 4.9 both rootful and rootless, and with Docker both rootful and rootless (the full
+e2e suite: push/build/call for the Node and Python samples, dev-folder bind mounts, debug mode; plus
+migrations and build abort by hand). `podman machine` is best-effort. One observation from the rootless
+Podman runs: external DNS from Actor containers (`aardvark-dns` on the rootless bridge network) failed
+intermittently in one run and worked in the next, so a crawl that fails with `EAI_AGAIN` under rootless
+Podman is worth simply retrying before suspecting the Actor.
 
 ```bash
 # one-time: have Podman serve its Docker-compatible API socket
