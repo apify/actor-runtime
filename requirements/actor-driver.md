@@ -137,6 +137,9 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   MIT-SHM needs a shared-memory segment the X server can attach, which is impossible across container IPC
   namespaces - the Actor's and the sidecar's are separate and stay separate (the Actor container's IPC
   mode is never changed for this feature).
+- **The mirror never exchanges clipboard or selection data with the display** (x11vnc's `-nosel`), in
+  either mode and either direction: it never asks the browser for a selection it owns, and a viewer's
+  clipboard is never pushed into the display. An interactive mirror delivers mouse and keyboard input only.
 - **The mirror is a passive observer of the display, never of the browser.** It is implemented as a separate
   **sidecar container** per run - the runtime's own bundled x11vnc image, started on `apify-local` before the
   run's own container is created - that shares exactly one thing with the Actor's container: a tmpfs volume

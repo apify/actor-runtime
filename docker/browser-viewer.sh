@@ -47,11 +47,14 @@ while :; do
 	# -noshm: x11vnc's default framebuffer grab is MIT-SHM, which needs a shared-memory segment the X server
 	# can attach - impossible from a different container (own IPC namespace; the X server fails the attach
 	# with BadAccess and x11vnc exits). Plain XGetImage over the socket works across containers.
+	# -nosel/-nobell: no clipboard/selection exchange in either direction and no XBell watch - polling a
+	# selection the browser owns would make the browser answer a ConvertSelection request, and a viewer's
+	# clipboard would otherwise be pushed into the display; with these the browser is never asked anything.
 	# -forever/-shared: stays up across viewer connect/disconnect, any number of viewers. -nopw: the port is
 	# only reachable on the runtime's private Docker network. -noxrecord/-nowf/-noscr: skip x11vnc's own
 	# scroll/wireframe heuristics, which are the only parts of it that go beyond plainly reading pixels.
 	# shellcheck disable=SC2086 # INPUT_FLAG is intentionally word-split (empty or one flag).
-	x11vnc -display "$display" -rfbport "$PORT" -noshm -shared -forever -nopw -noipv6 -q \
+	x11vnc -display "$display" -rfbport "$PORT" -noshm -nosel -nobell -shared -forever -nopw -noipv6 -q \
 		-noxrecord -nowf -noscr $INPUT_FLAG
 	log "x11vnc exited - the display is gone (Actor container stopped or restarting); waiting for a display again"
 	sleep 1

@@ -194,8 +194,11 @@ export function browserViewPage(
 	const mode = run.localBrowserView.interactive ? 'interactive' : 'view-only';
 	return (
 		`<p>Live mirror of the X display of run <a href="/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.id)}</a> ` +
-		`(${mode}). Nothing here reaches the Actor or its browser${run.localBrowserView.interactive ? ' except the input you send' : ''}; ` +
-		'the picture is read off the display the browser draws on.</p>' +
+		`(${mode}). ` +
+		(run.localBrowserView.interactive
+			? 'Your mouse and keyboard input is delivered to the display. Nothing else is: no clipboard, no data to the Actor. '
+			: 'Nothing is sent to the display, the browser, or the Actor: no input, no clipboard. ') +
+		'The picture is read from the display the browser draws on.</p>' +
 		'<p id="browser-view-status" class="empty">Connecting…</p>' +
 		'<div id="browser-view-screen" class="browser-view-screen"></div>' +
 		`<script type="module">
