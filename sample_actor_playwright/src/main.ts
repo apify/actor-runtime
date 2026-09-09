@@ -1,9 +1,5 @@
-/**
- * Playwright + Crawlee sample Actor for actor-runtime, based on Apify's `ts-crawlee-playwright-chrome`
- * template (https://github.com/apify/actor-templates). The one deliberate departure from the template is
- * `headless: false` below - see README.md for why, and for how to watch this browser from your own
- * browser through the runtime's browser view.
- */
+// Based on Apify's `ts-crawlee-playwright-chrome` template; the one deliberate change is `headless: false`
+// (see README.md).
 
 // For more information, see https://crawlee.dev
 import { PlaywrightCrawler } from '@crawlee/playwright';
@@ -32,8 +28,7 @@ await Actor.init();
 const { startUrls = [{ url: 'https://crawlee.dev/' }], maxRequestsPerCrawl = 3 } =
 	(await Actor.getInput<Input>()) ?? ({} as Input);
 
-// Apify Proxy is used only when the runtime handed this run a proxy password (actor-runtime's README,
-// "Apify Proxy"); a plain local run without one connects directly instead of failing the access check.
+// Without a proxy password (a plain local run) the crawler connects directly instead of failing the access check.
 const proxyConfiguration = process.env.APIFY_PROXY_PASSWORD
 	? await Actor.createProxyConfiguration({ checkAccess: true })
 	: undefined;
@@ -46,14 +41,10 @@ const crawler = new PlaywrightCrawler({
 	proxyConfiguration,
 	maxRequestsPerCrawl,
 	requestHandler: router,
-	// One page at a time keeps the dataset item count exactly equal to maxRequestsPerCrawl (with higher
-	// concurrency, pages already in flight when the limit is reached still finish and overshoot), and
-	// keeps the mirrored display showing one browser window at a time.
+	// Keeps the dataset item count exactly equal to maxRequestsPerCrawl.
 	maxConcurrency: 1,
-	// Headful, always - not only when someone is watching. The base image runs this Actor under Xvfb, so a
-	// headful Chrome works without a real display, and actor-runtime's browser view (when turned on for this
-	// Actor) mirrors that display without touching the browser: what a site sees is identical whether the
-	// mirror is on, off, or being watched. Headful Chrome is also the less fingerprintable mode.
+	// Headful always, so actor-runtime's browser view has something to show and watching changes nothing.
+	// The base image's Xvfb provides the display.
 	headless: false,
 	launchContext: {
 		launchOptions: {

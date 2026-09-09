@@ -38,21 +38,17 @@ export function debugpyVersionFilePath(): string {
 	return `${debugpyPayloadDir()}/debugpy-version.txt`;
 }
 
-/** Where the browser-view sidecar's root filesystem lives inside the runtime's own image (`Dockerfile`'s
- * browser-viewer stages). Read fresh on every call, like `debugpyPayloadDir()`, so tests can point
- * `ACTOR_RUNTIME_BROWSER_VIEWER_PAYLOAD_DIR` at a fixture directory. */
+/** Read fresh on every call, like `debugpyPayloadDir()`, so tests can point it at a fixture directory. */
 function browserViewerPayloadDir(): string {
 	return process.env.ACTOR_RUNTIME_BROWSER_VIEWER_PAYLOAD_DIR ?? '/opt/apify-browser-viewer';
 }
 
-/** The sidecar's whole root filesystem as a plain tar - `docker-driver.ts` `docker import`s it into a
- * local image on first use, so the runtime needs no registry pull to start a mirror. */
+/** The browser-view sidecar's root filesystem, `docker import`ed on first use. */
 export function browserViewerRootfsTarPath(): string {
 	return `${browserViewerPayloadDir()}/rootfs.tar`;
 }
 
-/** A content hash of `rootfs.tar`, written at image-build time; doubles as the imported image's tag so a
- * rebuilt runtime never keeps serving a stale sidecar image. */
+/** Content hash of `rootfs.tar`, used as the imported image's tag. */
 export function browserViewerVersionFilePath(): string {
 	return `${browserViewerPayloadDir()}/version.txt`;
 }

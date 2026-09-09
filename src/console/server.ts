@@ -90,9 +90,7 @@ export interface ConsoleServerDeps {
 	driver: Driver;
 }
 
-/** The installed `@novnc/novnc` package root - its `exports` field points at `core/rfb.js`, so the root is
- * two levels up from what Node resolves. Only its `core/` and `vendor/` directories (the ES-module client
- * and the `pako` zlib port it imports) are served, under `/vendor/novnc/`. */
+/** `@novnc/novnc`'s `exports` points at `core/rfb.js`; the package root is two levels up from it. */
 const NOVNC_ROOT = dirname(dirname(createRequire(import.meta.url).resolve('@novnc/novnc')));
 
 /** The dev-folder registration form + its one read-only status row, rendered on the Actor detail view
@@ -126,8 +124,6 @@ function debugModeSection(actorId: string, localDebug: ActorRecord['localDebug']
 	);
 }
 
-/** The browser-view toggle form + status row on the Actor detail view (`console.md`'s "Browser-view
- * form"). Same shape as `debugModeSection`. */
 function browserViewSection(
 	actorId: string,
 	localBrowserView: ActorRecord['localBrowserView'],
@@ -151,8 +147,7 @@ function browserViewSection(
 export function createConsoleServer(deps: ConsoleServerDeps): Express {
 	const app = express();
 	app.disable('x-powered-by');
-	// The noVNC client the browser-view page loads (`templates.ts: browserViewPage`) - plain static files
-	// straight from the installed package, no bundling (`console.md`: no build step).
+	// The noVNC client for the browser-view page, served straight from the installed package.
 	app.use('/vendor/novnc/core', express.static(join(NOVNC_ROOT, 'core')));
 	app.use('/vendor/novnc/vendor', express.static(join(NOVNC_ROOT, 'vendor')));
 	// The dev-folder form, the debug-mode form, the run detail view's Migrate button, and the `/settings`
@@ -216,8 +211,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.send(layout(`Actor ${actor.name}`, body));
 	});
 
-	/** One of the console's mutations - funnels through the same `setBrowserView` the API endpoint uses,
-	 * resolving the Actor cross-user by the id in the page URL, like the debug-mode form above. */
+	/** Same `setBrowserView` as the API endpoint, cross-user like the debug-mode form above. */
 	app.post('/actors/:id/browser-view', async (req, res) => {
 		if (isCrossSiteWrite(req)) {
 			res.status(403).send('Cross-site form submissions are not allowed.');
@@ -435,8 +429,6 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		if (run.localDebug) {
 			rows.push(['debug', `${run.localDebug.language}, attach at 127.0.0.1:${run.localDebug.port}`]);
 		}
-		// Only present for a run whose browser-view sidecar started; the link stays after the run ends, and
-		// the page it leads to then says so instead of showing a picture.
 		if (run.localBrowserView) {
 			rows.push([
 				'browser view',
@@ -455,9 +447,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.send(layout(`Run ${run.id}`, body));
 	});
 
-	/** The live viewer page (`console.md`'s "Browser view page"). A run that never had a mirror, or whose run
-	 * has already ended, gets a plain explanation instead of a client that could only fail to connect. The
-	 * websocket the page opens is handled by `console/browser-view-ws.ts`, not by Express. */
+	/** The viewer page; its websocket is handled by `console/browser-view-ws.ts`, not Express. */
 	app.get('/runs/:id/browser', async (req, res) => {
 		const run = await getRunById(req.params.id);
 		if (!run) {
@@ -465,8 +455,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			return;
 		}
 		const backLink = `<p><a href="/runs/${encodeURIComponent(run.id)}">Back to the run</a></p>`;
-		// A live run of a toggled Actor whose sidecar is still starting: render the client, which retries
-		// (and whose websocket bridge waits for the mirror address) - never a misleading "not on".
+		// Mirror still starting: render the client, which retries.
 		if (!run.localBrowserView && (await isBrowserViewPending(run))) {
 			const actor = await getActorById(run.actorId);
 			res.send(

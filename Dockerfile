@@ -29,22 +29,16 @@ import debugpy._version as v; \
 print(v.get_versions()['version'])" > /payload/debugpy-version.txt
 RUN tar -cf /payload/debugpy-payload.tar -C /payload/root .
 
-# --- Browser-view sidecar payload (`requirements/actor-driver.md`'s "Browser view" section): a complete
-# Alpine root filesystem with x11vnc plus `docker/browser-viewer.sh`, tarred so the runtime can
-# `docker import` it into a local image on first use - no registry pull, no network, at run time. NOT pinned
-# to $BUILDPLATFORM: the sidecar runs on the same daemon as the Actor containers, so its binaries must be
-# the *target* architecture's (on a multi-arch build this stage runs once per target, under QEMU).
+# --- Browser-view sidecar: an Alpine rootfs with x11vnc, tarred so the runtime can `docker import` it at
+# run time without a registry. Not pinned to $BUILDPLATFORM: it runs on the Actor containers' daemon, so it
+# must be the target architecture's.
 FROM alpine:3.21 AS browser-viewer-rootfs
 RUN apk add --no-cache x11vnc
-# The Actor container's own copy of this directory has the same mode (the Apify browser base images
-# pre-create it as 1777); the shared volume the runtime creates over both matches it too.
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 COPY docker/browser-viewer.sh /apify-browser-viewer.sh
 RUN chmod 755 /apify-browser-viewer.sh
 
-# Packs the stage above into a plain filesystem tar (the `docker import` input format) and records its
-# content hash - the tag the runtime imports it under (`config.ts: browserViewerVersionFilePath`).
-# Runs natively: it only tars files already built for the target above.
+# Tars the stage above and records its content hash, which the runtime uses as the imported image's tag.
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS browser-viewer-payload
 COPY --from=browser-viewer-rootfs / /rootfs
 RUN mkdir -p /payload \

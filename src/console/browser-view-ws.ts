@@ -1,14 +1,7 @@
 /**
- * The browser-view websocket bridge: `GET /runs/:runId/browser/ws`, upgraded on the console server
- * directly (Express does not handle `upgrade`), the way `api/events-ws.ts` does on the API server. It
- * bridges the noVNC client on the console's viewer page (`console.md`'s "Browser view page") to the run's
- * x11vnc sidecar over the `apify-local` network - the runtime itself plays websockify, so the sidecar
- * needs no websocket server and no port is ever published on the host (`system.md`).
- *
- * Unauthenticated like the rest of the console; the path's run id is the only thing it scopes on, and a
- * connection only ever reaches that run's own sidecar. A run without a mirror (toggle off, or the sidecar
- * failed) or an already-ended run gets a completed upgrade followed by a `1008` close with a reason, so the
- * viewer page can show why.
+ * `GET /runs/:runId/browser/ws`: bridges the viewer page's noVNC client to the run's sidecar VNC server over
+ * `apify-local` (the runtime plays websockify). Upgraded on the console server directly, like
+ * `api/events-ws.ts` on the API server. Unauthenticated like the rest of the console.
  */
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -20,18 +13,14 @@ import { getActorById } from '../services/actors.js';
 import { isTerminalJobStatus } from '../services/job-status.js';
 import type { RunRecord } from '../storage/entities.js';
 
-// A trailing slash is a different path, not a second spelling of this one.
 const BROWSER_VIEW_WS_PATH_PATTERN = /^\/runs\/([^/]+)\/browser\/ws$/;
 
-/** The sidecar only starts x11vnc once the Actor's X server has created its socket, which can be a while
- * after the run starts (image pull, Node startup, Xvfb start). A viewer that connects earlier gets its
- * TCP dial to the sidecar retried within this budget rather than an immediate failure. */
+/** The sidecar's VNC server only listens once the Actor's X display exists; dial retries cover the gap. */
 const VNC_CONNECT_TIMEOUT_MS = 120_000;
 const VNC_CONNECT_RETRY_MS = 500;
 
 export interface BrowserViewWebSocketServer {
-	/** Same contract as `EventsWebSocketServer.close()`: terminates every open connection so
-	 * `closeServer(consoleServer)` cannot hang on one. */
+	/** Same contract as `EventsWebSocketServer.close()`. */
 	close(): void;
 }
 
@@ -50,8 +39,7 @@ function dialOnce(host: string, port: number): Promise<Socket> {
 	});
 }
 
-/** Dials the sidecar until it answers, `isCancelled()` says stop, or the budget runs out (resolves
- * `undefined` in the latter two cases - never rejects). */
+/** Resolves `undefined` when cancelled or out of budget; never rejects. */
 async function dialWithRetry(host: string, port: number, isCancelled: () => boolean): Promise<Socket | undefined> {
 	const deadline = Date.now() + VNC_CONNECT_TIMEOUT_MS;
 	for (;;) {
@@ -73,12 +61,8 @@ function toBuffer(data: RawData): Buffer {
 
 type MirroredRun = RunRecord & { localBrowserView: NonNullable<RunRecord['localBrowserView']> };
 
-/**
- * The run's mirror address, or a `1008` reason. A run whose Actor has the toggle on gets its
- * `localBrowserView` only once its sidecar is up - a second or two after `apify call` returns the run id
- * (`services/runs.ts`) - so a viewer opened straight from the run id must wait for it rather than be
- * told the mirror is off (`console.md`'s "Browser view page": `isBrowserViewPending`).
- */
+/** The run's mirror address, or a `1008` reason. Waits while the mirror is still starting (see
+ * `isBrowserViewPending`). */
 async function awaitMirroredRun(runId: string, isCancelled: () => boolean): Promise<MirroredRun | string> {
 	const deadline = Date.now() + VNC_CONNECT_TIMEOUT_MS;
 	for (;;) {
@@ -95,9 +79,8 @@ async function awaitMirroredRun(runId: string, isCancelled: () => boolean): Prom
 	}
 }
 
-/** True for a live run that has no mirror address *yet* but whose Actor has the toggle on - its sidecar
- * is still starting (`services/runs.ts` writes `localBrowserView` once it is up). Shared with the console's
- * viewer page so both surfaces treat that window the same way. */
+/** A live run with the toggle on but no mirror address yet: `services/runs.ts` writes it once the sidecar
+ * is up, a moment after the run id exists. */
 export async function isBrowserViewPending(run: RunRecord): Promise<boolean> {
 	if (run.localBrowserView || isTerminalJobStatus(run.status)) return false;
 	const actor = await getActorById(run.actorId);
@@ -105,7 +88,7 @@ export async function isBrowserViewPending(run: RunRecord): Promise<boolean> {
 }
 
 async function handleConnection(ws: WebSocket, runId: string): Promise<void> {
-	// Must come first: an `'error'` with no listener crashes the process (see `api/events-ws.ts`).
+	// An `'error'` with no listener crashes the process.
 	ws.on('error', () => undefined);
 
 	let closed = false;
@@ -129,7 +112,6 @@ async function handleConnection(ws: WebSocket, runId: string): Promise<void> {
 		return;
 	}
 
-	// Plain byte pump in both directions - RFB frames are opaque to the bridge.
 	ws.on('message', (data) => {
 		if (!socket.destroyed) socket.write(toBuffer(data));
 	});
@@ -137,7 +119,7 @@ async function handleConnection(ws: WebSocket, runId: string): Promise<void> {
 		if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
 	});
 	socket.on('error', () => undefined);
-	// The sidecar is removed when the run ends (`services/runs.ts`), which is what ends the TCP side.
+	// The run ending removes the sidecar, which closes the TCP side.
 	socket.once('close', () => {
 		if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) {
 			ws.close(1000, `The display mirror of run ${runId} has gone away`);
@@ -146,7 +128,6 @@ async function handleConnection(ws: WebSocket, runId: string): Promise<void> {
 	ws.once('close', () => socket.destroy());
 }
 
-/** Registers the upgrade handler on the console server and returns a handle shutdown can close. */
 export function attachBrowserViewWebSocket(server: Server): BrowserViewWebSocketServer {
 	const wss = new WebSocketServer({ noServer: true });
 
@@ -154,7 +135,6 @@ export function attachBrowserViewWebSocket(server: Server): BrowserViewWebSocket
 		const pathname = req.url ? new URL(req.url, 'http://localhost').pathname : undefined;
 		const runId = pathname ? extractBrowserViewRunId(pathname) : undefined;
 		if (!runId) {
-			// Not this endpoint's path, and this is the console server's only 'upgrade' listener.
 			socket.destroy();
 			return;
 		}

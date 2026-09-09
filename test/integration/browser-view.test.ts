@@ -312,7 +312,7 @@ describe('run lifecycle with browser view (services/runs.ts, through the real st
 
 		const log = await server.client.run(run.id).log().get();
 		expect(log).toContain(
-			`Browser view: this run's X display is mirrored live at http://localhost:3000/runs/${run.id}/browser`,
+			`Browser view: live mirror of this run's display at http://localhost:3000/runs/${run.id}/browser`,
 		);
 		expect(log).toContain('interactive');
 

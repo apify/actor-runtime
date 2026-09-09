@@ -45,16 +45,11 @@ Local Actor runtime is an Actor development tool for developing, running, and de
   `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'` to go back to running
   normally.
 - To watch the browser of a Playwright/Puppeteer Actor while it runs, turn browser view on for it once:
-  `apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'` (add
-  `"interactive": true` to also send mouse/keyboard input). Every subsequent `apify call` then prints a viewer
-  URL in its log, `http://localhost:3000/runs/<runId>/browser` - a live mirror of the X display the Actor's
-  browser draws on, served by the console. The Actor's container is unchanged apart from sharing its
-  `/tmp/.X11-unix` socket directory with a runtime-owned x11vnc sidecar, so nothing about the browser differs
-  whether the mirror is on, off, or watched. The browser must run headful to show anything (Crawlee:
-  `headless: false` / Python `headless=False` - the Apify templates default to headless, which shows as a black
-  mirror) and the image must provide an Xvfb display, which the `apify/actor-node-playwright-chrome` and
-  `apify/actor-python-playwright` base images do; see `sample_actor_playwright` (TypeScript) and
-  `sample_actor_playwright_py` (Python). Clear the toggle with `--body '{"enabled": false}'`.
+  `apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'` (`"interactive": true` also
+  sends mouse/keyboard input). Every subsequent run prints a viewer URL in its log,
+  `http://localhost:3000/runs/<runId>/browser` - a live view of the display the Actor's browser draws on. The
+  browser must run headful to show anything (Apify's templates default to headless, which shows as a black
+  display); see `sample_actor_playwright` and `sample_actor_playwright_py`. Clear with `--body '{"enabled": false}'`.
 - To test how an Actor handles platform migrations: while a run is `RUNNING`, call
   `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
   detail page. The run gets the platform migration experience: a `migrating` event, its container

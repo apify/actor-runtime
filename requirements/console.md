@@ -40,11 +40,8 @@
 - A run whose debug plan resolved (`actor-driver.md`'s "Debug mode" section) gets one extra row on its
   detail view: `debug` - `<language>, attach at 127.0.0.1:<port>`. Absent entirely for a non-debug run.
   This field is local-only and never appears in the emulated `/v2` run object (`api.md`).
-- A run whose browser-view sidecar started (`actor-driver.md`'s "Browser view" section) gets one extra
-  row on its detail view: `browser view` - a link to the run's viewer page (below), labelled view-only or
-  interactive. Absent entirely for a run without a mirror. The row stays after the run ends; the page it
-  leads to then says the mirror is gone. This field is local-only and never appears in the emulated `/v2`
-  run object (`api.md`).
+- A run with browser view (`actor-driver.md`) gets one extra row on its detail view: `browser view` - a
+  link to its viewer page (below). Absent for other runs; never in the emulated `/v2` run object.
 - Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself.
 - The console accepts the real Apify Console's URL shapes (as printed by stock apify-cli, e.g. `/actors/:actorId/runs/:runId`, `/storage/datasets/:id`) via redirects to its own pages.
 
@@ -73,34 +70,14 @@
 
 ## Browser-view form (Actor detail view)
 
-- The Actor detail view shows the Actor's browser-view toggle status - `(browser view is off)`, or `on,
-view-only` / `on, interactive` - the same status the API endpoint reports (`api.md`).
-- A form on the same view exposes the same two fields the API body accepts - `enabled` and `interactive`,
-  both checkboxes. Submitting always sends both together: an unchecked `enabled` clears the toggle
-  regardless of `interactive`.
-- For any given input, the form and the API endpoint produce the same outcome; a rejected submission
-  redirects back with the classified error shown inline.
+- The Actor detail view shows the browser-view toggle status and a form with the API body's two fields,
+  `enabled` and `interactive`, as checkboxes. For any input, the form and the API produce the same outcome.
 
 ## Browser view page (`/runs/:runId/browser`)
 
-- The console serves each mirrored run's live view itself, at `/runs/:runId/browser` on the console's own
-  fixed port: a page embedding the noVNC client (served from the runtime's own installed copy under
-  `/vendor/novnc/`, no build step) connected to `/runs/:runId/browser/ws` on the same port - a websocket the
-  console bridges byte-for-byte to the run's sidecar RFB server over `apify-local` (`actor-driver.md`).
-  Nothing is published on the host for this beyond the console's port (`system.md`).
-- The page is view-only or interactive according to the mirror the run started with, and says which. The
-  client reconnects on its own while the run is still starting (the Actor's display may come up seconds
-  after the run does; the bridge keeps re-dialing the sidecar for up to two minutes per connection).
-- A live run of an Actor with the toggle on whose mirror address is not recorded yet (its sidecar is still
-  starting - the first second or two after `apify call` returns the run id) is treated as "starting", on
-  both surfaces: the page renders the client, and the websocket waits for the address to appear (within
-  the same two-minute budget) before dialing, never reporting the mirror as off.
-- A run that never had a mirror gets a `404` page saying so; a run that has ended gets a page saying the
-  mirror is gone, with no client. The websocket likewise completes the upgrade and closes `1008` with a
-  reason for an unknown run, a run without a mirror, or an ended run, and closes `1000` when the mirror goes
-  away mid-view (the run ended).
-- Like every other console route, this is unauthenticated: anyone who can reach the console can watch (and,
-  for an interactive mirror, drive) any run's display.
+- Shows the run's live display, view-only or interactive per the run's toggle, and says which. It reconnects
+  on its own while the run's browser is still starting.
+- For a run that has ended, or never had browser view, the page says so instead.
 
 ## Migrate button (run detail view)
 

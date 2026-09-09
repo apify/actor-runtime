@@ -1,6 +1,4 @@
-# The Apify Playwright + Chrome base image. It ships Chrome, Playwright, Xvfb, and an ENTRYPOINT
-# (`xvfb-entrypoint.sh`) that wraps CMD in `xvfb-run`, so a *headful* browser works with no display of
-# its own - which is what lets actor-runtime's browser view mirror it (see README.md).
+# Ships Chrome, Playwright, and an Xvfb entrypoint, so a headful browser works with no display of its own.
 # You can read more about the available images at https://crawlee.dev/docs/guides/docker-images
 FROM apify/actor-node-playwright-chrome:24-1.61.1 AS builder
 
@@ -56,5 +54,5 @@ COPY --from=builder --chown=myuser:myuser /home/myuser/dist ./dist
 # for most source file changes.
 COPY --chown=myuser:myuser . ./
 
-# Run the image. `node` directly (not `npm start`), so actor-runtime's debug mode can attach too.
+# Run the image. `node` directly (not `npm start`), so actor-runtime's debug mode can attach.
 CMD ["node", "dist/main.js"]

@@ -30,7 +30,7 @@ export interface ShutdownDeps {
 	consoleServer: Server;
 	/** Must be closed before `closeServer(apiServer)` is awaited - see `EventsWebSocketServer.close()`. */
 	eventsWebSocketServer?: { close(): void };
-	/** Same, for the console server: the browser-view bridge's connections (`console/browser-view-ws.ts`). */
+	/** Same, for the console server. */
 	browserViewWebSocketServer?: { close(): void };
 }
 

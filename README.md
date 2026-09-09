@@ -114,50 +114,26 @@ three-field form (`enabled`/`language`/`port`) on the Actor's page in the consol
 `requirements/actor-driver.md`'s "Debug mode" section; endpoint/console details: `requirements/api.md`'s
 `/actor-runtime/*` section and `requirements/console.md`.
 
-## Watching an Actor's browser (Playwright, Puppeteer, ...)
+## Watching an Actor's browser
 
-`sample_actor_playwright` is a `PlaywrightCrawler` Actor built from Apify's `ts-crawlee-playwright-chrome`
-template, and `sample_actor_playwright_py` is its Crawlee for Python twin (from `python-crawlee-playwright`;
-same workflow, input keys `start_urls`/`max_requests_per_crawl`). Turn **browser view** on for an Actor once,
-and every `apify call` against it gets a live,
-view-only mirror of the X display its browser draws on, served by the console - no change to the Actor's
-source, Dockerfile, or environment:
+Turn **browser view** on for an Actor once, and every run of it gets a live view of the display its browser draws
+on, served by the console:
 
 ```bash
-cd sample_actor_playwright
-apify push
 apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'
-apify call --input '{"maxRequestsPerCrawl": 5}'
+apify call
 ```
 
-The run's log prints the viewer URL, `http://localhost:3000/runs/<runId>/browser` - open it in your own
-browser to watch Chrome crawl. The same link is on the run's console page, and the toggle is also a form on
-the Actor's console page. Add `"interactive": true` to the body to also send your mouse and keyboard into the
-display (e.g. to click through a login while developing); clear it with `--body '{"enabled": false}'`.
+The run log prints the viewer URL (`http://localhost:3000/runs/<runId>/browser`); the run's console page links to
+it, and the Actor's console page has the same toggle as a form. `"interactive": true` also sends your mouse and
+keyboard to the display; `{"enabled": false}` turns the view off.
 
-How it works, and why a site cannot tell: the runtime starts a small **sidecar container** (its own bundled
-x11vnc image, imported into Docker on first use - no pull) that shares exactly one thing with the Actor's
-container - a tmpfs volume at `/tmp/.X11-unix`, where the Actor's own Xvfb puts its display socket. The
-sidecar waits for that socket and serves the display's framebuffer over VNC on the runtime's private Docker
-network; the console bridges that to noVNC in your browser. The Actor's container is otherwise identical to an
-ordinary run's (same image, command, env, network, no published port), nothing is injected into the browser
-or the pages, and the mirror is an ordinary X client reading pixels - so whether the mirror is on, off, or
-being watched is not observable from inside the browser. The only detectable trace of "someone watching" would
-be input you choose to send through an interactive mirror.
-
-Two things follow from that design. The runtime **never changes the browser's headless/headful mode** - a
-headless browser draws nothing, so its mirror is blank - **this is the first thing to check when the viewer
-connects but shows only black**: Apify's templates default to headless (`python-crawlee-playwright` even
-hard-codes `headless=True`; Crawlee for JS defaults to `headless: true`; the Python SDK's `Actor.config.headless`
-defaults to `True`). An Actor that wants to be watchable runs its browser headful _always_ (the samples set
-`headless: false` / `headless=False`; Crawlee for JS also honours `CRAWLEE_HEADLESS=0`), so that watching never
-becomes a behavioural difference. And the mirror needs an X display socket in
-`/tmp/.X11-unix`: the `apify/actor-node-playwright-chrome`, `actor-node-puppeteer-chrome` and
-`actor-python-playwright` base images provide one through their `xvfb-run` entrypoint (with access control
-off, which the mirror relies on); an
-image that starts its own X server needs to do the same. Like Python debug mode, this needs the runtime to
-run from its own built image (the sidecar is baked in). Full mechanics: `requirements/actor-driver.md`'s
-"Browser view" section; endpoint/console details: `requirements/api.md` and `requirements/console.md`.
+The view only reads the display's pixels. The Actor's container, command, environment, network and ports are
+those of an ordinary run, so neither the browser nor the sites it visits can tell whether anyone is watching.
+Two things follow: the browser must run **headful** (Apify's templates default to headless, which shows as a
+black display - the bundled `sample_actor_playwright` and `sample_actor_playwright_py` set `headless: false` /
+`headless=False`), and the image must provide an X display, which the Apify Playwright and Puppeteer base images
+do. Like Python debug mode, this needs the runtime to run from its own built image.
 
 ## Publishing the image
 

@@ -182,39 +182,12 @@
     - The console's own debug-mode form (`console.md`) does **not** go through this endpoint - same
       console-local, unauthenticated split as the dev-folder form - but both surfaces accept and reject
       exactly the same inputs with the same outcomes.
-- **`POST /actor-runtime/browser-view/:actorId`** - sets (or clears) the Actor's persistent browser-view
-  toggle (`actor-driver.md`'s "Browser view" section). `:actorId` accepts the same forms as the rest of the
-  API.
-    - **Authenticated** the same way as every `/v2` route, and scoped to the caller's own Actors.
-    - **No build-first precondition** - the toggle itself needs no build to exist.
-    - **Request body**: a strict JSON object with exactly these fields:
-        - `enabled` (required, boolean).
-        - `interactive` (optional, boolean; defaults to `false` - a view-only mirror. `true` also delivers
-          the viewer's mouse/keyboard input to the display).
-          Any other key present is rejected. Every accepted call fully replaces the prior state for that
-          Actor (never a partial merge). `{"enabled": false}` clears the whole toggle, whatever else the body
-          names.
-    - **Response**: on success, `{ data: { localBrowserView } }`, where `localBrowserView` is `null` when
-      browser view is off, or `{ interactive }` when on. Same doubles-as-read-back contract as the debug
-      endpoint - no separate `GET`.
-    - **Error responses**: `400` `invalid-request` for every malformed body (not a JSON object, an unknown
-      field, a missing/non-boolean `enabled`, a non-boolean `interactive`) - no state change on rejection.
-    - Worked examples:
-        ```
-        POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'
-        -> { "data": { "localBrowserView": { "interactive": false } } }
-
-        POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true, "interactive": true}'
-        -> { "data": { "localBrowserView": { "interactive": true } } }
-
-        POST /actor-runtime/browser-view/<actorId> --body '{"enabled": false}'
-        -> { "data": { "localBrowserView": null } }
-        ```
-    - The console's own browser-view form (`console.md`) does **not** go through this endpoint - same
-      console-local, unauthenticated split as the debug-mode form - but both surfaces accept and reject
-      exactly the same inputs with the same outcomes.
-    - The mirror itself is not served by this API at all: the viewer page and its websocket live on the
-      console's port (`console.md`'s "Browser view page").
+- **`POST /actor-runtime/browser-view/:actorId`** - sets or clears the Actor's browser-view toggle
+  (`actor-driver.md`'s "Browser view" section). Authenticated and owner-scoped like every `/v2` route; no
+  build-first precondition.
+    - **Body**: `{ "enabled": boolean, "interactive"?: boolean }`, `interactive` defaulting to `false`. A call
+      fully replaces the prior state; `{"enabled": false}` clears it. Any other shape is `400 invalid-request`.
+    - **Response**: `{ data: { localBrowserView: { interactive } | null } }` - the read-back; there is no `GET`.
 - **`GET /actor-runtime/events/:runId`** - a websocket upgrade, reachable at exactly this one path on
   the fixed API port (`system.md`). It carries the run's platform events: `systemInfo` once a second
   (`actor-driver.md`), a one-off `aborting`-plus-`persistState` pair under `?gracefully=` (below), and a

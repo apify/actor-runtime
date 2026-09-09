@@ -67,30 +67,20 @@ const PROBE_LABEL = 'actor-runtime.devFolderProbe';
 /** Target path for the probe container's mount - arbitrary, since the probe is never started and
  * nothing ever reads from it. */
 const PROBE_MOUNT_TARGET = '/probe';
-/** Marks a browser-view sidecar container and its shared X-socket volume (`startBrowserViewer` below) so
- * `reconcileOrphans` can sweep whatever a previous process left behind - a sidecar is per-run and
- * per-process, never something a later process still needs. */
+/** On the browser-view sidecar container and its volume, so `reconcileOrphans` can sweep leftovers. */
 const BROWSER_VIEWER_LABEL = 'actor-runtime.browserViewer';
-/** Repository the bundled sidecar rootfs is imported under; the tag is the payload's own content hash
- * (`config.ts: browserViewerVersionFilePath`), so a rebuilt runtime imports a fresh image instead of
- * reusing a stale one, while an unchanged payload is imported exactly once per daemon. */
+/** Tagged with the payload's content hash, so a rebuilt runtime imports a fresh image. */
 const BROWSER_VIEWER_IMAGE_REPO = 'actor-runtime/browser-viewer';
-/** Where X servers put their listening sockets (`X<display>` files). Shared between the Actor container
- * and its sidecar through a tmpfs volume mounted at this path in both; the Apify browser base images
- * already ship this directory with the same `1777` mode the volume is created with. */
+/** Shared between the Actor container and the sidecar through a tmpfs volume. */
 const X11_SOCKET_DIR = '/tmp/.X11-unix';
-/** The RFB (VNC) port x11vnc listens on inside the sidecar - reachable only over `apify-local`, never
- * published on the host (`system.md`). */
+/** Reachable only on `apify-local`; never published on the host. */
 const BROWSER_VIEWER_VNC_PORT = 5900;
 const BROWSER_VIEWER_MEMORY_BYTES = 256 * 1024 * 1024;
-/** The sidecar's entrypoint, baked into its rootfs from `docker/browser-viewer.sh`. */
 const BROWSER_VIEWER_SCRIPT = '/apify-browser-viewer.sh';
-/** Env contract with `docker/browser-viewer.sh` - it cannot import this module, so its own copies of
- * these names must match verbatim. */
+/** Names must match `docker/browser-viewer.sh`. */
 const BROWSER_VIEWER_INTERACTIVE_ENV = 'APIFY_BROWSER_VIEWER_INTERACTIVE';
 const BROWSER_VIEWER_PORT_ENV = 'APIFY_BROWSER_VIEWER_PORT';
-/** `docker volume rm` right after `docker rm -f` of the last container using it can still race the
- * daemon's own unmount bookkeeping ("volume is in use"); a few short retries cover it. */
+/** Removing a volume right after its last container can race the daemon ("volume is in use"). */
 const VOLUME_REMOVE_ATTEMPTS = 10;
 const VOLUME_REMOVE_RETRY_MS = 200;
 /** Tag for `ensureProbeImage`'s own minimal image - built and owned by this driver, never an Actor's.
@@ -336,13 +326,9 @@ export class DockerDriver implements Driver {
 	private probeImageBuild: Promise<string> | undefined;
 	/** Python debug payload tar + debugpy version, read from disk at most once and cached. */
 	private debugPayload: { tar: Buffer; debugpyVersion: string } | undefined;
-	/** Set once `ensureBrowserViewerImage` has imported (or found) the sidecar image for this process's
-	 * payload; every later call returns it without touching the daemon again. */
 	private browserViewerImageId: string | undefined;
-	/** In-flight import shared by concurrent `ensureBrowserViewerImage` callers (same shape as
-	 * `probeImageBuild`); cleared on failure so a later call retries. */
+	/** Shared by concurrent callers; cleared on failure so a later call retries (like `probeImageBuild`). */
 	private browserViewerImport: Promise<string> | undefined;
-	/** Live browser-view sidecars by run id, for `stopBrowserViewer`. */
 	private readonly browserViewers = new Map<string, { container: Docker.Container; volumeName: string }>();
 
 	available = false;
@@ -616,10 +602,7 @@ export class DockerDriver implements Driver {
 			}
 		}
 
-		// Both optional mounts are conditional on their own feature; an ordinary run gets no `Mounts` key at
-		// all. The X-socket volume is the *only* thing a browser-view run adds to the Actor's container - its
-		// image, command, env, network and ports are exactly those of an ordinary run (`actor-driver.md`'s
-		// "Browser view" section).
+		// The X-socket volume is the only change a browser-view run makes to the Actor's container.
 		const mounts: Docker.MountSettings[] = [
 			...(ctx.devMount ? this.buildDevMounts(ctx.devMount) : []),
 			...(ctx.x11SocketVolume
@@ -936,14 +919,8 @@ export class DockerDriver implements Driver {
 		await container.stop().catch(() => undefined);
 	}
 
-	/**
-	 * Imports (on first call) the bundled sidecar root filesystem as a local image and returns its tag,
-	 * reusing it on every later call - the browser-view analogue of `ensureProbeImage`, except the image
-	 * comes from a tar baked into the runtime's own image (`Dockerfile`'s browser-viewer stages) via
-	 * `docker import`, not from a `Dockerfile` build, so it needs no network access and no registry. An
-	 * image already present under the payload's own content-hash tag (a previous process imported it) is
-	 * simply reused.
-	 */
+	/** Imports the bundled sidecar rootfs (`docker import`, no network) once per process; an image already
+	 * present under the content-hash tag is reused. */
 	private async ensureBrowserViewerImage(): Promise<string> {
 		if (this.browserViewerImageId) return this.browserViewerImageId;
 		this.browserViewerImport ??= this.importBrowserViewerImage().catch((error) => {
@@ -961,10 +938,8 @@ export class DockerDriver implements Driver {
 			version = (await readFile(browserViewerVersionFilePath(), 'utf8')).trim();
 		} catch (error) {
 			throw new Error(
-				`the runtime's browser-view sidecar payload is missing (${(error as Error).message}). This runtime ` +
-					`only starts a display mirror when it is running from its own built image (its Dockerfile bakes ` +
-					`the x11vnc sidecar in) - browser view does not work when the runtime itself runs from source ` +
-					`(e.g. \`pnpm dev\`).`,
+				`the runtime's browser-view sidecar payload is missing (${(error as Error).message}). Browser view ` +
+					`needs the runtime to run from its own built image, not from source (e.g. \`pnpm dev\`).`,
 			);
 		}
 		const tag = `${BROWSER_VIEWER_IMAGE_REPO}:${version}`;
@@ -976,9 +951,7 @@ export class DockerDriver implements Driver {
 			if (!hasStatusCode(error) || error.statusCode !== 404) throw error;
 		}
 
-		// The tar is streamed straight into the daemon's `POST /images/create`. A read failure on it (the
-		// file vanishing mid-import, an unreadable payload) must reject this import rather than surface as an
-		// unhandled stream `'error'`, which would take the whole process down.
+		// A read error on the tar must reject the import, not surface as an unhandled stream error.
 		const rootfs = createReadStream(browserViewerRootfsTarPath());
 		let rootfsError: Error | undefined;
 		rootfs.on('error', (error: Error) => {
@@ -1010,15 +983,8 @@ export class DockerDriver implements Driver {
 		return tag;
 	}
 
-	/**
-	 * The shared X-socket volume plus the x11vnc sidecar, started before the run's own container so the
-	 * sidecar is already waiting when the Actor's Xvfb creates its socket. The volume is a tmpfs-backed
-	 * local volume created with mode `1777` up front - the Actor's Xvfb runs as the image's unprivileged
-	 * user and must be able to create its socket there, so the mode cannot be left to whatever the volume
-	 * driver defaults to (root-owned `755`), nor to a chmod inside the sidecar that would race the Actor's
-	 * start. Anything created here is torn down again if a later step fails, so a failed start never leaks
-	 * a container or volume.
-	 */
+	/** The volume is created with mode 1777 up front: the Actor's Xvfb runs unprivileged and must be able
+	 * to create its socket there. Anything created here is removed again if a later step fails. */
 	async startBrowserViewer(target: BrowserViewerTarget): Promise<BrowserViewerHandle> {
 		if (!this.available) {
 			throw new Error(this.unavailableReason ?? 'Docker is not available');
@@ -1061,9 +1027,7 @@ export class DockerDriver implements Driver {
 			const info = await container.inspect();
 			const address = info.NetworkSettings?.Networks?.[NETWORK_NAME]?.IPAddress;
 			return {
-				// The container's own name resolves through Docker's embedded DNS from any container on
-				// `apify-local` (the shipped runtime image included); the IP additionally works from a bare
-				// `node dist/index.js` on a Linux host, so it is preferred when the daemon reports one.
+				// The IP also works from a runtime running outside Docker; the name only resolves from inside.
 				vncHost: address || containerName,
 				vncPort: BROWSER_VIEWER_VNC_PORT,
 				x11SocketVolume: volumeName,
@@ -1084,8 +1048,7 @@ export class DockerDriver implements Driver {
 		await this.removeVolumeWithRetry(viewer.volumeName);
 	}
 
-	/** Best-effort volume removal - see `VOLUME_REMOVE_ATTEMPTS`. A volume that is already gone is
-	 * success; anything still failing after the last attempt is logged, never thrown. */
+	/** Best-effort: a 404 is success, the last failure is logged, never thrown. */
 	private async removeVolumeWithRetry(volumeName: string): Promise<void> {
 		const volume = this.docker.getVolume(volumeName);
 		for (let attempt = 1; ; attempt++) {
@@ -1134,8 +1097,7 @@ export class DockerDriver implements Driver {
 		for (const info of byId.values()) {
 			const isOrphanedRun = runIdSet.has(info.Labels?.[RUN_LABEL] ?? '');
 			const isLeftoverProbe = info.Labels?.[PROBE_LABEL] !== undefined;
-			// A browser-view sidecar from a previous process is swept unconditionally, like a probe: it only
-			// ever served a run of that process, and its shared volume goes with it below.
+			// Swept unconditionally, like a probe.
 			const isLeftoverViewer = info.Labels?.[BROWSER_VIEWER_LABEL] !== undefined;
 			if (!isOrphanedRun && !isLeftoverProbe && !isLeftoverViewer) continue;
 			const container = this.docker.getContainer(info.Id);
@@ -1145,7 +1107,7 @@ export class DockerDriver implements Driver {
 			await container.remove({ force: true, v: true }).catch(() => undefined);
 		}
 
-		// The sidecars' named X-socket volumes are not anonymous, so `{ v: true }` above never touches them.
+		// Named volumes are not covered by `{ v: true }` above.
 		const { Volumes: viewerVolumes } = await this.docker.listVolumes({
 			filters: JSON.stringify({ label: [BROWSER_VIEWER_LABEL] }),
 		});

@@ -30,7 +30,6 @@ async function main(): Promise<void> {
 	// `api/events-ws.ts`'s own doc comment for why this attaches here rather than inside `createApiServer`
 	// (Express never sees an `upgrade` event, so this needs the actual `http.Server` `listen()` returned).
 	const eventsWebSocketServer = attachEventsWebSocket(apiServer);
-	// The console's own upgrade: the browser-view viewer page's websocket (`console/browser-view-ws.ts`).
 	const browserViewWebSocketServer = attachBrowserViewWebSocket(consoleServer);
 
 	console.log(`actor-runtime API listening on port ${API_PORT}`);

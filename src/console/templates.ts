@@ -157,8 +157,7 @@ export function debugModeForm(
 	);
 }
 
-/** The browser-view toggle form on the Actor detail view - full parity with the API body's two fields
- * (`enabled`/`interactive`), submitted together like `debugModeForm`. */
+/** The browser-view toggle form; both API fields, submitted together like `debugModeForm`. */
 export function browserViewForm(
 	actorId: string,
 	current: ActorLocalBrowserView | null | undefined,
@@ -173,19 +172,14 @@ export function browserViewForm(
 		'(deliver mouse/keyboard input from the viewer)</label> ' +
 		'<button type="submit">Save</button>' +
 		'</form>' +
-		'<p class="empty">When on, every run of this Actor gets a live mirror of its X display, linked from the ' +
-		"run's detail page. The Actor's container and browser are unchanged by it - a headless browser draws " +
-		'nothing on the display, so run it headful (Crawlee: <code>headless: false</code>) to see it. Uncheck ' +
-		'"enabled" and submit to turn browser view off.</p>'
+		'<p class="empty">When on, every run of this Actor gets a live mirror of its display, linked from the ' +
+		"run's page. The browser must run headful to show anything (Crawlee JS: <code>headless: false</code>, " +
+		'Python: <code>headless=False</code>).</p>'
 	);
 }
 
-/**
- * The live viewer page for one run (`console.md`'s "Browser view page"): noVNC's `RFB` client (served
- * from the runtime's own `node_modules` under `/vendor/novnc/`, see `console/server.ts`) connected to
- * this console's own websocket bridge for the run (`console/browser-view-ws.ts`). The run id is embedded
- * as a JSON literal with `<` escaped, so it can never break out of the script element.
- */
+/** The viewer page: noVNC (served under `/vendor/novnc/`) connected to `console/browser-view-ws.ts`. The
+ * run id is embedded as a JSON literal with `<` escaped so it cannot break out of the script element. */
 export function browserViewPage(
 	run: RunRecord & { localBrowserView: NonNullable<RunRecord['localBrowserView']> },
 ): string {

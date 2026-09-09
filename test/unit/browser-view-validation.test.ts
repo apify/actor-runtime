@@ -81,7 +81,7 @@ describe('user-facing text', () => {
 		const viewOnly = browserViewLogLine('run-1', false);
 		expect(viewOnly).toContain('http://localhost:3000/runs/run-1/browser');
 		expect(viewOnly).toContain('view-only');
-		expect(viewOnly).toContain('whether or not anyone is watching');
+		expect(viewOnly).toContain('unaffected');
 		expect(viewOnly).toContain('headless: false');
 		expect(viewOnly.endsWith('\n')).toBe(true);
 

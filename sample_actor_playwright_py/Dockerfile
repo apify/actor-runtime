@@ -1,6 +1,4 @@
-# The Apify Python + Playwright base image. It ships Chromium, Playwright, Xvfb, and an ENTRYPOINT
-# (`xvfb-entrypoint.sh`) that wraps CMD in `xvfb-run`, so a *headful* browser works with no display of
-# its own - which is what lets actor-runtime's browser view mirror it (see README.md).
+# Ships Chromium, Playwright, and an Xvfb entrypoint, so a headful browser works with no display of its own.
 # You can see the Docker images from Apify at https://hub.docker.com/r/apify/.
 FROM apify/actor-python-playwright:3.14-1.61.0
 
@@ -31,6 +29,5 @@ COPY --chown=myuser:myuser . ./
 # Use compileall to ensure the runnability of the Actor Python code.
 RUN python -m compileall -q my_actor/
 
-# Specify how to launch the source code of your Actor. `python` directly, so actor-runtime's debug mode
-# can attach too.
+# Specify how to launch the source code of your Actor. `python` directly, so actor-runtime's debug mode can attach.
 CMD ["python", "-m", "my_actor"]

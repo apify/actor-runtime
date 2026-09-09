@@ -297,11 +297,8 @@ export async function runInBackground(
 			? { localDevFolder: actor.localDevFolder, imageWorkingDirectory: build.imageWorkingDirectory }
 			: undefined;
 
-	// Only when the Actor has the browser-view toggle on (`actor-driver.md`'s "Browser view" section): the
-	// x11vnc sidecar and its shared X-socket volume come up first, so the mirror is already waiting when
-	// the Actor's own Xvfb starts. A sidecar that cannot start fails the run before any Actor container
-	// exists, exactly like a debug refusal. Started *before* the pre-start abort re-check below so an abort
-	// landing during this (possibly slow, on the first-ever image import) step is still caught by it.
+	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
+	// so an abort landing during this (possibly slow) step is still caught by it.
 	let browserViewer: BrowserViewerHandle | undefined;
 	if (actor.localBrowserView) {
 		const { interactive } = actor.localBrowserView;
@@ -312,8 +309,6 @@ export async function runInBackground(
 			await failBeforeContainer(record.id, message, message);
 			return;
 		}
-		// Persisted on the run record itself (like `localDebug`) so the console can render the viewer page
-		// and bridge its websocket for this run, whoever started it and whatever the Actor's toggle says later.
 		const { vncHost, vncPort } = browserViewer;
 		await runs.update(record.id, (current) =>
 			current ? { ...current, localBrowserView: { interactive, vncHost, vncPort } } : current,
@@ -348,8 +343,7 @@ export async function runInBackground(
 					timeoutSecs: remainingTimeoutSecs(record),
 					devMount,
 					debug: debugPlan ? { language: debugPlan.language, port: debugPlan.port } : undefined,
-					// The sidecar outlives a migration/reboot restart: only the Actor's container is replaced,
-					// and the new one mounts the same socket volume, so the mirror picks the new display up.
+					// The sidecar outlives a migration/reboot restart; the new container mounts the same volume.
 					x11SocketVolume: browserViewer?.x11SocketVolume,
 				},
 				(chunk) => appendLog(record.id, chunk),
@@ -403,7 +397,6 @@ export async function runInBackground(
 			statusMessage,
 		});
 	} finally {
-		// The sidecar and its volume go with the run, whichever way it ended.
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
 		clearRunRestartState(record.id);

@@ -123,67 +123,21 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 
 # Browser view
 
-- Browser view is a **persistent per-Actor toggle**, set and read through the local-only endpoint
-  `POST /actor-runtime/browser-view/:actorId` (`api.md`) or a form on the console's Actor detail view
-  (`console.md`), with identical outcomes for the same input on both surfaces. Like debug mode it is not a
-  per-run flag: turning it on gives every subsequent run of that Actor a live mirror of the X display its
-  browser draws on, until the toggle is cleared; stock `apify call`'s invocation/flags/exit behavior never
-  change.
-- The toggle stores `enabled` and `interactive` (default `false`: the mirror is strictly view-only; `true`
-  additionally delivers the viewer's mouse and keyboard input to the display). A `POST` fully replaces the
-  prior state (never a partial merge); `{"enabled": false}` clears the toggle regardless of what else the
-  body names.
-- **The mirror reads the framebuffer over the X socket, never through shared memory** (x11vnc's `-noshm`):
-  MIT-SHM needs a shared-memory segment the X server can attach, which is impossible across container IPC
-  namespaces - the Actor's and the sidecar's are separate and stay separate (the Actor container's IPC
-  mode is never changed for this feature).
-- **The mirror never exchanges clipboard or selection data with the display** (x11vnc's `-nosel`), in
-  either mode and either direction: it never asks the browser for a selection it owns, and a viewer's
-  clipboard is never pushed into the display. An interactive mirror delivers mouse and keyboard input only.
-- **The mirror is a passive observer of the display, never of the browser.** It is implemented as a separate
-  **sidecar container** per run - the runtime's own bundled x11vnc image, started on `apify-local` before the
-  run's own container is created - that shares exactly one thing with the Actor's container: a tmpfs volume
-  mounted at `/tmp/.X11-unix` in both, where the Actor's own Xvfb creates its listening socket. The sidecar
-  waits for that socket, discovers the display number from the socket's name (the Apify browser base images
-  start Xvfb through `xvfb-run -a`, which picks a free display at run time), and serves the display's
-  framebuffer over RFB (VNC) to the console (`console.md`), which bridges it to the developer's own browser.
-- **The Actor's container is otherwise byte-identical to an ordinary run's**: the same image, `Cmd`/
-  `Entrypoint`, environment (no `DISPLAY`/`HEADLESS`/viewer variable of any kind is added or changed),
-  network, resource limits, and no published port - the `/tmp/.X11-unix` volume mount is the single addition
-  (the Apify browser base images ship that directory with the same `1777` mode the volume is created with).
-  Nothing is injected into the browser or the pages it loads; the sidecar is an ordinary X client reading
-  pixels, so **whether the mirror is on, off, or being watched by any number of viewers is not observable
-  from inside the browser**, and therefore not by the sites it visits. The one exception is what the
-  developer chooses to do with an `interactive` mirror: input sent through it arrives as genuine X input
-  events, indistinguishable from a local user's.
-- **The runtime never changes the browser's headless/headful mode.** A headless browser draws nothing on the
-  display, so a mirror of it is blank; an Actor that wants to be watched runs its browser headful (Crawlee:
-  `headless: false`, or `CRAWLEE_HEADLESS=0` in its own environment) - _always_, not only when watched, so
-  that watching never becomes a behavioral difference. The bundled `sample_actor_playwright` (TypeScript) and
-  `sample_actor_playwright_py` (Python) do exactly this; note that Apify's own templates default to headless -
-  the Python Crawlee template hard-codes `headless=True` - so an unmodified template Actor mirrors as a
-  black display.
-- **If the runtime cannot supply the sidecar image** (e.g. it is not running from its own built image), the
-  run fails before any container is created, with a clear message naming the clear command - never a
-  silent run without the mirror. The sidecar image is imported into the daemon from the runtime's bundled
-  rootfs tar on first use and reused after that; no registry pull, no network.
-- **The run log carries one line, before the Actor's container is created**, naming the viewer page URL on
-  the console, the mode (view-only/interactive), that the Actor and its browser are unaffected, and that a
-  headless browser shows nothing.
-- **The mirror's address is persisted on the run record itself** (local-only, never on `/v2` - see
-  `storage.md`): `{ interactive, vncHost, vncPort }`, where `vncHost:vncPort` is where the sidecar's RFB
-  server listens on `apify-local`. This is what lets the console bridge any run's mirror, whoever started
-  the run. Nothing about the mirror is ever published on the host (`system.md`); it is reached only through
-  the console's own port.
-- **The sidecar lives exactly as long as the run.** It starts before the run's container and is removed,
-  together with its volume, when the run reaches a terminal state, however it got there (exit, timeout,
-  abort, pre-container failure after the sidecar started). It outlives a migration/reboot restart of the
-  run's container: the replacement container mounts the same socket volume and the mirror picks the new
-  display up. A sidecar or volume left behind by a previous runtime process is swept at startup, like an
-  orphaned run container.
-- **Browser view composes with debug mode and the dev-folder bind mount** - all three are independent and
-  apply to the same run when configured, e.g. edit -> recompile -> `apify call` -> watch the browser hit
-  your breakpoint.
+- Browser view is a persistent per-Actor toggle. While it is on, every run of the Actor offers a live view
+  of the display its browser draws on, reachable from the run's console page and from a URL printed in the
+  run log.
+- Two modes: **view-only** (the default) shows the display and sends nothing to it; **interactive** also
+  delivers the viewer's mouse and keyboard input to the display. Nothing else ever crosses in either
+  direction (no clipboard).
+- Watching is not observable from inside the browser or by the sites it visits: the run's container,
+  command, environment, network and ports are those of an ordinary run, and whether the view is on, off, or
+  being watched changes nothing about the browser.
+- The runtime never changes the browser's headless mode. A headless browser shows an empty display; an
+  Actor that wants to be watched runs its browser headful (the bundled `sample_actor_playwright` and
+  `sample_actor_playwright_py` do). The Actor image must provide an X display; the Apify Playwright and
+  Puppeteer base images do.
+- The view lives exactly as long as the run, survives a migration/reboot of the run, and is gone once the run
+  ends. It composes with debug mode and the dev-folder bind mount.
 
 # Networking
 

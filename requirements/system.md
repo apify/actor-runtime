@@ -30,11 +30,7 @@
   port published on the host, bound to `127.0.0.1` (`5678` Python / `9229` Node by default, per-Actor
   overridable) - the runtime's own two ports above are unaffected, and no port is published for an Actor
   that never turned debug mode on.
-- **Browser view publishes nothing on the host** (`actor-driver.md`'s "Browser view" section): a mirrored
-  run's sidecar RFB server is reachable only on the runtime's private Docker network, and the developer
-  reaches it through the console's own port 3000 (`console.md`'s "Browser view page"). The runtime image
-  bundles the sidecar's root filesystem and imports it into the daemon on first use, so no extra image is
-  ever pulled.
+- Browser view (`actor-driver.md`) publishes no port on the host; the view is served on the console's port 3000.
 - Required `docker run` flags: mount the host Docker socket read-write
   (`-v /var/run/docker.sock:/var/run/docker.sock`) so the runtime can build and run Actor containers,
   and mount a persistent data directory (`-v <host-dir>:/data`, e.g. `-v "$(pwd)/data:/data"`) so

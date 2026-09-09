@@ -1,18 +1,8 @@
 #!/bin/sh
-# Entrypoint of actor-runtime's browser-view sidecar (`requirements/actor-driver.md`, "Browser view").
-#
-# Runs in its own container, sharing only one thing with the Actor's container: the tmpfs volume mounted
-# at /tmp/.X11-unix in both, where the Actor's Xvfb creates its listening socket (`X<display>`). This
-# script waits for that socket to appear, then mirrors the display over RFB (VNC) with x11vnc for the
-# runtime's console to bridge to a browser. x11vnc is an ordinary X client that reads the framebuffer -
-# it changes nothing about the display or the browser drawing on it, connected viewers or not.
-#
-# Display numbers are not known up front (the Apify base images start Xvfb through `xvfb-run -a`, which
-# picks a free one at run time), so the display is discovered from the socket's own name. A restart of the
-# Actor's container (a migration/reboot) tears the X server down with it; x11vnc then exits and this loop
-# waits for the new socket, so the same sidecar serves the whole run.
-#
-# Env contract with `src/driver/docker-driver.ts` (it cannot import this file): the two variables below.
+# actor-runtime's browser-view sidecar: waits for the Actor's X socket in the shared /tmp/.X11-unix, then
+# mirrors that display with x11vnc. The display number is taken from the socket name (`xvfb-run -a` picks
+# one at run time). When the Actor container restarts (migration), x11vnc exits and the loop waits again.
+# Env names must match `src/driver/docker-driver.ts`.
 
 SOCKET_DIR=/tmp/.X11-unix
 PORT="${APIFY_BROWSER_VIEWER_PORT:-5900}"
@@ -44,18 +34,11 @@ while :; do
 
 	display=":${socket##*/X}"
 	log "mirroring display $display ($MODE) on port $PORT"
-	# -noshm: x11vnc's default framebuffer grab is MIT-SHM, which needs a shared-memory segment the X server
-	# can attach - impossible from a different container (own IPC namespace; the X server fails the attach
-	# with BadAccess and x11vnc exits). Plain XGetImage over the socket works across containers.
-	# -nosel/-nobell: no clipboard/selection exchange in either direction and no XBell watch - polling a
-	# selection the browser owns would make the browser answer a ConvertSelection request, and a viewer's
-	# clipboard would otherwise be pushed into the display; with these the browser is never asked anything.
-	# -forever/-shared: stays up across viewer connect/disconnect, any number of viewers. -nopw: the port is
-	# only reachable on the runtime's private Docker network. -noxrecord/-nowf/-noscr: skip x11vnc's own
-	# scroll/wireframe heuristics, which are the only parts of it that go beyond plainly reading pixels.
-	# shellcheck disable=SC2086 # INPUT_FLAG is intentionally word-split (empty or one flag).
+	# -noshm: MIT-SHM cannot cross container IPC namespaces (x11vnc would die on X_ShmAttach).
+	# -nosel/-nobell/-noxrecord/-nowf/-noscr: only read pixels; no clipboard, bell, or X request recording.
+	# shellcheck disable=SC2086 # INPUT_FLAG is intentionally word-split.
 	x11vnc -display "$display" -rfbport "$PORT" -noshm -nosel -nobell -shared -forever -nopw -noipv6 -q \
 		-noxrecord -nowf -noscr $INPUT_FLAG
-	log "x11vnc exited - the display is gone (Actor container stopped or restarting); waiting for a display again"
+	log "x11vnc exited - display gone; waiting for a display again"
 	sleep 1
 done
