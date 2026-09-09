@@ -464,6 +464,10 @@ describe('console: viewer page, run row, noVNC client, and the websocket bridge'
 		expect(page.data).toContain(`const runId = "${runId}";`);
 		expect(page.data).toContain('const viewOnly = false;');
 		expect(page.data).toContain('/browser/ws');
+		// The one cause of a connected-but-black view, named on the page itself.
+		expect(page.data).toContain(
+			'A black picture means nothing is drawn on the display: the browser is running headless.',
+		);
 	});
 
 	it('the viewer page explains itself for a run without a mirror (404) and for an ended run (200, no client)', async () => {

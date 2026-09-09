@@ -219,7 +219,8 @@ function connect() {
 	rfb.background = '#222';
 	rfb.addEventListener('connect', () => {
 		attempts = 0;
-		status.textContent = "Connected - live view of the run's display" + (viewOnly ? ' (view-only).' : ' (interactive).');
+		status.textContent = "Connected - live view of the run's display" + (viewOnly ? ' (view-only).' : ' (interactive).') +
+			' A black picture means nothing is drawn on the display: the browser is running headless. Launch it with headless off (Crawlee JS: headless: false; Python: headless=False).';
 	});
 	rfb.addEventListener('disconnect', () => {
 		if (attempts >= 40) {
