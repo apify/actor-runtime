@@ -44,28 +44,10 @@
       actor-runtime
     ```
 
-- **Supported container engines: Docker, and Podman through its Docker-compatible API.** The runtime
-  talks only the Docker Engine API over that socket - it never shells out to a `docker` or `podman`
-  binary - so Podman is used by mounting the socket `podman system service` / the `podman.socket` unit
-  serves (`/run/podman/podman.sock` rootful, `$XDG_RUNTIME_DIR/podman/podman.sock` rootless) at the same
-  in-container path, or at any path named by a `DOCKER_HOST=unix://...` environment variable. Every
-  feature in `actor-driver.md` must behave identically on both engines; where the two engines' APIs
-  genuinely differ (Podman auto-creates a missing bind-mount source that Docker rejects; Podman's
-  container stats report `system_cpu_usage` on a different scale), the runtime must not depend on the
-  engine-specific behaviour. Rootless engines (rootless Podman, rootless Docker) are supported the same
-  way, with the runtime's own container mounting the rootless socket; the one rootless-specific
-  accommodation is `actor-driver.md`'s host-gateway fallback for reaching the API when the runtime
-  container cannot join the `apify-local` network. Verified against Docker Engine (rootful and
-  rootless) and Podman 4.9 (rootful and rootless) on Linux; `podman machine` is best-effort.
-
-    ```bash
-    sudo systemctl enable --now podman.socket
-    podman build -t actor-runtime .
-    sudo podman run --rm -p 3333:3333 -p 3000:3000 \
-      -v /run/podman/podman.sock:/var/run/docker.sock \
-      -v "$(pwd)/data:/data" \
-      actor-runtime
-    ```
+- **Docker and Podman are equally supported**, rootful or rootless. Everything the system offers is
+  achievable with either engine and behaves the same on both; the user picks the engine simply by
+  mounting its Docker-compatible API socket into the runtime container, e.g.
+  `-v /run/podman/podman.sock:/var/run/docker.sock` for Podman.
 
 - Optionally set `APIFY_PROXY_PASSWORD` in the runtime's own environment to have it forwarded into
   every Actor container (see `actor-driver.md`).

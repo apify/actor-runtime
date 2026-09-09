@@ -42,20 +42,12 @@ the single local user, with no error either way - see `requirements/cli.md`'s Us
 
 ## Running with Podman instead of Docker
 
-The runtime never shells out to a `docker` binary - everything goes through the Docker Engine API on
-the socket mounted at `/var/run/docker.sock`, and Podman serves that same API (`podman system service`
-/ the `podman.socket` systemd unit). So the only change is which socket you mount. Verified end to end
-on Linux with Podman 4.9 both rootful and rootless, and with Docker both rootful and rootless (the full
-e2e suite: push/build/call for the Node and Python samples, dev-folder bind mounts, debug mode; plus
-migrations and build abort by hand). `podman machine` is best-effort. One observation from the rootless
-Podman runs: external DNS from Actor containers (`aardvark-dns` on the rootless bridge network) failed
-intermittently in one run and worked in the next, so a crawl that fails with `EAI_AGAIN` under rootless
-Podman is worth simply retrying before suspecting the Actor.
+The runtime talks to the container engine only through its Docker-compatible API socket, and Podman
+serves that same API. Everything works the same on Docker and Podman, rootful or rootless; the only
+difference is which socket you mount.
 
 ```bash
-# one-time: have Podman serve its Docker-compatible API socket
-sudo systemctl enable --now podman.socket       # rootful socket: /run/podman/podman.sock
-# (no systemd? `sudo podman system service --time=0 &` serves the same path)
+sudo systemctl enable --now podman.socket   # one-time: serve Podman's API socket
 
 podman build -t actor-runtime .
 sudo podman run --rm -p 3333:3333 -p 3000:3000 \
@@ -65,11 +57,9 @@ sudo podman run --rm -p 3333:3333 -p 3000:3000 \
 ```
 
 Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
-(`systemctl --user enable --now podman.socket`), so mount that path (and drop the `sudo`); every Actor
-container then runs rootless too. Rootless Docker (`dockerd-rootless-setuptool.sh install`) works the
-same way with its `$XDG_RUNTIME_DIR/docker.sock`. Instead of mounting at `/var/run/docker.sock` you can
-mount the socket anywhere and pass `-e DOCKER_HOST=unix:///that/path` - the runtime's Docker client
-honours `DOCKER_HOST`.
+(`systemctl --user enable --now podman.socket`); mount that path and drop the `sudo`. Rootless Docker
+works the same way with its `$XDG_RUNTIME_DIR/docker.sock`. The socket can also be mounted at any other
+path together with `-e DOCKER_HOST=unix:///that/path`.
 
 ```bash
 podman run --rm -p 3333:3333 -p 3000:3000 \
@@ -78,39 +68,19 @@ podman run --rm -p 3333:3333 -p 3000:3000 \
   actor-runtime
 ```
 
-Rootless engines have two things to know about on top of the notes below:
+Good to know:
 
-- **Under rootless Podman the runtime container cannot join the `apify-local` network** (it runs in
-  Podman's slirp4netns/pasta network mode, which cannot attach to a second network), so the `apify-api`
-  DNS alias Actors normally use does not resolve to it. The runtime detects this at startup, logs a
-  warning, and instead points every Actor container's `apify-api` at the host (`host-gateway`), where
-  the runtime's own published port 3333 answers - so keep `-p 3333:3333` published on all interfaces,
-  not bound to `127.0.0.1`. If you would rather keep the direct route, pre-create the network and start
-  the runtime on it: `podman network create apify-local` once, then add `--network apify-local` to the
-  `podman run` above. Rootless Docker is not affected: its containers sit on a bridge and the attach
-  works.
-- **Paths must be readable by the rootless user.** Actor containers, the dev-folder bind mount, and the
-  registration probe all run as that user, so a dev folder it cannot read is reported as "could not
-  verify" at registration (never as missing) and would be unreadable inside the container anyway.
-  Per-run memory/CPU limits are also silently unavailable to a rootless engine on a cgroups v1 host.
-
-Things worth knowing:
-
-- The socket you mount decides where Actors run: the runtime builds and starts Actor containers as
-  siblings on that engine, so a dev folder registered for the bind-mount dev loop below is a path on
-  the machine that engine runs on (inside the VM for `podman machine`, where the socket lives at
-  `/run/podman/podman.sock` for a rootful machine or `/run/user/<uid>/podman/podman.sock` for a rootless
-  one - untested here).
-- You are bind-mounting a socket _file_. If you restart a hand-started `podman system service`, the
-  socket inode changes and the runtime's mounted one goes stale (builds and runs fail with
-  `ECONNREFUSED`): restart the runtime container too. The `podman.socket` unit avoids this - systemd owns
-  the socket and hands it to the service.
-- `podman images` lists the images the runtime builds as `docker.io/actor-runtime/<actor>:<buildId>` -
-  Podman's Docker-compatible short-name normalisation, cosmetic only.
-- Podman's Docker-compatible API silently creates a missing bind-mount source directory instead of
-  rejecting it. The runtime works around this for dev folders (it validates the path itself, both at
-  registration and again at every run start), so a deleted dev folder still fails the run visibly
-  rather than running against an empty directory.
+- Actors run on the engine whose socket you mount, so a dev folder registered for the bind-mount dev
+  loop below is a path on the machine that engine runs on (inside the VM for `podman machine`), and
+  under a rootless engine it must be readable by that user.
+- Under rootless Podman the runtime container cannot join the `apify-local` network, so Actors reach
+  the API through the runtime's published port 3333 instead. Keep `-p 3333:3333` published on all
+  interfaces, or pre-create the network (`podman network create apify-local`) and add
+  `--network apify-local` to the run command to use the direct route.
+- Rootless engines on a cgroups v1 host do not apply the per-run memory and CPU limits.
+- If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
+  stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
+- `podman images` lists the images the runtime builds as `docker.io/actor-runtime/<actor>:<buildId>`.
 
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
@@ -122,11 +92,9 @@ apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/sample_
 ```
 
 `<actorId>` is the id `apify push --json` printed (`.actor.id`); the path must be absolute and must
-already exist on the **host** - the runtime verifies this through the engine itself (a throwaway,
-never-started probe container that binds the host's `/` read-only and stats the path beneath it, so it
-works identically on Docker and Podman and never creates anything on the host), and rejects the call
-with a clear error if the path can't be confirmed. The same check runs again at every run start, so a
-folder deleted after registration fails the run instead of running against an empty directory.
+already exist on the **host** - the runtime checks this and rejects the call with a clear error if the
+path can't be confirmed. The check runs again at every run start, so a folder deleted after
+registration fails the run instead of running against an empty directory.
 The same thing is also a single-field form on the Actor's page in the console (`http://localhost:3000`).
 
 From then on:

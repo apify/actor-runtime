@@ -43,13 +43,8 @@
   surfaces.
 - Registration validates that the submitted value is an absolute POSIX path and that the path exists
   **on the host** and is a directory.
-    - The existence check goes through the container engine itself (the runtime's own filesystem is not
-      the host's), and it must be side-effect free and identical on Docker and Podman: a never-started
-      probe container binds the host's `/` read-only and the candidate is stat'ed beneath that mount
-      through the engine's archive-stat endpoint, component by component so symlinks resolve to what they
-      point at on the host. The probe never binds the candidate path itself - Podman's Docker-compatible
-      API auto-creates a missing bind-mount source instead of rejecting it, which would both mis-report
-      a typo as present and leave an empty directory behind on the host.
+    - The check must leave no trace on the host (never create anything there), must treat a symlink as
+      what it points to, and must give the same answer on every supported engine.
     - Submitting the **empty string clears the registration** and skips validation.
     - Every non-success outcome is classified: unable to verify at all (e.g. Docker unreachable)
       reports "could not verify" - never "does not exist"; a path confirmed missing reports "path
@@ -66,11 +61,9 @@
 - The registration status the console and API report is the registered folder alone - never that a
   mount "will apply", since that depends on which build a given run resolves.
 - If the registered folder has since been deleted, moved, or made unreadable, the run must **fail
-  visibly** - never silently mount an empty directory in its place. The runtime enforces this itself,
-  re-running the registration-time existence check before the run's container is created, rather than
-  relying on the engine to reject the mount: Docker would, but Podman would auto-create the missing
-  folder and start the run against it. The failed run's status message names the folder, what is wrong
-  with it, and how to clear the registration.
+  visibly** - never silently mount an empty directory in its place, whatever the engine itself would do
+  with a missing mount source. The failed run's status message names the folder, what is wrong with it,
+  and how to clear the registration.
 - The Actor image's own installed dependencies (e.g. `node_modules`) must remain available to the Actor
   despite the mount covering the whole working directory.
 - **Registering or clearing a dev folder never bumps the Actor's `modifiedAt`.**
@@ -137,13 +130,9 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - On startup, the runtime ensures a Docker network `apify-local` exists and joins it under the fixed
   DNS alias `apify-api`. Every Actor container is started on that network, so it can reach the
   runtime's API at `http://apify-api:3333` regardless of the host's own networking.
-- When the runtime cannot join that network itself - it is not running in a container at all, or the
-  engine refuses the attach (rootless Podman runs the runtime container under slirp4netns/pasta, where
-  joining a second network is unsupported) - it must still make `http://apify-api:3333` reachable from
-  every Actor container: it logs a warning naming the cause and the `--network apify-local` alternative,
-  and gives each Actor container an `apify-api -> host-gateway` extra host, so the alias lands on the
-  runtime's port 3333 as published on the host (`system.md`'s mandatory `-p 3333:3333`). The extra host
-  is never added when the alias resolves through the network, since a hosts-file entry would override it.
+- `http://apify-api:3333` must reach the runtime from every Actor container even when the runtime's
+  own container cannot join that network (for example under rootless Podman, or when the runtime runs
+  outside a container). The runtime says so at startup, naming the cause.
 
 # Actor run
 
@@ -171,10 +160,8 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Every event carries all eight fields - `memAvgBytes`, `memCurrentBytes`, `memMaxBytes`, `cpuAvgUsage`,
   `cpuMaxUsage`, `cpuCurrentUsage`, `isCpuOverloaded`, `createdAt` - or is not published at all. A
   measurement that cannot be read completely is skipped, leaving the run's running figures unaffected.
-    - `cpuCurrentUsage` is percent of one CPU core, not of the run's own grant - measured as the
-      container's CPU time over the wall time between two successive readings, which means the same
-      thing on every engine (Podman's `system_cpu_usage`, the input to `docker stats`' own formula, is not
-      on Docker's scale).
+    - `cpuCurrentUsage` is percent of one CPU core, not of the run's own grant, and means the same
+      thing on every supported engine.
     - `memCurrentBytes` and `memAvgBytes` exclude reclaimable page cache, matching what `docker stats`
       reports for the same container.
     - `memMaxBytes` is the run's configured memory limit, constant for its lifetime.
