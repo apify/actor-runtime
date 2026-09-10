@@ -1,14 +1,11 @@
 /**
- * E2E coverage for per-Actor browser view (`actor-driver.md`'s "Browser view" section) against a real
- * Docker daemon: each Playwright sample Actor (TypeScript and Python) is pushed, browser view is turned on, a
- * run is started, and its display mirror is reached the way the console's viewer page reaches it. Driven by `apify` commands
- * per `requirements/test.md`'s CLI-only rule, with the one narrow exception that rule documents for this
- * test: it opens the console's viewer websocket (`/runs/:id/browser/ws`) directly and reads the RFB
- * greeting off it, because the workflow under test is "a browser connects to the mirror" and no `apify`
- * command can express that.
+ * Shared body of the browser-view e2e (`actor-driver.md`'s "Browser view" section) against a real Docker
+ * daemon: push a Playwright sample Actor, turn browser view on, start a run, and reach its live view the way
+ * the console's viewer page does. Driven by `apify` commands per `requirements/test.md`'s CLI-only rule, with
+ * the one exception that rule documents for this test: the viewer websocket is opened directly.
  *
- * Like `debug-mode.test.ts`, the run is started with `apify api POST actors/<id>/runs` rather than `apify
- * call`, so the test can poll the log and probe the mirror while the run is still going.
+ * The run is started with `apify api POST actors/<id>/runs` rather than `apify call` (which blocks until the
+ * run ends), so the view can be probed while the run is live.
  */
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -18,11 +15,11 @@ import WebSocket from 'ws';
 import {
 	buildRuntimeImage,
 	isDockerAvailable,
-	pullPlaywrightBaseImages,
+	pullImage,
 	startRuntimeContainer,
 	stopRuntimeContainer,
 	waitForHttpOk,
-} from './helpers/docker.js';
+} from './docker.js';
 import {
 	apify,
 	apifyEnv,
@@ -33,13 +30,21 @@ import {
 	type CallResult,
 	type DatasetInfoResult,
 	type PushResult,
-} from './helpers/apify-cli.js';
+} from './apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(__dirname, '..', '..');
-const CONTAINER_NAME = 'actor-runtime-e2e-browser-view';
-const IMAGE_TAG = 'actor-runtime:e2e-browser-view';
+const REPO_ROOT = join(__dirname, '..', '..', '..');
 const CONSOLE_URL = 'http://localhost:3000';
+
+export interface BrowserViewSample {
+	/** Directory under the repository root. */
+	dir: string;
+	label: string;
+	baseImage: string;
+	input: (maxRequests: number) => Record<string, number>;
+	/** The "toggle cleared" case proves a runtime property; one sample is enough. */
+	withToggleClearedCase: boolean;
+}
 
 interface RunApi {
 	id: string;
@@ -114,39 +119,39 @@ function readMirrorGreeting(runId: string, timeoutMs: number): Promise<string> {
 	});
 }
 
-describe('per-Actor browser view: live mirror of the Playwright sample Actor (requires Docker)', () => {
-	let isolatedApifyHome: string;
+/** One e2e file per sample (`browser-view-ts.test.ts`, `browser-view-py.test.ts`), so CI runs them as separate
+ * jobs and each pulls only its own base image. */
+export function describeBrowserViewSuite(sample: BrowserViewSample): void {
+	const CONTAINER_NAME = `actor-runtime-e2e-browser-view-${sample.dir}`;
+	const IMAGE_TAG = `actor-runtime:e2e-browser-view-${sample.dir}`;
 
-	beforeAll(
-		async () => {
-			if (!isDockerAvailable()) {
-				throw new Error(
-					'Docker daemon is not reachable - this e2e case requires one (see requirements/test.md)',
-				);
-			}
+	describe(`per-Actor browser view: live mirror of the ${sample.label} Playwright sample Actor (requires Docker)`, () => {
+		let isolatedApifyHome: string;
 
-			pullPlaywrightBaseImages();
-			buildRuntimeImage(REPO_ROOT, IMAGE_TAG);
-			startRuntimeContainer(IMAGE_TAG, CONTAINER_NAME);
-			await waitForHttpOk('http://localhost:3333/v2/users/me?token=x');
+		beforeAll(
+			async () => {
+				if (!isDockerAvailable()) {
+					throw new Error(
+						'Docker daemon is not reachable - this e2e case requires one (see requirements/test.md)',
+					);
+				}
 
-			isolatedApifyHome = createIsolatedApifyHome();
-			loginApifyCli(REPO_ROOT, isolatedApifyHome);
-		},
-		15 * 60 * 1000,
-	);
+				pullImage(sample.baseImage);
+				buildRuntimeImage(REPO_ROOT, IMAGE_TAG);
+				startRuntimeContainer(IMAGE_TAG, CONTAINER_NAME);
+				await waitForHttpOk('http://localhost:3333/v2/users/me?token=x');
 
-	afterAll(() => {
-		stopRuntimeContainer(CONTAINER_NAME);
-		if (isolatedApifyHome) removeIsolatedApifyHome(isolatedApifyHome);
-	});
+				isolatedApifyHome = createIsolatedApifyHome();
+				loginApifyCli(REPO_ROOT, isolatedApifyHome);
+			},
+			15 * 60 * 1000,
+		);
 
-	const samples = [
-		{ dir: 'sample_actor_playwright', label: 'TypeScript', input: (n: number) => ({ maxRequestsPerCrawl: n }) },
-		{ dir: 'sample_actor_playwright_py', label: 'Python', input: (n: number) => ({ max_requests_per_crawl: n }) },
-	];
+		afterAll(() => {
+			stopRuntimeContainer(CONTAINER_NAME);
+			if (isolatedApifyHome) removeIsolatedApifyHome(isolatedApifyHome);
+		});
 
-	for (const sample of samples) {
 		it(
 			`${sample.label} sample: push -> toggle on -> run: the log names the viewer URL, the viewer websocket reaches a live RFB server while the run crawls, the console links to the page, and the run finishes with the input-dependent item count`,
 			async () => {
@@ -220,32 +225,32 @@ describe('per-Actor browser view: live mirror of the Playwright sample Actor (re
 			},
 			10 * 60 * 1000,
 		);
-	}
 
-	it(
-		'with the toggle cleared, a plain `apify call` of the same Actor runs exactly as before (no mirror, same crawl)',
-		() => {
-			const env = apifyEnv(isolatedApifyHome);
-			const actorDir = join(REPO_ROOT, 'sample_actor_playwright');
-			const actorId = (JSON.parse(apify(['push', '--json'], { cwd: actorDir, env })) as PushResult).actor.id;
-			apify(['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": false}'], {
-				cwd: REPO_ROOT,
-				env,
-			});
+		it.runIf(sample.withToggleClearedCase)(
+			'with the toggle cleared, a plain `apify call` of the same Actor runs exactly as before (no mirror, same crawl)',
+			() => {
+				const env = apifyEnv(isolatedApifyHome);
+				const actorDir = join(REPO_ROOT, sample.dir);
+				const actorId = (JSON.parse(apify(['push', '--json'], { cwd: actorDir, env })) as PushResult).actor.id;
+				apify(['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": false}'], {
+					cwd: REPO_ROOT,
+					env,
+				});
 
-			const callOutput = apify(['call', '--input', '{"maxRequestsPerCrawl": 2}', '--json'], {
-				cwd: actorDir,
-				env,
-			});
-			const call = JSON.parse(callOutput) as CallResult;
-			expect(call.run.status).toBe('SUCCEEDED');
-			expect(currentLog(call.run.id, env)).not.toContain('Browser view:');
+				const callOutput = apify(['call', '--input', JSON.stringify(sample.input(2)), '--json'], {
+					cwd: actorDir,
+					env,
+				});
+				const call = JSON.parse(callOutput) as CallResult;
+				expect(call.run.status).toBe('SUCCEEDED');
+				expect(currentLog(call.run.id, env)).not.toContain('Browser view:');
 
-			const info = JSON.parse(
-				apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], { cwd: actorDir, env }),
-			) as DatasetInfoResult;
-			expect(info.itemCount).toBe(2);
-		},
-		5 * 60 * 1000,
-	);
-});
+				const info = JSON.parse(
+					apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], { cwd: actorDir, env }),
+				) as DatasetInfoResult;
+				expect(info.itemCount).toBe(2);
+			},
+			5 * 60 * 1000,
+		);
+	});
+}
