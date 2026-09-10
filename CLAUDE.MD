@@ -25,8 +25,7 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - You can use already authenticated CLI or call `apify login --token TOKEN`
 - To iterate on an Actor's source without a rebuild for every change: push and build the Actor once with
   `apify push`. When the CLI is pointed at this runtime it registers the pushed folder as the Actor's
-  local dev folder automatically (`apify push --no-dev-folder` skips that and clears any earlier
-  registration). From then on, edit locally, recompile locally (`tsc` or the language-appropriate
+  local dev folder automatically. From then on, edit locally, recompile locally (`tsc` or the language-appropriate
   equivalent), and `apify call` again - no `apify push`/build in between. `apify call --no-dev-folder`
   runs once from the built image alone without touching the registration. Dependency changes still need
   a real rebuild. To register a folder by hand (e.g. a different one than the pushed directory), use

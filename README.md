@@ -45,9 +45,8 @@ the single local user, with no error either way - see `requirements/cli.md`'s Us
 After the one push+build above, register your Actor's local source folder so every future run picks up
 local edits without a rebuild. An `apify-cli` that knows about the runtime does this for you: when
 `APIFY_CLIENT_BASE_URL` points at the runtime, `apify push` registers the pushed folder as the dev folder
-right after uploading it (`apify push --no-dev-folder` skips that and clears any earlier registration),
-and `apify call --no-dev-folder` runs once from the built image alone without touching the registration.
-Against the real Apify platform both flags are no-ops. To register by hand instead:
+right after uploading it, and `apify call --no-dev-folder` runs once from the built image alone without
+touching the registration. Against the real Apify platform the flag is a no-op. To register by hand instead:
 
 ```bash
 apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/sample_actor_ts"'
