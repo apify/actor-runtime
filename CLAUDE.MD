@@ -9,8 +9,8 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - Run the container `docker run --rm -p 3333:3333 -p 3000:3000 -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
     - `-v "$(pwd)/data:/data"` shared volumes `data` is used to store internal actor runtime data. When exposed it can be directly inspected to determine internal state and storage backend (It is not recommended to manually edit those files. Any edit should be done through http API call).
 - Podman works the same way - mount Podman's Docker-compatible API socket where the runtime expects the Docker one:
-  `sudo systemctl enable --now podman.socket && podman build -t actor-runtime . && sudo podman run --rm -p 3333:3333 -p 3000:3000 -v /run/podman/podman.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
-  (rootless: mount `$XDG_RUNTIME_DIR/podman/podman.sock` instead). See README.md's "Running with Podman" section for the details.
+  `sudo systemctl enable --now podman.socket && podman build -t actor-runtime . && mkdir -p data && sudo podman run --rm -p 3333:3333 -p 3000:3000 -v /run/podman/podman.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
+  (rootless: mount `$XDG_RUNTIME_DIR/podman/podman.sock` instead). Unlike Docker, Podman does not create a missing `data` directory for the mount, hence the `mkdir -p`. See README.md's "Running with Podman" section for the details.
 
 ## Work through CLI
 

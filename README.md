@@ -15,6 +15,7 @@ See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 
 ```bash
 docker build -t actor-runtime .
+mkdir -p data
 docker run --rm -p 3333:3333 -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd)/data:/data" \
@@ -50,6 +51,7 @@ difference is which socket you mount.
 sudo systemctl enable --now podman.socket   # one-time: serve Podman's API socket
 
 podman build -t actor-runtime .
+mkdir -p data
 sudo podman run --rm -p 3333:3333 -p 3000:3000 \
   -v /run/podman/podman.sock:/var/run/docker.sock \
   -v "$(pwd)/data:/data" \
@@ -62,6 +64,7 @@ works the same way with its `$XDG_RUNTIME_DIR/docker.sock`. The socket can also 
 path together with `-e DOCKER_HOST=unix:///that/path`.
 
 ```bash
+mkdir -p data
 podman run --rm -p 3333:3333 -p 3000:3000 \
   -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
   -v "$(pwd)/data:/data" \
@@ -70,6 +73,8 @@ podman run --rm -p 3333:3333 -p 3000:3000 \
 
 Good to know:
 
+- Podman does not create a missing host directory for a bind mount (Docker does), hence the
+  `mkdir -p data` before `podman run`. `apify runtime start` creates its data directory itself.
 - Actors run on the engine whose socket you mount, so a dev folder registered for the bind-mount dev
   loop below is a path on the machine that engine runs on (inside the VM for `podman machine`), and
   under a rootless engine it must be readable by that user.
