@@ -340,13 +340,16 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 				expect(push.build.status).toBe('SUCCEEDED');
 				registerDevFolder(push.actor.id, devFolder, env);
 
-				// `apify call` streams the run log; a FAILED run makes it exit non-zero, which throws here.
-				const output = apifyAllOutput(['call'], { cwd: entryActorDir, env });
-				expect(output).toContain('starts through ./entry.sh in its working directory');
-				expect(output).toContain('entry.sh from the image: /apify-runtime-entrypoint/entry.sh');
+				const call = JSON.parse(apify(['call', '--json'], { cwd: entryActorDir, env })) as CallResult;
+				expect(call.run.status).toBe('SUCCEEDED');
+				// The stored log, not `apify call`'s streamed copy: for an Actor that exits within milliseconds
+				// the CLI's stream can close before its last lines are flushed, on any engine.
+				const log = apify(['api', 'GET', `actor-runs/${call.run.id}/log`], { cwd: REPO_ROOT, env });
+				expect(log).toContain('starts through ./entry.sh in its working directory');
+				expect(log).toContain('entry.sh from the image: /apify-runtime-entrypoint/entry.sh');
 				// The dev folder, not the image's /app, is what the run sees in the working directory.
-				expect(output).toContain('only-in-dev-folder.txt');
-				expect(output).toContain('run-body-done');
+				expect(log).toContain('only-in-dev-folder.txt');
+				expect(log).toContain('run-body-done');
 			} finally {
 				rmSync(entryActorDir, { recursive: true, force: true });
 				rmSync(devFolder, { recursive: true, force: true });
