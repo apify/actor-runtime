@@ -10,6 +10,7 @@ import * as tar from 'tar-stream';
 import {
 	chooseDefaultNetworkRoute,
 	defaultGatewayFromRouteTable,
+	detectResourceLimitSupport,
 	DockerDriver,
 	hostAddressSeenFromContainers,
 } from '../../src/driver/docker-driver.js';
@@ -1660,6 +1661,86 @@ describe('defaultGatewayFromRouteTable', () => {
 		expect(defaultGatewayFromRouteTable(table)).toBe('10.0.2.2');
 		expect(defaultGatewayFromRouteTable('Iface\tDestination\tGateway\neth0\t0002000A\t00000000\n')).toBeUndefined();
 		expect(defaultGatewayFromRouteTable('')).toBeUndefined();
+	});
+});
+
+describe('resource limits the engine cannot apply are left out (rootless Podman without a delegated cgroup controller)', () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	function stubWithEngine(components: string[], cgroupControllers: unknown) {
+		vi.stubEnv('HOSTNAME', '');
+		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
+		const stub = stubDockerForNetwork(network);
+		(stub.docker as unknown as { version: unknown }).version = vi.fn(async () => ({
+			Components: components.map((Name) => ({ Name })),
+		}));
+		(stub.docker.modem as unknown as { dial: unknown }).dial = vi.fn(
+			(_options: unknown, callback: (error: Error | null, data: unknown) => void) =>
+				callback(null, { host: { cgroupControllers } }),
+		);
+		return stub;
+	}
+
+	async function hostConfigOfOneRun(stub: ReturnType<typeof stubDockerForNetwork>, driver: DockerDriver) {
+		const outcomePromise = driver.startRun(
+			{ runId: 'run-limits', imageId: 'fake-image', env: {}, memoryMbytes: 1024, timeoutSecs: 60 },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+		return stub.createContainer.mock.calls[0]![0].HostConfig!;
+	}
+
+	it("Podman reporting only memory and pids controllers: the run gets its memory limit but no CPU quota, and init warns once naming 'cpu'", async () => {
+		const stub = stubWithEngine(['Podman Engine', 'Conmon'], ['memory', 'pids']);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await driver.init();
+
+		expect(
+			warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes("'cpu' cgroup controller")),
+		).toHaveLength(1);
+		const hostConfig = await hostConfigOfOneRun(stub, driver);
+		expect(hostConfig.Memory).toBe(1024 * 1024 * 1024);
+		expect(hostConfig.CpuQuota).toBeUndefined();
+		expect(hostConfig.CpuPeriod).toBeUndefined();
+		warn.mockRestore();
+	});
+
+	it('Podman reporting cpu and memory, or Docker (whose /version has no Podman component): every limit is applied, no warning', async () => {
+		for (const [components, controllers] of [
+			[['Podman Engine'], ['cpu', 'memory', 'pids']],
+			[['Engine', 'containerd'], undefined],
+		] as Array<[string[], unknown]>) {
+			const stub = stubWithEngine(components, controllers);
+			const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+			await driver.init();
+			expect(warn.mock.calls.map((call) => String(call[0])).some((m) => m.includes('cgroup controller'))).toBe(
+				false,
+			);
+			const hostConfig = await hostConfigOfOneRun(stub, driver);
+			expect(hostConfig.Memory).toBe(1024 * 1024 * 1024);
+			expect(hostConfig.CpuQuota).toBeGreaterThan(0);
+			warn.mockRestore();
+		}
+	});
+
+	it('detectResourceLimitSupport keeps every limit when the engine cannot be asked', async () => {
+		await expect(
+			detectResourceLimitSupport({
+				version: async () => {
+					throw new Error('no');
+				},
+			} as unknown as Docker),
+		).resolves.toEqual({
+			cpu: true,
+			memory: true,
+		});
 	});
 });
 

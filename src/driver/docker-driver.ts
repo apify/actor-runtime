@@ -154,6 +154,49 @@ function firstNonLoopbackIpv4(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>
 	return undefined;
 }
 
+/** Which per-container resource limits the engine can actually apply for the user it runs as. */
+export interface ResourceLimitSupport {
+	cpu: boolean;
+	memory: boolean;
+}
+
+const ALL_LIMITS_SUPPORTED: ResourceLimitSupport = { cpu: true, memory: true };
+
+/**
+ * Docker applies (or silently drops) whatever limits it is handed. Rootless Podman on cgroups v2 instead
+ * refuses to START a container whose limit needs a cgroup controller systemd did not delegate to the
+ * user - Ubuntu 22.04 delegates `memory` and `pids` but not `cpu`, so every run with a CPU quota died
+ * at start. Podman's own (non-Docker) info endpoint lists the controllers it can use; a limit whose
+ * controller is missing is left out, and `init` says so once. Anything unexpected keeps every limit.
+ */
+export async function detectResourceLimitSupport(docker: Docker): Promise<ResourceLimitSupport> {
+	try {
+		const version = (await docker.version()) as { Components?: Array<{ Name: string }> };
+		if (!version.Components?.some((component) => component.Name === 'Podman Engine')) return ALL_LIMITS_SUPPORTED;
+		const info = await new Promise<{ host?: { cgroupControllers?: unknown } }>((resolve, reject) => {
+			docker.modem.dial(
+				{ path: '/v4.0.0/libpod/info', method: 'GET', statusCodes: { 200: true, 500: 'server error' } },
+				(error: Error | null, data: unknown) =>
+					error ? reject(error) : resolve(data as { host?: { cgroupControllers?: unknown } }),
+			);
+		});
+		const controllers = info.host?.cgroupControllers;
+		if (!Array.isArray(controllers)) return ALL_LIMITS_SUPPORTED;
+		return { cpu: controllers.includes('cpu'), memory: controllers.includes('memory') };
+	} catch {
+		return ALL_LIMITS_SUPPORTED;
+	}
+}
+
+/** Both failures of a container that could start neither on `apify-local` nor on the engine's default
+ * network: the second is usually the one to act on, the first says why it was tried at all. */
+function bothStartFailures(onActorNetwork: unknown, onDefaultNetwork: unknown): Error {
+	return new Error(
+		`${(onDefaultNetwork as Error).message} (on the engine's default network, tried because the container ` +
+			`could not start on the ${NETWORK_NAME} network: ${(onActorNetwork as Error).message})`,
+	);
+}
+
 /** A container's address on `network`, else on whatever network it does have. */
 function containerAddress(info: Docker.ContainerInspectInfo, network: string | undefined): string | undefined {
 	const networks = info.NetworkSettings?.Networks ?? {};
@@ -549,6 +592,8 @@ export class DockerDriver implements Driver {
 	private actorNetworkUsable = true;
 	/** `chooseDefaultNetworkRoute`'s answer, computed once on first use. */
 	private defaultNetworkRoute: Promise<DefaultNetworkRoute> | undefined;
+	/** `detectResourceLimitSupport`'s answer from `init`. */
+	private resourceLimits: ResourceLimitSupport = ALL_LIMITS_SUPPORTED;
 	private readonly hostsFile: string;
 	private readonly routeFile: string;
 	private readonly networkInterfaces: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
@@ -589,6 +634,15 @@ export class DockerDriver implements Driver {
 
 		// A `docker.info()` failure must not make an otherwise-reachable daemon look unavailable.
 		await this.captureHostCapacity();
+		this.resourceLimits = await detectResourceLimitSupport(this.docker);
+		const unenforced = (['cpu', 'memory'] as const).filter((limit) => !this.resourceLimits[limit]);
+		if (unenforced.length > 0) {
+			console.warn(
+				`Per-run ${unenforced.join(' and ')} limits are not enforced: the engine reports no ` +
+					`${unenforced.map((limit) => `'${limit}'`).join('/')} cgroup controller available to it (rootless ` +
+					`Podman on a host that does not delegate it, or cgroups v1). Runs start without ${unenforced.length > 1 ? 'those limits' : 'that limit'}.`,
+			);
+		}
 
 		this.hostRouteEntry = `${CONTAINER_API_ALIAS}:${await hostAddressSeenFromContainers(this.hostsFile)}`;
 		this.apiHostEntry = this.hostRouteEntry;
@@ -954,12 +1008,13 @@ export class DockerDriver implements Driver {
 				...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 				HostConfig: {
 					...(await this.actorNetworkHostConfig(onActorNetwork)),
-					Memory: ctx.memoryMbytes * 1024 * 1024,
+					...(this.resourceLimits.memory ? { Memory: ctx.memoryMbytes * 1024 * 1024 } : {}),
 					// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 					// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
 					// validated for range only, so an over-capacity request still starts.
-					CpuPeriod: CPU_PERIOD_US,
-					CpuQuota: cpuQuotaFor(ctx.memoryMbytes),
+					...(this.resourceLimits.cpu
+						? { CpuPeriod: CPU_PERIOD_US, CpuQuota: cpuQuotaFor(ctx.memoryMbytes) }
+						: {}),
 					AutoRemove: false,
 					...(mounts.length > 0 ? { Mounts: mounts } : {}),
 					// Fixed 127.0.0.1-bound publish - lands on the developer's own host, not wherever the
@@ -1014,8 +1069,8 @@ export class DockerDriver implements Driver {
 				try {
 					if (debugPayload) await retry.putArchive(debugPayload.tar, { path: '/' });
 					await retry.start();
-				} catch {
-					throw error;
+				} catch (retryError) {
+					throw bothStartFailures(error, retryError);
 				}
 				onActorNetwork = false;
 				await this.markActorNetworkUnusable(error);
@@ -1455,7 +1510,7 @@ export class DockerDriver implements Driver {
 						: onActorNetwork
 							? { NetworkMode: NETWORK_NAME }
 							: {}),
-					Memory: BROWSER_VIEWER_MEMORY_BYTES,
+					...(this.resourceLimits.memory ? { Memory: BROWSER_VIEWER_MEMORY_BYTES } : {}),
 					AutoRemove: false,
 					Mounts: [{ Type: 'volume', Source: volumeName, Target: X11_SOCKET_DIR }],
 				},
@@ -1489,8 +1544,12 @@ export class DockerDriver implements Driver {
 				// Same one-shot fallback as `startRun`: a sidecar that cannot start on the Actor network
 				// but does on the engine's default one marks the network unusable for everything after it.
 				if (!this.actorNetworkUsable) throw error;
-				const handle = await launch(false).catch(() => undefined);
-				if (!handle) throw error;
+				let handle: BrowserViewerHandle;
+				try {
+					handle = await launch(false);
+				} catch (retryError) {
+					throw bothStartFailures(error, retryError);
+				}
 				await this.markActorNetworkUnusable(error);
 				return handle;
 			}

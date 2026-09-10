@@ -89,7 +89,11 @@ Good to know:
   as on the platform. The runtime qualifies it to `docker.io/...` before building, so Podman resolves it
   without any `unqualified-search-registries` entry in `registries.conf`. The build log shows the
   substitution.
-- Rootless engines on a cgroups v1 host do not apply the per-run memory and CPU limits.
+- A rootless engine can only enforce the per-run limits whose cgroup controllers are delegated to your
+  user: on cgroups v1 none are, and Ubuntu 22.04 delegates `memory` and `pids` but not `cpu`. The runtime
+  asks Podman which controllers it has, leaves out the limits it cannot apply, and says so at startup;
+  runs still start. (To get CPU limits under rootless Podman on Ubuntu 22.04, delegate the controller:
+  `sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload`, then log out and in.)
 - If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
   stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
 - `podman images` lists the images the runtime builds as `docker.io/actor-runtime/<actor>:<buildId>`.
