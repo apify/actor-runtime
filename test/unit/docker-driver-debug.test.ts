@@ -518,7 +518,11 @@ describe('DockerDriver.startRun - debug mode (actor-driver.md: "Debug mode")', (
 			const [options] = stub.createContainer.mock.calls[0]!;
 			expect(options.HostConfig?.Mounts).toEqual([
 				{ Type: 'bind', Source: '/host/src', Target: '/usr/src/app' },
-				{ Type: 'volume', Source: '', Target: '/usr/src/app/node_modules' },
+				{
+					Type: 'volume',
+					Source: expect.stringMatching(/^actor-runtime-node-modules-/),
+					Target: '/usr/src/app/node_modules',
+				},
 			]);
 			expect(options.ExposedPorts).toEqual({ '9229/tcp': {} });
 			expect(options.HostConfig?.PortBindings).toEqual({

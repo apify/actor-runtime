@@ -51,8 +51,12 @@ export function stubDockerForRun() {
 	// Typed with the real `dockerode` parameter shape so `mock.calls[0]` is genuinely a
 	// `[Docker.ContainerCreateOptions]` tuple below - no unsound cast needed to read it back.
 	const createContainer = vi.fn(async (_options: Docker.ContainerCreateOptions) => container);
+	// A `devMount` run removes its named `node_modules` volume after the container.
+	const volumeRemove = vi.fn(async (_options?: Record<string, unknown>) => undefined);
+	const getVolume = vi.fn((_name: string) => ({ remove: volumeRemove }));
 	const docker = {
 		createContainer,
+		getVolume,
 		modem: { demuxStream },
 	} as unknown as Docker;
 
@@ -60,6 +64,8 @@ export function stubDockerForRun() {
 		docker,
 		container,
 		createContainer,
+		getVolume,
+		volumeRemove,
 		/** Simulates `container.wait()` resolving - the container process has exited. */
 		triggerContainerExit(statusCode = 0): void {
 			resolveWait({ StatusCode: statusCode });

@@ -220,6 +220,10 @@ function bothStartFailures(onActorNetwork: unknown, onDefaultNetwork: unknown): 
 	);
 }
 
+function devNodeModulesVolumeName(runId: string): string {
+	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
+}
+
 /** A container's address on `network`, else on whatever network it does have. */
 function containerAddress(info: Docker.ContainerInspectInfo, network: string | undefined): string | undefined {
 	const networks = info.NetworkSettings?.Networks ?? {};
@@ -244,6 +248,10 @@ const BROWSER_VIEWER_LABEL = 'actor-runtime.browserViewer';
 const BROWSER_VIEWER_IMAGE_REPO = `${LOCAL_IMAGE_PREFIX}actor-runtime/browser-viewer`;
 /** Shared between the Actor container and the sidecar through a tmpfs volume. */
 const X11_SOCKET_DIR = '/tmp/.X11-unix';
+/** Name prefix of the per-run `node_modules` volume of a `devMount` run (`buildDevMounts`); the run id
+ * follows. Named, not anonymous, because Podman 3.x refuses a volume mount without a source ("must set
+ * source volume"). Removed with the run, and swept by this prefix after a restart. */
+const DEV_NODE_MODULES_VOLUME_PREFIX = 'actor-runtime-node-modules-';
 /** Reachable only on `apify-local`; never published on the host. */
 const BROWSER_VIEWER_VNC_PORT = 5900;
 const BROWSER_VIEWER_MEMORY_BYTES = 256 * 1024 * 1024;
@@ -1036,7 +1044,7 @@ export class DockerDriver implements Driver {
 
 		// The X-socket volume is the only change a browser-view run makes to the Actor's container.
 		const mounts: Docker.MountSettings[] = [
-			...(ctx.devMount ? this.buildDevMounts(ctx.devMount) : []),
+			...(ctx.devMount ? this.buildDevMounts(ctx.devMount, ctx.runId) : []),
 			...(ctx.x11SocketVolume
 				? [{ Type: 'volume' as const, Source: ctx.x11SocketVolume, Target: X11_SOCKET_DIR }]
 				: []),
@@ -1208,10 +1216,10 @@ export class DockerDriver implements Driver {
 			await sampler?.stop();
 			this.timedOutRuns.delete(ctx.runId);
 			this.runContainers.delete(ctx.runId);
-			// `{ v: true }` also removes the container's anonymous volumes - without it, the anonymous
-			// `node_modules` volume `buildDevMounts` adds for a `devMount` run would leak one per run,
-			// forever. Harmless for a run with no `devMount`: no anonymous volumes to remove.
+			// `{ v: true }` also removes any anonymous volumes; the named per-run `node_modules` volume of a
+			// `devMount` run (`buildDevMounts`) is not covered by it and goes separately, after the container.
 			await container.remove({ v: true }).catch(() => undefined);
+			if (ctx.devMount) await this.removeVolumeWithRetry(devNodeModulesVolumeName(ctx.runId));
 		}
 	}
 
@@ -1239,13 +1247,17 @@ export class DockerDriver implements Driver {
 
 	/** The two `HostConfig.Mounts` entries for a `devMount` run: a read-write bind for the dev folder
 	 * itself (`Mounts`, not `Binds` - a `Mounts`-type bind errors on a missing source instead of silently
-	 * auto-creating one), plus an anonymous volume (empty `Source`) over `node_modules` - Docker copies
-	 * the image's existing contents into it before mounting, preserving the image's installed
-	 * dependencies underneath the bind (a *named* volume would start empty; a plain bind would erase it). */
-	private buildDevMounts(devMount: DevFolderMount): Docker.MountSettings[] {
+	 * auto-creating one), plus a fresh per-run volume over `node_modules` - the engine creates it at
+	 * container creation and copies the image's existing contents into it before mounting, preserving the
+	 * image's installed dependencies underneath the bind (a plain bind would erase them). */
+	private buildDevMounts(devMount: DevFolderMount, runId: string): Docker.MountSettings[] {
 		return [
 			{ Type: 'bind', Source: devMount.localDevFolder, Target: devMount.imageWorkingDirectory },
-			{ Type: 'volume', Source: '', Target: `${devMount.imageWorkingDirectory}/node_modules` },
+			{
+				Type: 'volume',
+				Source: devNodeModulesVolumeName(runId),
+				Target: `${devMount.imageWorkingDirectory}/node_modules`,
+			},
 		];
 	}
 
@@ -1673,6 +1685,12 @@ export class DockerDriver implements Driver {
 		});
 		for (const volume of viewerVolumes ?? []) {
 			await this.removeVolumeWithRetry(volume.Name);
+		}
+		const { Volumes: devVolumes } = await this.docker.listVolumes({
+			filters: JSON.stringify({ name: [DEV_NODE_MODULES_VOLUME_PREFIX] }),
+		});
+		for (const volume of devVolumes ?? []) {
+			if (volume.Name.startsWith(DEV_NODE_MODULES_VOLUME_PREFIX)) await this.removeVolumeWithRetry(volume.Name);
 		}
 	}
 }

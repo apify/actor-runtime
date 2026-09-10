@@ -357,7 +357,11 @@ describe('DockerDriver.startRun - the X-socket volume mount', () => {
 		const [options] = stub.createContainer.mock.calls[0]!;
 		expect(options.HostConfig?.Mounts).toEqual([
 			{ Type: 'bind', Source: '/host/src', Target: '/usr/src/app' },
-			{ Type: 'volume', Source: '', Target: '/usr/src/app/node_modules' },
+			{
+				Type: 'volume',
+				Source: expect.stringMatching(/^actor-runtime-node-modules-/),
+				Target: '/usr/src/app/node_modules',
+			},
 			{ Type: 'volume', Source: 'actor-runtime-x11-run-bv-2', Target: '/tmp/.X11-unix' },
 		]);
 

@@ -312,7 +312,11 @@ describe('DockerDriver.startRun - dev-folder mount composition (actor-driver.md:
 		const [options] = stub.createContainer.mock.calls[0]!;
 		expect(options.HostConfig?.Mounts).toEqual([
 			{ Type: 'bind', Source: '/host/src', Target: '/usr/src/app' },
-			{ Type: 'volume', Source: '', Target: '/usr/src/app/node_modules' },
+			{
+				Type: 'volume',
+				Source: expect.stringMatching(/^actor-runtime-node-modules-/),
+				Target: '/usr/src/app/node_modules',
+			},
 		]);
 		expect(options.HostConfig?.Binds).toBeUndefined();
 
