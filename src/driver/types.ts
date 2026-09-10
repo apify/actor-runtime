@@ -35,6 +35,20 @@ export interface RunContext {
 	timeoutSecs: number;
 	devMount?: DevFolderMount;
 	debug?: DebugRunTarget;
+	/** Volume from `BrowserViewerHandle`, mounted over the Actor container's `/tmp/.X11-unix`. */
+	x11SocketVolume?: string;
+}
+
+export interface BrowserViewerTarget {
+	runId: string;
+	interactive: boolean;
+}
+
+/** A started sidecar: its VNC address on `apify-local`, and the X-socket volume the Actor container must mount. */
+export interface BrowserViewerHandle {
+	vncHost: string;
+	vncPort: number;
+	x11SocketVolume: string;
 }
 
 /** What `Driver.inspectDebugTarget` reads off a run's resolved build image, for
@@ -178,4 +192,11 @@ export interface Driver {
 	/** Reads back the image's `Config.Cmd`/`Config.Entrypoint` and env for
 	 * `services/debug-mode.ts: resolveDebugPlan`. Called only when the run's Actor has debug mode on. */
 	inspectDebugTarget(imageId: string): Promise<InspectedDebugTarget>;
+
+	/** Starts the run's browser-view sidecar (called before the run's own container). Rejects when the
+	 * runtime is not running from its own built image (no sidecar payload on disk). */
+	startBrowserViewer(target: BrowserViewerTarget): Promise<BrowserViewerHandle>;
+
+	/** Removes the run's sidecar and volume. Idempotent; never rejects. */
+	stopBrowserViewer(runId: string): Promise<void>;
 }

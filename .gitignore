@@ -16,6 +16,8 @@ dist/
 *.tsbuildinfo
 sample_actor_ts/node_modules/
 sample_actor_ts/dist/
+sample_actor_playwright/node_modules/
+sample_actor_playwright/dist/
 sample_actor_py/__pycache__/
 sample_actor_py/.venv/
 .npm/

@@ -6,7 +6,7 @@
 # `--platform=$BUILDPLATFORM`: this stage's whole output is architecture-independent (a pure-Python
 # wheel plus a .py file, tarred), so on a multi-arch build it runs once natively on the builder rather
 # than once per target under QEMU. Requires BuildKit, which is the default builder in Docker >= 23.
-FROM --platform=$BUILDPLATFORM python:3.11-slim AS debugpy-payload
+FROM --platform=$BUILDPLATFORM docker.io/library/python:3.11-slim AS debugpy-payload
 ARG DEBUGPY_VERSION=1.8.21
 # Must match `services/debug-mode.ts`'s `PYTHON_DEBUG_PAYLOAD_DIR` - the in-Actor-container path the
 # tar is extracted to.
@@ -29,10 +29,26 @@ import debugpy._version as v; \
 print(v.get_versions()['version'])" > /payload/debugpy-version.txt
 RUN tar -cf /payload/debugpy-payload.tar -C /payload/root .
 
+# --- Browser-view sidecar: an Alpine rootfs with x11vnc, tarred so the runtime can `docker import` it at
+# run time without a registry. Not pinned to $BUILDPLATFORM: it runs on the Actor containers' daemon, so it
+# must be the target architecture's.
+FROM docker.io/library/alpine:3.21 AS browser-viewer-rootfs
+RUN apk add --no-cache x11vnc
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+COPY docker/browser-viewer.sh /apify-browser-viewer.sh
+RUN chmod 755 /apify-browser-viewer.sh
+
+# Tars the stage above and records its content hash, which the runtime uses as the imported image's tag.
+FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.21 AS browser-viewer-payload
+COPY --from=browser-viewer-rootfs / /rootfs
+RUN mkdir -p /payload \
+	&& tar -cf /payload/rootfs.tar -C /rootfs . \
+	&& sha256sum /payload/rootfs.tar | cut -c1-16 > /payload/version.txt
+
 # Also architecture-independent: this stage only runs `tsc`, and the `dist/` it hands to the final
 # stage is plain JavaScript. The final stage does its own `pnpm install --prod`, so the target
 # architecture's native bindings still come from a native (emulated) install there.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/node:24-bookworm-slim AS builder
 
 WORKDIR /usr/src/app
 
@@ -46,7 +62,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN pnpm run build
 
-FROM node:24-bookworm-slim
+FROM docker.io/library/node:24-bookworm-slim
 
 WORKDIR /usr/src/app
 
@@ -64,8 +80,13 @@ COPY --from=builder /usr/src/app/dist ./dist
 COPY --from=debugpy-payload /payload/debugpy-payload.tar /opt/apify-debug-payload/debugpy-payload.tar
 COPY --from=debugpy-payload /payload/debugpy-version.txt /opt/apify-debug-payload/debugpy-version.txt
 
-# The runtime talks to the host Docker socket via dockerode (no docker CLI needed in-image) and
-# persists all storages under /data - mount both when running the container.
+# Matches config.ts's browserViewerPayloadDir() default.
+COPY --from=browser-viewer-payload /payload/rootfs.tar /opt/apify-browser-viewer/rootfs.tar
+COPY --from=browser-viewer-payload /payload/version.txt /opt/apify-browser-viewer/version.txt
+
+# The runtime talks to the host's Docker-Engine-API socket via dockerode (no docker CLI needed in-image;
+# Podman's Docker-compatible socket works the same way) and persists all storages under /data - mount
+# both when running the container.
 VOLUME ["/data"]
 ENV ACTOR_RUNTIME_DATA_DIR=/data
 

@@ -1,0 +1,22 @@
+{
+	"$schema": "https://apify.com/schemas/v1/input.ide.json",
+	"title": "Python Playwright sample actor input",
+	"type": "object",
+	"schemaVersion": 1,
+	"properties": {
+		"start_urls": {
+			"title": "Start URLs",
+			"type": "array",
+			"description": "URLs to start with.",
+			"editor": "requestListSources",
+			"prefill": [{ "url": "https://crawlee.dev/" }]
+		},
+		"max_requests_per_crawl": {
+			"title": "Max requests per crawl",
+			"type": "integer",
+			"description": "Maximum number of pages the crawler opens, following same-hostname links from the start URLs. One dataset item is pushed per page.",
+			"default": 3,
+			"minimum": 1
+		}
+	}
+}

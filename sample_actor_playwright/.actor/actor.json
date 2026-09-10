@@ -1,0 +1,14 @@
+{
+	"$schema": "https://apify.com/schemas/v1/actor.ide.json",
+	"actorSpecification": 1,
+	"name": "my-playwright-actor",
+	"title": "Playwright sample actor for actor-runtime",
+	"description": "Crawls up to maxRequestsPerCrawl same-hostname pages from startUrls with a headful Chrome driven by Playwright, pushing one dataset item per page.",
+	"version": "0.0",
+	"buildTag": "latest",
+	"meta": {
+		"templateId": "ts-crawlee-playwright-chrome"
+	},
+	"inputSchema": "./input_schema.json",
+	"dockerfile": "../Dockerfile"
+}

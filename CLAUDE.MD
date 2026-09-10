@@ -8,6 +8,9 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - Build the docker image `docker build -t actor-runtime .`
 - Run the container `docker run --rm -p 3333:3333 -p 3000:3000 -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
     - `-v "$(pwd)/data:/data"` shared volumes `data` is used to store internal actor runtime data. When exposed it can be directly inspected to determine internal state and storage backend (It is not recommended to manually edit those files. Any edit should be done through http API call).
+- Podman (3.4 or newer) works the same way - mount Podman's Docker-compatible API socket where the runtime expects the Docker one:
+  `sudo systemctl enable --now podman.socket && podman build -t actor-runtime . && mkdir -p data && sudo podman run --rm -p 3333:3333 -p 3000:3000 -v /run/podman/podman.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
+  (rootless: mount `$XDG_RUNTIME_DIR/podman/podman.sock` instead and drop `sudo`). Unlike Docker, Podman does not create a missing `data` directory for the mount, hence the `mkdir -p`. See README.md's "Running with Podman" section for the details.
 
 ## Work through CLI
 
@@ -46,6 +49,12 @@ Local Actor runtime is an Actor development tool for developing, running, and de
   when you expect a slow attach. Clear the toggle with
   `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'` to go back to running
   normally.
+- To watch the browser of a Playwright/Puppeteer Actor while it runs, turn browser view on for it once:
+  `apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'` (`"interactive": true` also
+  sends mouse/keyboard input). Every subsequent run prints a viewer URL in its log,
+  `http://localhost:3000/runs/<runId>/browser` - a live view of the display the Actor's browser draws on. The
+  browser must run headful to show anything (Apify's templates default to headless, which shows as a black
+  display); see `sample_actor_playwright` and `sample_actor_playwright_py`. Clear with `--body '{"enabled": false}'`.
 - To test how an Actor handles platform migrations: while a run is `RUNNING`, call
   `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
   detail page. The run gets the platform migration experience: a `migrating` event, its container

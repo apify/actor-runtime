@@ -22,22 +22,44 @@
  * so `abortBuild` can call `.abort()` on the live one. Runs are cancelled the same way as before -
  * `container.stop()` - since there is no HTTP request to abort there.
  *
- * Unverified in this sandbox: there is no Docker socket here, so `init()` always finds
- * `available: false` and every build/run fails fast with a clear status message instead of hanging.
- * The rest of the runtime (storages, actors-as-records, console) is unaffected.
+ * Engine neutrality: everything here goes through the Docker Engine API, which Podman also serves
+ * (`podman system service` / the `podman.socket` unit), so the same driver runs Actors on Docker and on
+ * Podman 3.4 or newer, rootful or rootless. Where the engines genuinely differ, the difference is handled
+ * at the code that meets it: bind-mount sources Podman would auto-create (`probeDevFolder`,
+ * `assertDevFolderStillPresent`); Podman's `system_cpu_usage` scale (`cpuUsageSnapshotOf`); how Actor
+ * containers reach this API when this container is not on `apify-local` (`selfAttachToNetwork`,
+ * `chooseDefaultNetworkRoute` - Podman 3.x never uses the network at all); resource limits a rootless
+ * engine cannot apply (`detectResourceLimitSupport`); and the image names and volume options Podman 3.x
+ * needs (`LOCAL_IMAGE_PREFIX`, `ensureBrowserViewerImage`, `buildDevMounts`, `startBrowserViewer`).
+ * Without any reachable socket, `init()` finds `available: false` and every build/run fails fast with a
+ * clear status message instead of hanging; the rest of the runtime (storages, actors-as-records,
+ * console) is unaffected.
  */
 import { PassThrough } from 'node:stream';
+import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import * as os from 'node:os';
+import { createServer } from 'node:net';
+import * as path from 'node:path';
 import Docker from 'dockerode';
 import * as tar from 'tar-stream';
 
-import { CONTAINER_API_ALIAS, debugpyPayloadTarPath, debugpyVersionFilePath } from '../config.js';
+import {
+	API_PORT,
+	CONTAINER_API_ALIAS,
+	browserViewerRootfsTarPath,
+	browserViewerVersionFilePath,
+	debugpyPayloadTarPath,
+	debugpyVersionFilePath,
+} from '../config.js';
 import { CPU_PERIOD_US, cpuQuotaFor, dedicatedCpusFor } from '../resources.js';
 import { normalizeEntryName } from './tar-entry-name.js';
 import type { SourceFile } from '../storage/entities.js';
 import {
 	DebugPortInUseError,
 	DriverTimedOutError,
+	type BrowserViewerHandle,
+	type BrowserViewerTarget,
 	type BuildContext,
 	type BuildOutcome,
 	type DevFolderMount,
@@ -51,6 +73,203 @@ import {
 } from './types.js';
 
 const NETWORK_NAME = 'apify-local';
+
+/**
+ * Prefix for the images this driver builds or imports for its own use and later looks up BY NAME (the
+ * browser-view sidecar, the dev-folder probe). A bare `actor-runtime/...` is a short name: Docker and
+ * Podman 4 resolve it to the local image, but Podman 3.x resolves short names only through its search
+ * registries and reports the locally stored `localhost/actor-runtime/...` as "image not known". Naming
+ * the image `localhost/...` outright is what every engine stores it as anyway. Actor images need no
+ * prefix: they are always referenced by image id.
+ */
+const LOCAL_IMAGE_PREFIX = 'localhost/';
+
+/** The names an engine gives the host in every container's hosts file: Podman (3.3+) the first, Docker
+ * Desktop the second (Docker Engine adds neither). */
+const ENGINE_HOST_NAMES = ['host.containers.internal', 'host.docker.internal'];
+
+/**
+ * The address Actor containers can reach the host at, read from this process's own hosts file (this
+ * container got it from the same engine, on the same default network, as every Actor container will).
+ * Falls back to the engine keyword `host-gateway` (Docker 20.10+, Podman 4.1+) when the file has no such
+ * entry - on Docker Engine, or when this process runs outside a container.
+ */
+export async function hostAddressSeenFromContainers(hostsFile: string): Promise<string> {
+	return (await engineHostEntry(hostsFile)) ?? 'host-gateway';
+}
+
+async function engineHostEntry(hostsFile: string): Promise<string | undefined> {
+	const content = await readFile(hostsFile, 'utf8').catch(() => '');
+	for (const line of content.split('\n')) {
+		const fields = line.split('#')[0]!.trim().split(/\s+/);
+		if (fields.length >= 2 && fields.slice(1).some((name) => ENGINE_HOST_NAMES.includes(name))) return fields[0]!;
+	}
+	return undefined;
+}
+
+/** What this process can learn about its own container's network from the inside, with no engine call. */
+export interface OwnNetworkView {
+	/** Address the engine hands containers for the host (`hostAddressSeenFromContainers`), or undefined for `host-gateway`. */
+	hostAddress: string | undefined;
+	/** This container's default gateway, from `/proc/net/route`. */
+	gateway: string | undefined;
+	/** This container's first non-loopback IPv4 address and the interface it sits on. */
+	own: { address: string; iface: string } | undefined;
+}
+
+/** How an Actor container on the engine's DEFAULT network reaches this API (`actorsOnDefaultNetwork`). */
+export interface DefaultNetworkRoute {
+	/** `ExtraHosts` entry for `apify-api`. */
+	extraHost: string;
+	/** Engine network mode the Actor container needs for that entry to work, if any. */
+	networkMode?: string;
+}
+
+const SLIRP4NETNS_GATEWAY = '10.0.2.2';
+const SLIRP4NETNS_INTERFACE = 'tap0';
+/** Podman's user-mode network with the host's loopback reachable at the gateway - Actors under rootless
+ * Podman before 4.0 need it, where the engine's own host entry IS that gateway and is otherwise blocked. */
+const SLIRP4NETNS_HOST_LOOPBACK_MODE = 'slirp4netns:allow_host_loopback=true';
+
+/**
+ * Picks the route for Actor containers on the engine's default network. The engine's own host entry is
+ * the default. Two cases where that entry is this container's gateway need more: under slirp4netns the
+ * gateway only reaches the host's loopback when the Actor is started with `allow_host_loopback`
+ * (rootless Podman 3.x points `host.containers.internal` there); on a rootful bridge every Actor shares
+ * this container's bridge, so this container's own address is a direct route with no port-forward hop.
+ */
+export function chooseDefaultNetworkRoute(view: OwnNetworkView): DefaultNetworkRoute {
+	const { hostAddress, gateway, own } = view;
+	if (hostAddress && gateway && hostAddress === gateway) {
+		if (own?.iface === SLIRP4NETNS_INTERFACE || gateway === SLIRP4NETNS_GATEWAY) {
+			return { extraHost: `${CONTAINER_API_ALIAS}:${gateway}`, networkMode: SLIRP4NETNS_HOST_LOOPBACK_MODE };
+		}
+		if (own) return { extraHost: `${CONTAINER_API_ALIAS}:${own.address}` };
+	}
+	return { extraHost: `${CONTAINER_API_ALIAS}:${hostAddress ?? 'host-gateway'}` };
+}
+
+/** The default gateway from a Linux `/proc/net/route` (little-endian hex), or undefined. */
+export function defaultGatewayFromRouteTable(routeTable: string): string | undefined {
+	for (const line of routeTable.split('\n').slice(1)) {
+		const [, destination, gateway] = line.trim().split(/\s+/);
+		if (destination !== '00000000' || !gateway || gateway.length !== 8) continue;
+		const bytes = gateway.match(/../g)!.map((hex) => parseInt(hex, 16));
+		return bytes.reverse().join('.');
+	}
+	return undefined;
+}
+
+function firstNonLoopbackIpv4(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): OwnNetworkView['own'] {
+	for (const [iface, infos] of Object.entries(interfaces)) {
+		const info = infos?.find((i) => i.family === 'IPv4' && !i.internal);
+		if (info) return { address: info.address, iface };
+	}
+	return undefined;
+}
+
+/** Which per-container resource limits the engine can actually apply for the user it runs as. */
+export interface ResourceLimitSupport {
+	cpu: boolean;
+	memory: boolean;
+}
+
+const ALL_LIMITS_SUPPORTED: ResourceLimitSupport = { cpu: true, memory: true };
+
+/**
+ * Docker applies (or silently drops) whatever limits it is handed. Rootless Podman on cgroups v2 instead
+ * refuses to START a container whose limit needs a cgroup controller systemd did not delegate to the
+ * user - Ubuntu 22.04 delegates `memory` and `pids` but not `cpu`, so every run with a CPU quota died
+ * at start. Podman's own (non-Docker) info endpoint lists the controllers it can use; a limit whose
+ * controller is missing is left out, and `init` says so once. Anything unexpected keeps every limit.
+ */
+/** The engine behind the Docker API, as far as this driver needs to know: Podman's major version, or
+ * undefined for Docker (and for anything that does not identify itself). */
+export async function podmanMajorVersion(docker: Docker): Promise<number | undefined> {
+	try {
+		const version = (await docker.version()) as { Components?: Array<{ Name: string; Version?: string }> };
+		const podman = version.Components?.find((component) => component.Name === 'Podman Engine');
+		const major = podman?.Version ? Number.parseInt(podman.Version, 10) : Number.NaN;
+		return Number.isNaN(major) ? undefined : major;
+	} catch {
+		return undefined;
+	}
+}
+
+export async function detectResourceLimitSupport(docker: Docker): Promise<ResourceLimitSupport> {
+	try {
+		const version = (await docker.version()) as { Components?: Array<{ Name: string }> };
+		if (!version.Components?.some((component) => component.Name === 'Podman Engine')) return ALL_LIMITS_SUPPORTED;
+		const info = await new Promise<{ host?: { cgroupControllers?: unknown } }>((resolve, reject) => {
+			docker.modem.dial(
+				{ path: '/v4.0.0/libpod/info', method: 'GET', statusCodes: { 200: true, 500: 'server error' } },
+				(error: Error | null, data: unknown) =>
+					error ? reject(error) : resolve(data as { host?: { cgroupControllers?: unknown } }),
+			);
+		});
+		const controllers = info.host?.cgroupControllers;
+		if (!Array.isArray(controllers)) return ALL_LIMITS_SUPPORTED;
+		return { cpu: controllers.includes('cpu'), memory: controllers.includes('memory') };
+	} catch {
+		return ALL_LIMITS_SUPPORTED;
+	}
+}
+
+function devNodeModulesVolumeName(runId: string): string {
+	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
+}
+
+/** A command token the engine resolves against the working directory rather than `PATH`: `./x.sh`,
+ * `bin/x` - relative, with a slash. A bare `x.sh` goes through `PATH`, an absolute path is unaffected
+ * by what is mounted over the working directory. */
+function isWorkingDirectoryRelative(token: string): boolean {
+	return !token.startsWith('/') && token.includes('/');
+}
+
+function readStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+		stream.once('error', reject);
+		stream.once('end', () => resolve(Buffer.concat(chunks)));
+	});
+}
+
+/** Re-packs the single-file archive `getArchive` returns so its entries land under `directory` when
+ * extracted at `/`, with an explicit directory entry so no engine has to invent the parent. */
+async function repackUnderDirectory(archive: Buffer, directory: string): Promise<Buffer> {
+	const dir = directory.replace(/^\/+/, '');
+	const pack = tar.pack();
+	const extract = tar.extract();
+	const packed = readStream(pack);
+	pack.entry({ name: dir, type: 'directory', mode: 0o755 });
+	await new Promise<void>((resolve, reject) => {
+		extract.on('entry', (header, content, next) => {
+			const entry = pack.entry({ ...header, name: `${dir}/${header.name}` }, (error) => {
+				if (error) reject(error);
+				else next();
+			});
+			content.pipe(entry);
+		});
+		extract.once('error', reject);
+		extract.once('finish', resolve);
+		extract.end(archive);
+	});
+	pack.finalize();
+	return packed;
+}
+
+/** A container's address on `network`, else on whatever network it does have. */
+function containerAddress(info: Docker.ContainerInspectInfo, network: string | undefined): string | undefined {
+	const networks = info.NetworkSettings?.Networks ?? {};
+	const preferred = network ? networks[network]?.IPAddress : undefined;
+	return (
+		preferred ||
+		Object.values(networks).find((n) => n.IPAddress)?.IPAddress ||
+		info.NetworkSettings?.IPAddress ||
+		undefined
+	);
+}
 const RUN_LABEL = 'actor-runtime.runId';
 /** Marks a create-only dev-folder-probe container (`probeDevFolder` below) so `reconcileOrphans` can
  * sweep one that outlived its own removal call. */
@@ -58,31 +277,69 @@ const PROBE_LABEL = 'actor-runtime.devFolderProbe';
 /** Target path for the probe container's mount - arbitrary, since the probe is never started and
  * nothing ever reads from it. */
 const PROBE_MOUNT_TARGET = '/probe';
+/** On the browser-view sidecar container and its volume, so `reconcileOrphans` can sweep leftovers. */
+const BROWSER_VIEWER_LABEL = 'actor-runtime.browserViewer';
+/** Tagged with the payload's content hash, so a rebuilt runtime imports a fresh image. */
+const BROWSER_VIEWER_IMAGE_REPO = `${LOCAL_IMAGE_PREFIX}actor-runtime/browser-viewer`;
+/** Shared between the Actor container and the sidecar through a tmpfs volume. */
+const X11_SOCKET_DIR = '/tmp/.X11-unix';
+/** Name prefix of the per-run `node_modules` volume of a `devMount` run (`buildDevMounts`); the run id
+ * follows. Named, not anonymous, because Podman 3.x refuses a volume mount without a source ("must set
+ * source volume"). Removed with the run, and swept by this prefix after a restart. */
+const DEV_NODE_MODULES_VOLUME_PREFIX = 'actor-runtime-node-modules-';
+/** Where a `devMount` run keeps the image's own copy of an entrypoint file the bind mount would hide
+ * (`preserveHiddenEntrypoint`). */
+const PRESERVED_ENTRYPOINT_DIR = '/apify-runtime-entrypoint';
+
+/** The image command a `devMount` run starts through instead of its own, plus the tar that puts the
+ * preserved file in place before the container starts. */
+interface PreservedEntrypoint {
+	field: 'Entrypoint' | 'Cmd';
+	command: string[];
+	/** The image's own `Cmd`, restated whenever `Entrypoint` is overridden: an engine drops the image's
+	 * `Cmd` from a create request that sets `Entrypoint` (Docker and Podman alike), which would have run
+	 * the Xvfb wrapper with no program to wrap. */
+	cmd?: string[];
+	tar: Buffer;
+}
+/** Reachable only on `apify-local`; never published on the host. */
+const BROWSER_VIEWER_VNC_PORT = 5900;
+const BROWSER_VIEWER_MEMORY_BYTES = 256 * 1024 * 1024;
+const BROWSER_VIEWER_SCRIPT = '/apify-browser-viewer.sh';
+/** Names must match `docker/browser-viewer.sh`. */
+const BROWSER_VIEWER_INTERACTIVE_ENV = 'APIFY_BROWSER_VIEWER_INTERACTIVE';
+const BROWSER_VIEWER_PORT_ENV = 'APIFY_BROWSER_VIEWER_PORT';
+/** Removing a volume right after its last container can race the daemon ("volume is in use"). */
+const VOLUME_REMOVE_ATTEMPTS = 10;
+const VOLUME_REMOVE_RETRY_MS = 200;
 /** Tag for `ensureProbeImage`'s own minimal image - built and owned by this driver, never an Actor's.
  * An explicit `:probe` suffix, deliberately never `latest` (Docker's own implicit default for an
  * untagged name) - this image has nothing to do with an Actor's `latest`-tagged build, and an untagged
  * name would silently print as `...probe:latest` and invite exactly that confusion. */
-const PROBE_IMAGE_TAG = 'actor-runtime/dev-folder-probe:probe';
+const PROBE_IMAGE_TAG = `${LOCAL_IMAGE_PREFIX}actor-runtime/dev-folder-probe:probe`;
 /**
  * `FROM scratch` with nothing else would build fine but fails every `createContainer` against it with
  * HTTP 400 "no command specified" (moby refuses to create a container for an image with no `Cmd`/
  * `Entrypoint`) - which would look exactly like a bad candidate path if left undiagnosed. `CMD` fixes
  * that; the command itself is never exec'd, since `probeDevFolder`'s container is created but never
- * started. Verified empirically against a real daemon: builds and creates with no network access.
+ * started. Verified empirically against real Docker and Podman daemons: builds and creates with no
+ * network access.
  */
 const PROBE_DOCKERFILE = 'FROM scratch\nCMD ["/nonexistent"]\n';
-/** The daemon's own fixed error-message substring for a `Mounts`-type bind whose source is missing
- * (moby's `daemon/volume/mounts/validate.go: errBindSourceDoesNotExist`) - the one rejection shape
- * `classifyProbeError` reports as "does not exist" rather than a generic "could not verify". */
-const BIND_SOURCE_MISSING_SUBSTRING = 'bind source path does not exist';
-/** The daemon's own fixed error-message substring (moby's mount validation, `stat <path>: not a
- * directory`) for a bind source that exists but is a regular file, not a directory - reachable only
- * because the probe below appends `/.` to the candidate path (see `probeDevFolder`'s doc comment): a
- * trailing `/.` on a file path forces the stat that produces exactly this message, discriminating a file
- * from a directory in the same create-only call that already discriminates missing from present. The one
- * rejection shape `classifyProbeError` reports as "not a directory" rather than a generic "could not
- * verify", and never as "does not exist". */
-const NOT_A_DIRECTORY_SUBSTRING = 'not a directory';
+/** The host path the probe container binds read-only at `PROBE_MOUNT_TARGET`: the host's root, so the
+ * mount source always exists and the daemon never has to validate (or, on Podman, auto-create - see
+ * `probeDevFolder`) the candidate path itself. */
+const PROBE_MOUNT_SOURCE = '/';
+/** Response header of `HEAD /containers/{id}/archive?path=...` - base64 JSON of moby's
+ * `ContainerPathStat` (`name`, `size`, `mode`, `mtime`, `linkTarget`), identical on Podman. */
+const PATH_STAT_HEADER = 'x-docker-container-path-stat';
+/** Go `os.FileMode` type bits, as serialized into the stat header's `mode`. `GO_MODE_DIR` is bit 31, so a
+ * JS bitwise AND against it yields a negative int32 for a directory - non-zero, which is all the checks
+ * below need. */
+const GO_MODE_DIR = 0x80000000;
+const GO_MODE_SYMLINK = 0x08000000;
+/** Bounds `probeDevFolder`'s manual symlink following - a longer chain is reported `unknown`. */
+const MAX_SYMLINK_HOPS = 16;
 /** Docker daemon rejection substrings for "host port already bound" - covers both the classic and
  * newer moby wording. */
 const PORT_IN_USE_SUBSTRINGS = ['port is already allocated', 'address already in use'];
@@ -115,16 +372,99 @@ function hasStatusCode(error: unknown): error is Error & { statusCode: number } 
 	);
 }
 
-/** Classifies a `createContainer` rejection from `probeDevFolder`, most specific first - see
- * `DevFolderProbeFailureReason`'s doc comment in `driver/types.ts` for what each outcome means and why
- * a permission error/Docker Desktop file-sharing denial must never be asserted as "does not exist" or
- * "not a directory". */
-function classifyProbeError(error: unknown): DevFolderProbeFailureReason {
+/** Classifies a `createContainer` rejection from `probeDevFolder` - see `DevFolderProbeFailureReason`'s
+ * doc comment in `driver/types.ts`. The probe's mount source is always `/`, so a create rejection is
+ * never about the candidate path: it is either the daemon being gone or the probe image being gone. */
+function classifyProbeCreateError(error: unknown): DevFolderProbeFailureReason {
 	if (!hasStatusCode(error)) return 'unreachable';
 	if (error.statusCode === 404) return 'image-missing';
-	if (error.message.includes(BIND_SOURCE_MISSING_SUBSTRING)) return 'not-found';
-	if (error.message.includes(NOT_A_DIRECTORY_SUBSTRING)) return 'not-a-directory';
 	return 'unknown';
+}
+
+/** One parsed `PATH_STAT_HEADER`. `linkTarget` is only meaningful when `mode` carries `GO_MODE_SYMLINK`. */
+interface ProbeStat {
+	mode: number;
+	linkTarget: string;
+}
+
+type ProbeStatOutcome = { ok: true; stat: ProbeStat } | { ok: false; reason: DevFolderProbeFailureReason };
+
+/** Classifies an `infoArchive` (`HEAD .../archive`) rejection: the daemon answers 404 for a path that
+ * does not exist under the probe mount - the one case allowed to say "does not exist". Anything else the
+ * daemon answered is "could not verify" (a permission problem, a Docker Desktop file-sharing denial); no
+ * answer at all is `unreachable`. */
+function classifyProbeStatError(error: unknown): DevFolderProbeFailureReason {
+	if (!hasStatusCode(error)) return 'unreachable';
+	if (error.statusCode === 404) return 'not-found';
+	return 'unknown';
+}
+
+/** Reads `PATH_STAT_HEADER` off the response `container.infoArchive` resolves with (dockerode hands back
+ * the raw `http.IncomingMessage` for this `HEAD` call). A response without a parseable header is
+ * `unknown`, never a guess. */
+function parseProbeStatResponse(response: unknown): ProbeStatOutcome {
+	const headers = (response as { headers?: Record<string, string | string[] | undefined> } | undefined)?.headers;
+	const raw = headers?.[PATH_STAT_HEADER];
+	const encoded = Array.isArray(raw) ? raw[0] : raw;
+	if (!encoded) return { ok: false, reason: 'unknown' };
+	try {
+		const parsed = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) as {
+			mode?: unknown;
+			linkTarget?: unknown;
+		};
+		if (typeof parsed.mode !== 'number') return { ok: false, reason: 'unknown' };
+		return {
+			ok: true,
+			stat: { mode: parsed.mode, linkTarget: typeof parsed.linkTarget === 'string' ? parsed.linkTarget : '' },
+		};
+	} catch {
+		return { ok: false, reason: 'unknown' };
+	}
+}
+
+/** Stats one path inside the (never-started) probe container, through the daemon's own archive-stat
+ * endpoint - the same resolution `docker cp` uses, which both Docker and Podman perform on a stopped
+ * container's bind mounts too. */
+async function statInProbe(container: Docker.Container, containerPath: string): Promise<ProbeStatOutcome> {
+	let response: unknown;
+	try {
+		response = await container.infoArchive({ path: containerPath });
+	} catch (error) {
+		return { ok: false, reason: classifyProbeStatError(error) };
+	}
+	// A `HEAD` response has no body, but the socket is only released once the message is consumed.
+	(response as { resume?: () => void } | undefined)?.resume?.();
+	return parseProbeStatResponse(response);
+}
+
+/** A TCP port that is free in this process's own network namespace right now - bound on loopback and
+ * released again, for a sidecar about to share that namespace (`startBrowserViewer`). */
+async function allocateFreePort(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const server = createServer();
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', () => {
+			const address = server.address();
+			server.close(() => {
+				if (address && typeof address === 'object') resolve(address.port);
+				else reject(new Error('Could not allocate a free port for the browser-view sidecar'));
+			});
+		});
+	});
+}
+
+/**
+ * Maps the `linkTarget` a symlink stat reports back to a host path. Docker resolves a link's target in
+ * the scope of the container's root filesystem and reports that absolute container path: a target that
+ * landed under the probe mount is reported with the `PROBE_MOUNT_TARGET` prefix (a relative link, or an
+ * absolute one pointing back inside), while a host-absolute target that escaped the mount is reported
+ * verbatim - which, since the mount source is the host's `/`, is already the host path. Podman follows
+ * symlinks itself before answering, so this never runs there.
+ */
+function hostPathOfLinkTarget(linkTarget: string): string {
+	if (linkTarget === PROBE_MOUNT_TARGET) return '/';
+	if (linkTarget.startsWith(`${PROBE_MOUNT_TARGET}/`)) return linkTarget.slice(PROBE_MOUNT_TARGET.length);
+	return linkTarget;
 }
 
 /** True when a `container.start()` rejection means the host debug port is already bound. */
@@ -156,10 +496,11 @@ function dockerfileTarball(contents: string): NodeJS.ReadableStream {
 	return pack;
 }
 
-/** The `cpu_stats` fields the sampler diffs between two of its own successive samples. */
+/** What the sampler diffs between two of its own successive samples: the container's cumulative CPU time
+ * (`cpu_stats.cpu_usage.total_usage`, nanoseconds on every daemon) and when the daemon read it. */
 interface CpuUsageSnapshot {
-	totalUsage: number;
-	systemUsage: number;
+	totalUsageNs: number;
+	readAtMs: number;
 }
 
 /**
@@ -177,15 +518,22 @@ function memoryUsageBytesExcludingCache(stats: Docker.ContainerStats): number | 
 }
 
 /**
- * Presence-and-finiteness guard for the two `cpu_stats` fields the delta reads. A missing field skips the
- * tick instead of throwing or producing a `NaN`. `online_cpus` is excluded: it has a sane `|| 1` fallback.
+ * Presence-and-finiteness guard for the one `cpu_stats` field the delta reads. A missing or non-finite
+ * `total_usage` skips the tick instead of throwing or producing a `NaN`. The read time is the daemon's own
+ * `read` timestamp when it parses, else this process's clock - the two differ only by the request's
+ * latency, which a one-second cadence makes negligible.
+ *
+ * Deliberately NOT `docker stats`' `cpu_delta / system_cpu_delta * online_cpus` formula: that one is only
+ * right when `system_cpu_usage` is the sum over all CPUs of the host's `/proc/stat` time, which Docker
+ * reports but Podman's Docker-compatible API does not (measured against a real Podman 4.9 daemon: a run
+ * throttled to 0.25 core came out as ~66% of one core, not ~25%). CPU-time-over-wall-time needs no
+ * daemon-specific field and agrees with the Docker formula on Docker to within a fraction of a percent.
  */
 function cpuUsageSnapshotOf(stats: Docker.ContainerStats): CpuUsageSnapshot | undefined {
-	const totalUsage = stats.cpu_stats?.cpu_usage?.total_usage;
-	const systemUsage = stats.cpu_stats?.system_cpu_usage;
-	if (typeof totalUsage !== 'number' || !Number.isFinite(totalUsage)) return undefined;
-	if (typeof systemUsage !== 'number' || !Number.isFinite(systemUsage)) return undefined;
-	return { totalUsage, systemUsage };
+	const totalUsageNs = stats.cpu_stats?.cpu_usage?.total_usage;
+	if (typeof totalUsageNs !== 'number' || !Number.isFinite(totalUsageNs)) return undefined;
+	const daemonReadAtMs = typeof stats.read === 'string' ? Date.parse(stats.read) : Number.NaN;
+	return { totalUsageNs, readAtMs: Number.isFinite(daemonReadAtMs) ? daemonReadAtMs : Date.now() };
 }
 
 /**
@@ -228,13 +576,11 @@ function startResourceSampler(
 		}
 
 		if (emit && previous) {
-			const cpuDelta = current.totalUsage - previous.totalUsage;
-			const systemDelta = current.systemUsage - previous.systemUsage;
-			const onlineCpus = stats.cpu_stats.online_cpus || 1;
-			// `systemDelta` is 0 only in a degenerate case (no host-wide CPU time elapsed between two
-			// samples, e.g. two calls landing on the very same daemon tick) - reported as 0% rather than
-			// producing NaN/Infinity.
-			const cpuPercentOfOneCore = systemDelta > 0 ? (cpuDelta / systemDelta) * onlineCpus * 100 : 0;
+			const cpuDeltaNs = current.totalUsageNs - previous.totalUsageNs;
+			const wallDeltaNs = (current.readAtMs - previous.readAtMs) * 1_000_000;
+			// `wallDeltaNs` is 0 only in a degenerate case (two reads stamped with the very same instant) -
+			// reported as 0% rather than producing NaN/Infinity.
+			const cpuPercentOfOneCore = wallDeltaNs > 0 ? (cpuDeltaNs / wallDeltaNs) * 100 : 0;
 			onSample({
 				cpuPercentOfOneCore,
 				memoryBytes,
@@ -301,14 +647,57 @@ export class DockerDriver implements Driver {
 	private probeImageBuild: Promise<string> | undefined;
 	/** Python debug payload tar + debugpy version, read from disk at most once and cached. */
 	private debugPayload: { tar: Buffer; debugpyVersion: string } | undefined;
+	/** True once this process's own container is confirmed on the `apify-local` network
+	 * (`selfAttachToNetwork`): joined by this process, or started there with `--network apify-local`.
+	 * False when this process is not in a container at all (`pnpm dev`) or the engine refused the attach
+	 * (rootless Podman runs the runtime container under slirp4netns/pasta, where joining a second network
+	 * is unsupported). */
+	private onActorNetwork = false;
+	/** The `ExtraHosts` entry every Actor container gets so `apify-api` reaches this API, or undefined when
+	 * the network's own DNS resolves the alias (this process registered it when it joined). Set by
+	 * `selfAttachToNetwork`: `apify-api:host-gateway` (the host's published port) when this process is
+	 * off the network; `apify-api:<own address>` when it sits on the network without the alias - a
+	 * container started with `--network apify-local` has no alias unless the user also passed one. */
+	private apiHostEntry: string | undefined;
+	/** The `ExtraHosts` entry that routes `apify-api` to this API through the host's published port -
+	 * for Actor containers off the `apify-local` network. The address is the one the engine itself hands
+	 * every container for the host (`host.containers.internal` on Podman, `host.docker.internal` on Docker
+	 * Desktop - read from this container's own hosts file in `init`), or the engine keyword `host-gateway`
+	 * when the hosts file has no such entry (Docker Engine). Podman before 4.1 does not know the
+	 * keyword, which is why the hosts file comes first. */
+	private hostRouteEntry = `${CONTAINER_API_ALIAS}:host-gateway`;
+	/** True on Podman 3.x (`init`): Actor containers and browser-view sidecars never use `apify-local`
+	 * and run on the engine's default network, reaching this API by `chooseDefaultNetworkRoute`. */
+	private actorsOnDefaultNetwork = false;
+	/** `chooseDefaultNetworkRoute`'s answer, computed once on first use. */
+	private defaultNetworkRoute: Promise<DefaultNetworkRoute> | undefined;
+	/** `detectResourceLimitSupport`'s answer from `init`. */
+	private resourceLimits: ResourceLimitSupport = ALL_LIMITS_SUPPORTED;
+	private readonly hostsFile: string;
+	private readonly routeFile: string;
+	private readonly networkInterfaces: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+	private browserViewerImageId: string | undefined;
+	/** Shared by concurrent callers; cleared on failure so a later call retries (like `probeImageBuild`). */
+	private browserViewerImport: Promise<string> | undefined;
+	private readonly browserViewers = new Map<string, { container: Docker.Container; volumeName: string }>();
 
 	available = false;
 	unavailableReason: string | undefined;
 
 	/** `docker` is injectable (defaults to a real `Docker()` socket client) so tests can pass a stub
 	 * `dockerode`-shaped object - there is no Docker daemon in this sandbox to test against for real. */
-	constructor(docker: Docker = new Docker()) {
+	constructor(
+		docker: Docker = new Docker(),
+		options: {
+			hostsFile?: string;
+			routeFile?: string;
+			networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+		} = {},
+	) {
 		this.docker = docker;
+		this.hostsFile = options.hostsFile ?? '/etc/hosts';
+		this.routeFile = options.routeFile ?? '/proc/net/route';
+		this.networkInterfaces = options.networkInterfaces ?? (() => os.networkInterfaces());
 	}
 
 	async init(): Promise<void> {
@@ -316,12 +705,43 @@ export class DockerDriver implements Driver {
 			await this.docker.ping();
 		} catch (error) {
 			this.available = false;
-			this.unavailableReason = `Docker socket is not reachable: ${(error as Error).message}`;
+			this.unavailableReason =
+				`Docker API socket is not reachable (mount your Docker or Podman socket at /var/run/docker.sock, ` +
+				`or point DOCKER_HOST at it): ${(error as Error).message}`;
 			return;
 		}
 
 		// A `docker.info()` failure must not make an otherwise-reachable daemon look unavailable.
 		await this.captureHostCapacity();
+		this.resourceLimits = await detectResourceLimitSupport(this.docker);
+		const unenforced = (['cpu', 'memory'] as const).filter((limit) => !this.resourceLimits[limit]);
+		if (unenforced.length > 0) {
+			console.warn(
+				`Per-run ${unenforced.join(' and ')} limits are not enforced: the engine reports no ` +
+					`${unenforced.map((limit) => `'${limit}'`).join('/')} cgroup controller available to it (rootless ` +
+					`Podman on a host that does not delegate it, or cgroups v1). Runs start without ${unenforced.length > 1 ? 'those limits' : 'that limit'}.`,
+			);
+		}
+
+		this.hostRouteEntry = `${CONTAINER_API_ALIAS}:${await hostAddressSeenFromContainers(this.hostsFile)}`;
+		this.apiHostEntry = this.hostRouteEntry;
+
+		// Podman 3.x (the CNI generation, e.g. Ubuntu 22.04's 3.4): its user-defined networks are not worth
+		// touching - the stock config is unusable on the most common install, rootless cannot attach a
+		// running container at all, and a failed attach can wreck this container's own networking. Actors
+		// run on the engine's default network instead.
+		if ((await podmanMajorVersion(this.docker)) === 3) {
+			this.actorsOnDefaultNetwork = true;
+			const route = await this.routeOnDefaultNetwork();
+			console.warn(
+				`Podman 3.x: Actor containers run on the engine's default network (its user-defined networks are ` +
+					`not used) and reach this API as ${route.extraHost}` +
+					`${route.networkMode ? ` (network mode ${route.networkMode})` : ''}; keep -p ${API_PORT}:${API_PORT} ` +
+					`published on all interfaces.`,
+			);
+			this.available = true;
+			return;
+		}
 
 		try {
 			await this.ensureNetwork();
@@ -386,23 +806,98 @@ export class DockerDriver implements Driver {
 	private async selfAttachToNetwork(): Promise<void> {
 		// Docker sets the container hostname to its own short id by default; this is a best-effort
 		// self-identification that only matters when this process itself runs inside a container
-		// (the shipped runtime image) - a bare `node dist/index.js` on the host skips it harmlessly.
+		// (the shipped runtime image) - a bare `node dist/index.js` on the host has nothing to attach.
 		const selfId = process.env.HOSTNAME;
-		if (!selfId) return;
+		if (!selfId) {
+			this.onActorNetwork = false;
+			this.apiHostEntry = this.hostRouteEntry;
+			console.warn(
+				`Not running inside a container (no HOSTNAME): Actor containers will reach this API through ` +
+					`the host's port ${API_PORT} (${this.hostRouteEntry}) instead of the ${NETWORK_NAME} ` +
+					`network alias.`,
+			);
+			return;
+		}
 
 		const network = this.docker.getNetwork(NETWORK_NAME);
 		const info = await network.inspect().catch(() => undefined);
-		if (info?.Containers?.[selfId]) return; // already attached
+		// `Containers` is keyed by full container id on both Docker and Podman, while `HOSTNAME` is the
+		// short (12-char) one - a prefix match is what "already attached" actually means here. Without it
+		// every restart of the runtime container re-attempted the connect and logged the daemon's
+		// "already connected" rejection as a warning.
+		if (Object.keys(info?.Containers ?? {}).some((id) => id.startsWith(selfId))) {
+			this.onActorNetwork = true;
+			this.apiHostEntry = await this.apiHostEntryWhenAlreadyAttached(selfId);
+			return;
+		}
 
-		await network
-			.connect({ Container: selfId, EndpointConfig: { Aliases: [CONTAINER_API_ALIAS] } })
-			.catch((error: Error) => {
-				// Not fatal: most likely we are not actually running inside a container right now
-				// (local dev). Actor containers still get the network; only the alias resolution from
-				// inside those containers back to us would be affected.
+		try {
+			await network.connect({ Container: selfId, EndpointConfig: { Aliases: [CONTAINER_API_ALIAS] } });
+			this.onActorNetwork = true;
+			this.apiHostEntry = undefined;
+		} catch (error) {
+			// Not fatal: `startRun` falls back to routing Actor containers to this API through the host's
+			// published port (`ExtraHosts: apify-api -> host-gateway`). The usual cause is rootless Podman,
+			// whose default slirp4netns/pasta network mode cannot join a second network at runtime.
+			this.onActorNetwork = false;
+			this.apiHostEntry = this.hostRouteEntry;
+			console.warn(
+				`Could not attach the runtime's own container to the ${NETWORK_NAME} network: ${(error as Error).message}. ` +
+					`Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
+					`(${this.hostRouteEntry}), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
+					`To use the network alias anyway, pre-create the network (\`podman network create ${NETWORK_NAME}\`) ` +
+					`and start the runtime container with \`--network ${NETWORK_NAME}\`.`,
+			);
+		}
+	}
 
-				console.warn(`Could not self-attach to the ${NETWORK_NAME} network: ${error.message}`);
-			});
+	/** For a runtime container that was put on the network by whoever started it (`--network apify-local`)
+	 * rather than by `selfAttachToNetwork`: the alias is registered only if they also passed
+	 * `--network-alias apify-api`. Otherwise the container's own address on the network stands in for it -
+	 * a hosts-file entry needs no DNS at all, so this route also works on engines whose network has no
+	 * name resolution. The host's published port is the last resort if even the address is unknown. */
+	private async apiHostEntryWhenAlreadyAttached(selfId: string): Promise<string | undefined> {
+		const self = await this.docker
+			.getContainer(selfId)
+			.inspect()
+			.catch(() => undefined);
+		const endpoint = self?.NetworkSettings?.Networks?.[NETWORK_NAME];
+		if (endpoint?.Aliases?.includes(CONTAINER_API_ALIAS)) return undefined;
+		if (endpoint?.IPAddress) return `${CONTAINER_API_ALIAS}:${endpoint.IPAddress}`;
+		console.warn(
+			`The runtime's own container is on the ${NETWORK_NAME} network but its address there could not be ` +
+				`read; Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
+				`(${this.hostRouteEntry}), so keep -p ${API_PORT}:${API_PORT} published on all interfaces.`,
+		);
+		return this.hostRouteEntry;
+	}
+
+	/** The `HostConfig` network fields for an Actor container: on the `apify-local` network with the alias
+	 * route, or - Podman 3.x - on the engine's default network with `chooseDefaultNetworkRoute`'s. */
+	private async actorNetworkHostConfig(): Promise<Pick<Docker.HostConfig, 'NetworkMode' | 'ExtraHosts'>> {
+		if (!this.actorsOnDefaultNetwork) {
+			return {
+				NetworkMode: NETWORK_NAME,
+				// Only when the alias cannot resolve through the network's own DNS (`apiHostEntry`'s doc
+				// comment). Never added when the alias works: a hosts-file entry would override the DNS alias
+				// and force every Actor through the host.
+				...(this.apiHostEntry ? { ExtraHosts: [this.apiHostEntry] } : {}),
+			};
+		}
+		const route = await this.routeOnDefaultNetwork();
+		return { ...(route.networkMode ? { NetworkMode: route.networkMode } : {}), ExtraHosts: [route.extraHost] };
+	}
+
+	private routeOnDefaultNetwork(): Promise<DefaultNetworkRoute> {
+		this.defaultNetworkRoute ??= (async () => {
+			const view: OwnNetworkView = {
+				hostAddress: await engineHostEntry(this.hostsFile),
+				gateway: defaultGatewayFromRouteTable(await readFile(this.routeFile, 'utf8').catch(() => '')),
+				own: firstNonLoopbackIpv4(this.networkInterfaces()),
+			};
+			return chooseDefaultNetworkRoute(view);
+		})();
+		return this.defaultNetworkRoute;
 	}
 
 	async startBuild(ctx: BuildContext, onLog: (chunk: string) => void): Promise<BuildOutcome> {
@@ -547,13 +1042,18 @@ export class DockerDriver implements Driver {
 		const overCapacityWarning = this.buildOverCapacityWarning(ctx);
 		if (overCapacityWarning) onLog(overCapacityWarning);
 
-		// A secondary diagnostic for the residual risk that a folder verified at registration later
-		// vanishes: written before `createContainer` so it lands even if that call is what fails.
+		// Re-verified on every dev-mount run, before any container exists: Docker would reject a `Mounts`
+		// bind whose source vanished since registration, but Podman's Docker-compatible API auto-creates the
+		// missing source instead - which would silently start the run against an empty directory, exactly
+		// what `actor-driver.md` forbids ("fail visibly - never silently mount an empty directory").
+		let preservedEntrypoint: PreservedEntrypoint | undefined;
 		if (ctx.devMount) {
+			await this.assertDevFolderStillPresent(ctx.devMount.localDevFolder);
 			onLog(
 				`Mounting local dev folder ${ctx.devMount.localDevFolder} over the image's working directory ` +
-					`${ctx.devMount.imageWorkingDirectory} (node_modules preserved via an anonymous volume).\n`,
+					`${ctx.devMount.imageWorkingDirectory} (node_modules preserved via a per-run volume).\n`,
 			);
+			preservedEntrypoint = await this.preserveHiddenEntrypoint(ctx.imageId, ctx.devMount, onLog);
 		}
 
 		// Loaded and logged before `createContainer` so a missing payload fails the run before any
@@ -573,21 +1073,36 @@ export class DockerDriver implements Driver {
 			}
 		}
 
+		// The X-socket volume is the only change a browser-view run makes to the Actor's container.
+		const mounts: Docker.MountSettings[] = [
+			...(ctx.devMount ? this.buildDevMounts(ctx.devMount, ctx.runId) : []),
+			...(ctx.x11SocketVolume
+				? [{ Type: 'volume' as const, Source: ctx.x11SocketVolume, Target: X11_SOCKET_DIR }]
+				: []),
+		];
+
 		const container = await this.docker.createContainer({
 			Image: ctx.imageId,
 			Env: env,
 			Labels: { [RUN_LABEL]: ctx.runId },
+			...(preservedEntrypoint
+				? {
+						[preservedEntrypoint.field]: preservedEntrypoint.command,
+						...(preservedEntrypoint.cmd ? { Cmd: preservedEntrypoint.cmd } : {}),
+					}
+				: {}),
 			...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 			HostConfig: {
-				NetworkMode: NETWORK_NAME,
-				Memory: ctx.memoryMbytes * 1024 * 1024,
+				...(await this.actorNetworkHostConfig()),
+				...(this.resourceLimits.memory ? { Memory: ctx.memoryMbytes * 1024 * 1024 } : {}),
 				// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 				// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
 				// validated for range only, so an over-capacity request still starts.
-				CpuPeriod: CPU_PERIOD_US,
-				CpuQuota: cpuQuotaFor(ctx.memoryMbytes),
+				...(this.resourceLimits.cpu
+					? { CpuPeriod: CPU_PERIOD_US, CpuQuota: cpuQuotaFor(ctx.memoryMbytes) }
+					: {}),
 				AutoRemove: false,
-				...(ctx.devMount ? { Mounts: this.buildDevMounts(ctx.devMount) } : {}),
+				...(mounts.length > 0 ? { Mounts: mounts } : {}),
 				// Fixed 127.0.0.1-bound publish - lands on the developer's own host, not wherever the
 				// runtime process itself runs.
 				...(ctx.debug
@@ -611,6 +1126,7 @@ export class DockerDriver implements Driver {
 
 		try {
 			// Inside the try so a failed upload still reaches the finally below and removes the container.
+			if (preservedEntrypoint) await container.putArchive(preservedEntrypoint.tar, { path: '/' });
 			if (debugPayload) {
 				await container.putArchive(debugPayload.tar, { path: '/' });
 			}
@@ -714,22 +1230,118 @@ export class DockerDriver implements Driver {
 			await sampler?.stop();
 			this.timedOutRuns.delete(ctx.runId);
 			this.runContainers.delete(ctx.runId);
-			// `{ v: true }` also removes the container's anonymous volumes - without it, the anonymous
-			// `node_modules` volume `buildDevMounts` adds for a `devMount` run would leak one per run,
-			// forever. Harmless for a run with no `devMount`: no anonymous volumes to remove.
+			// `{ v: true }` also removes any anonymous volumes; the named per-run `node_modules` volume of a
+			// `devMount` run (`buildDevMounts`) is not covered by it and goes separately, after the container.
 			await container.remove({ v: true }).catch(() => undefined);
+			if (ctx.devMount) await this.removeVolumeWithRetry(devNodeModulesVolumeName(ctx.runId));
+		}
+	}
+
+	/** `startRun`'s pre-container check that a registered dev folder is still a directory on the host -
+	 * the same probe registration used (`probeDevFolder`), so the two can never disagree on what counts as
+	 * present. Throws (failing the run, with this as its status message) on every non-ok outcome, including
+	 * "could not verify": a run that cannot prove its folder exists must not start against whatever the
+	 * daemon would put there instead. */
+	private async assertDevFolderStillPresent(localDevFolder: string): Promise<void> {
+		const outcome = await this.probeDevFolder(localDevFolder, await this.ensureProbeImage());
+		if (outcome.ok) return;
+		const problem =
+			outcome.reason === 'not-found'
+				? 'no longer exists on the host'
+				: outcome.reason === 'not-a-directory'
+					? 'is no longer a directory on the host'
+					: `could not be verified on the host (${outcome.reason})`;
+		throw new Error(
+			`The registered local dev folder ${localDevFolder} ${problem} - the run was not started, so that a ` +
+				`missing folder is never silently replaced by an empty directory. Restore the folder, or clear the ` +
+				`registration (POST /actor-runtime/dev-folder/<actorId> with an empty string body) to run from the ` +
+				`built image alone.`,
+		);
+	}
+
+	/**
+	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when that names a file
+	 * inside the working directory - Apify's Playwright base images start through `./xvfb-entrypoint.sh`
+	 * there - the bind mount hides it unless the dev folder happens to carry the same file, and the engine
+	 * refuses to start ("executable file not found"). Unless the dev folder provides it, the file is
+	 * taken from the image and the run starts through that copy, at a path no mount covers. Anything
+	 * `PATH`-resolved or absolute is left alone: the mount cannot hide it.
+	 */
+	private async preserveHiddenEntrypoint(
+		imageId: string,
+		devMount: DevFolderMount,
+		onLog: (chunk: string) => void,
+	): Promise<PreservedEntrypoint | undefined> {
+		const info = await this.docker.getImage(imageId).inspect();
+		const entrypointRaw = info.Config?.Entrypoint;
+		const entrypoint = Array.isArray(entrypointRaw) ? entrypointRaw : entrypointRaw ? [entrypointRaw] : [];
+		const field: PreservedEntrypoint['field'] = entrypoint.length > 0 ? 'Entrypoint' : 'Cmd';
+		const command = field === 'Entrypoint' ? entrypoint : (info.Config?.Cmd ?? []);
+		const first = command[0];
+		if (!first || !isWorkingDirectoryRelative(first)) return undefined;
+		if (await this.devFolderHasEntry(devMount.localDevFolder, first)) return undefined;
+
+		const inImage = path.posix.resolve(devMount.imageWorkingDirectory, first);
+		const archive = await this.extractFromImage(imageId, inImage);
+		const tarball = await repackUnderDirectory(archive, PRESERVED_ENTRYPOINT_DIR);
+		onLog(
+			`The image starts through ${first} in its working directory, which the dev folder does not contain; ` +
+				`using the image's own copy of it.\n`,
+		);
+		return {
+			field,
+			command: [`${PRESERVED_ENTRYPOINT_DIR}/${path.posix.basename(inImage)}`, ...command.slice(1)],
+			...(field === 'Entrypoint' && info.Config?.Cmd ? { cmd: info.Config.Cmd } : {}),
+			tar: tarball,
+		};
+	}
+
+	/** Whether `relativePath` exists inside the registered dev folder on the host - through the same probe
+	 * container `probeDevFolder` uses, so the answer is the engine's own. Public for tests. */
+	async devFolderHasEntry(localDevFolder: string, relativePath: string): Promise<boolean> {
+		const container = await this.docker.createContainer({
+			Image: await this.ensureProbeImage(),
+			Labels: { [PROBE_LABEL]: 'true' },
+			HostConfig: {
+				Mounts: [{ Type: 'bind', Source: PROBE_MOUNT_SOURCE, Target: PROBE_MOUNT_TARGET, ReadOnly: true }],
+			},
+		});
+		try {
+			const outcome = await statInProbe(
+				container,
+				path.posix.join(PROBE_MOUNT_TARGET, localDevFolder, relativePath),
+			);
+			return outcome.ok;
+		} finally {
+			await container.remove().catch((error: Error) => {
+				console.warn(`Could not remove dev-folder probe container ${container.id}: ${error.message}`);
+			});
+		}
+	}
+
+	/** The archive of one path from an image, read through a container created (never started) from it. */
+	private async extractFromImage(imageId: string, pathInImage: string): Promise<Buffer> {
+		const container = await this.docker.createContainer({ Image: imageId, Labels: { [PROBE_LABEL]: 'true' } });
+		try {
+			return await readStream((await container.getArchive({ path: pathInImage })) as NodeJS.ReadableStream);
+		} finally {
+			await container.remove().catch(() => undefined);
 		}
 	}
 
 	/** The two `HostConfig.Mounts` entries for a `devMount` run: a read-write bind for the dev folder
 	 * itself (`Mounts`, not `Binds` - a `Mounts`-type bind errors on a missing source instead of silently
-	 * auto-creating one), plus an anonymous volume (empty `Source`) over `node_modules` - Docker copies
-	 * the image's existing contents into it before mounting, preserving the image's installed
-	 * dependencies underneath the bind (a *named* volume would start empty; a plain bind would erase it). */
-	private buildDevMounts(devMount: DevFolderMount): Docker.MountSettings[] {
+	 * auto-creating one), plus a fresh per-run volume over `node_modules` - the engine creates it at
+	 * container creation and copies the image's existing contents into it before mounting, preserving the
+	 * image's installed dependencies underneath the bind (a plain bind would erase them). */
+	private buildDevMounts(devMount: DevFolderMount, runId: string): Docker.MountSettings[] {
 		return [
 			{ Type: 'bind', Source: devMount.localDevFolder, Target: devMount.imageWorkingDirectory },
-			{ Type: 'volume', Source: '', Target: `${devMount.imageWorkingDirectory}/node_modules` },
+			{
+				Type: 'volume',
+				Source: devNodeModulesVolumeName(runId),
+				Target: `${devMount.imageWorkingDirectory}/node_modules`,
+			},
 		];
 	}
 
@@ -827,26 +1439,30 @@ export class DockerDriver implements Driver {
 	}
 
 	/**
-	 * Host-side existence-and-directory check for a candidate dev-folder path: a create-only probe
-	 * container, never started. `fs.existsSync` would test this process's own filesystem, not the host's;
-	 * the only Engine API surface that validates an arbitrary host path is the mount-validation moby runs
-	 * inside `POST /containers/create`. `BindOptions.CreateMountpoint` (which would auto-create a missing
-	 * source and defeat this check) is never set. `imageId` is always `ensureProbeImage`'s own image
-	 * above - never an Actor's build (registration must work for an Actor with no build at all), a
-	 * self-inspected runtime image (`HOSTNAME` is unset in bare local dev, per `selfAttachToNetwork`
-	 * above), or a pulled one (would break offline-after-first-build).
+	 * Host-side existence-and-directory check for a candidate dev-folder path: a probe container that
+	 * binds the host's `/` read-only at `PROBE_MOUNT_TARGET`, is never started, and is stat'ed through
+	 * `HEAD /containers/{id}/archive?path=/probe<candidate>` (`container.infoArchive`) - the same
+	 * resolution `docker cp` uses, which both Docker and Podman perform on a stopped container's bind
+	 * mounts too. `fs.existsSync` would test this process's own filesystem, not the host's. `imageId` is
+	 * always `ensureProbeImage`'s own image above - never an Actor's build (registration must work for an
+	 * Actor with no build at all), a self-inspected runtime image (`HOSTNAME` is unset in bare local dev,
+	 * per `selfAttachToNetwork` above), or a pulled one (would break offline-after-first-build).
 	 *
-	 * The mount `Source` is the candidate path with a literal `/.` appended, never the bare path -
-	 * verified empirically against a real daemon (a `FROM scratch` probe image, no network pull needed):
-	 * appending `/.` forces the same `stat` moby already performs to also reject a regular file (`invalid
-	 * mount config for type "bind": stat <path>/.: not a directory`, classified below as
-	 * `not-a-directory`) while leaving every other outcome unchanged - a real directory (or a symlink
-	 * resolving to one) still succeeds, and a missing path still rejects with the same
-	 * `BIND_SOURCE_MISSING_SUBSTRING` (now trailed by `/.`, which the substring match ignores). Since the
-	 * daemon's rejection message and this call's own `Source` therefore always carry the `/.` suffix, the
-	 * caller (`services/dev-folder.ts`) never echoes either back to the user - only this function's own
-	 * classified `DevFolderProbeFailureReason` crosses that boundary, so the path stored and displayed
-	 * anywhere is always exactly what the caller submitted.
+	 * Why the host root rather than the candidate itself as the mount source: Docker rejects a `Mounts`
+	 * bind whose source is missing, but Podman's Docker-compatible API instead auto-creates the missing
+	 * source directory on the host (its `containers_create` compat handler `MkdirAll`s every bind source
+	 * and ignores `BindOptions.CreateMountpoint`), so a create-only probe would report a typo'd path as
+	 * present *and* leave a root-owned empty directory behind. Mounting `/` (which always exists) and
+	 * stat'ing beneath it has no such side effect on either daemon, and one code path serves both.
+	 *
+	 * The candidate is walked component by component so a symlink anywhere in it still resolves to what
+	 * it points at on the host: Docker reports a symlink component as such (with the daemon's
+	 * container-scoped `linkTarget`, mapped back to a host path by `hostPathOfLinkTarget`) instead of
+	 * following it, while Podman follows symlinks itself. A regular file, or a symlink to one, is
+	 * `not-a-directory`; a missing component is `not-found`; anything the daemon would not confirm is
+	 * `unknown`, never a guess. Only the classified `DevFolderProbeFailureReason` crosses back to the
+	 * caller (`services/dev-folder.ts`), so the path stored and displayed anywhere is always exactly what
+	 * the caller submitted.
 	 */
 	async probeDevFolder(candidatePath: string, imageId: string): Promise<DevFolderProbeOutcome> {
 		if (!this.available) return { ok: false, reason: 'unreachable' };
@@ -857,29 +1473,231 @@ export class DockerDriver implements Driver {
 				Image: imageId,
 				Labels: { [PROBE_LABEL]: 'true' },
 				HostConfig: {
-					Mounts: [
-						{ Type: 'bind', Source: `${candidatePath}/.`, Target: PROBE_MOUNT_TARGET, ReadOnly: true },
-					],
+					Mounts: [{ Type: 'bind', Source: PROBE_MOUNT_SOURCE, Target: PROBE_MOUNT_TARGET, ReadOnly: true }],
 				},
 			});
 		} catch (error) {
 			// Creation itself failed, so there is nothing to clean up.
-			return { ok: false, reason: classifyProbeError(error) };
+			return { ok: false, reason: classifyProbeCreateError(error) };
 		}
 
-		// Creation succeeded, so this container genuinely exists on the daemon now - unlike the rejected
-		// path above, a failed removal here would leak a real container. Logged rather than swallowed so
-		// the leak is discoverable; `PROBE_LABEL` also lets `reconcileOrphans` sweep it on next startup.
-		await container.remove().catch((error: Error) => {
-			console.warn(`Could not remove dev-folder probe container ${container.id}: ${error.message}`);
-		});
-		return { ok: true };
+		try {
+			return await this.resolveDirectoryInProbe(container, candidatePath);
+		} finally {
+			// This container genuinely exists on the daemon now - a failed removal here would leak a real
+			// container. Logged rather than swallowed so the leak is discoverable; `PROBE_LABEL` also lets
+			// `reconcileOrphans` sweep it on next startup.
+			await container.remove().catch((error: Error) => {
+				console.warn(`Could not remove dev-folder probe container ${container.id}: ${error.message}`);
+			});
+		}
+	}
+
+	/** The component walk `probeDevFolder`'s doc comment describes, against an already-created probe
+	 * container. Restarts from the link's target whenever a component turns out to be a symlink, bounded
+	 * by `MAX_SYMLINK_HOPS`. */
+	private async resolveDirectoryInProbe(
+		container: Docker.Container,
+		candidatePath: string,
+	): Promise<DevFolderProbeOutcome> {
+		let pending = candidatePath.split('/').filter((component) => component !== '');
+		let resolved = '';
+		let hops = 0;
+		let stat: ProbeStat | undefined;
+		while (pending.length > 0) {
+			const [component, ...rest] = pending;
+			const current = `${resolved}/${component}`;
+			const outcome = await statInProbe(container, `${PROBE_MOUNT_TARGET}${current}`);
+			if (!outcome.ok) return outcome;
+			stat = outcome.stat;
+			if ((stat.mode & GO_MODE_SYMLINK) !== 0) {
+				if (++hops > MAX_SYMLINK_HOPS || stat.linkTarget === '') return { ok: false, reason: 'unknown' };
+				const target = hostPathOfLinkTarget(stat.linkTarget);
+				// A relative target is relative to the link's own directory; an absolute one restarts at `/`.
+				const base = target.startsWith('/') ? '' : resolved;
+				const normalized = path.posix.normalize(`${base}/${target}`);
+				pending = [...normalized.split('/').filter((part) => part !== ''), ...rest];
+				resolved = '';
+				continue;
+			}
+			resolved = current;
+			pending = rest;
+		}
+		// `/` itself (no components) stats the mount root, which is always a directory.
+		if (!stat) {
+			const outcome = await statInProbe(container, PROBE_MOUNT_TARGET);
+			if (!outcome.ok) return outcome;
+			stat = outcome.stat;
+		}
+		return (stat.mode & GO_MODE_DIR) !== 0 ? { ok: true } : { ok: false, reason: 'not-a-directory' };
 	}
 
 	async abortRun(runId: string): Promise<void> {
 		const container = this.runContainers.get(runId);
 		if (!container) return;
 		await container.stop().catch(() => undefined);
+	}
+
+	/** Imports the bundled sidecar rootfs (`docker import`, no network) once per process; an image already
+	 * present under the content-hash tag is reused. */
+	private async ensureBrowserViewerImage(): Promise<string> {
+		if (this.browserViewerImageId) return this.browserViewerImageId;
+		this.browserViewerImport ??= this.importBrowserViewerImage().catch((error) => {
+			this.browserViewerImport = undefined;
+			throw error;
+		});
+		const imageId = await this.browserViewerImport;
+		this.browserViewerImageId = imageId;
+		return imageId;
+	}
+
+	private async importBrowserViewerImage(): Promise<string> {
+		let version: string;
+		try {
+			version = (await readFile(browserViewerVersionFilePath(), 'utf8')).trim();
+		} catch (error) {
+			throw new Error(
+				`the runtime's browser-view sidecar payload is missing (${(error as Error).message}). Browser view ` +
+					`needs the runtime to run from its own built image, not from source (e.g. \`pnpm dev\`).`,
+			);
+		}
+		const tag = `${BROWSER_VIEWER_IMAGE_REPO}:${version}`;
+
+		try {
+			await this.docker.getImage(tag).inspect();
+			return tag;
+		} catch (error) {
+			if (!hasStatusCode(error) || error.statusCode !== 404) throw error;
+		}
+
+		// A read error on the tar must reject the import, not surface as an unhandled stream error.
+		const rootfs = createReadStream(browserViewerRootfsTarPath());
+		let rootfsError: Error | undefined;
+		rootfs.on('error', (error: Error) => {
+			rootfsError = error;
+		});
+		// The tag travels inside `repo` (`name:tag`, which the Docker API allows) rather than as the separate
+		// `tag` parameter: Podman 3.x ignores that parameter and would store the image as `:latest`.
+		const stream = await this.docker.importImage(rootfs, { repo: tag });
+		await new Promise<void>((resolve, reject) => {
+			if (rootfsError) {
+				reject(rootfsError);
+				return;
+			}
+			rootfs.once('error', reject);
+			this.docker.modem.followProgress(stream, (err: Error | null, res: Array<{ error?: string }>) => {
+				if (err) {
+					reject(err);
+					return;
+				}
+				const errorLine = res.find((line) => line.error);
+				if (errorLine) {
+					reject(new Error(errorLine.error));
+					return;
+				}
+				resolve();
+			});
+		});
+		return tag;
+	}
+
+	/** A plain local volume, no tmpfs options: rootless Podman 3.x cannot mount a tmpfs volume at all
+	 * ("cannot mount volumes without root privileges"), and Podman 5 rejects a sized one on a filesystem
+	 * without project quota. It only ever holds one Unix socket. The Actor's Xvfb runs unprivileged and
+	 * must be able to create that socket, so the directory must end up mode 1777: the sidecar image
+	 * carries `/tmp/.X11-unix` with that mode (copied onto the empty volume when the sidecar, which mounts
+	 * it first, starts) and its script chmods it again as root to be sure. Anything created here is
+	 * removed again if a later step fails. */
+	async startBrowserViewer(target: BrowserViewerTarget): Promise<BrowserViewerHandle> {
+		if (!this.available) {
+			throw new Error(this.unavailableReason ?? 'Docker is not available');
+		}
+		const imageId = await this.ensureBrowserViewerImage();
+
+		const volumeName = `actor-runtime-x11-${target.runId}`;
+		const containerName = `actor-runtime-browser-viewer-${target.runId}`;
+		const labels = { [RUN_LABEL]: target.runId, [BROWSER_VIEWER_LABEL]: 'true' };
+
+		await this.docker.createVolume({ Name: volumeName, Driver: 'local', Labels: labels });
+
+		// How the console reaches the sidecar's VNC server. Normally the sidecar joins `apify-local` and is
+		// reached by its address there. When this process runs in a container that is not on that network
+		// (`onActorNetwork`'s doc comment - rootless Podman; or Podman 3.x, where Actors never use it), the
+		// sidecar shares this container's own network namespace instead, so the console reaches it on
+		// localhost; every sidecar then needs a port of its own in that shared namespace, allocated here.
+		const selfContainerId = process.env.HOSTNAME;
+		const sharesRuntimeNetns = (!this.onActorNetwork || this.actorsOnDefaultNetwork) && !!selfContainerId;
+		const vncPort = sharesRuntimeNetns ? await allocateFreePort() : BROWSER_VIEWER_VNC_PORT;
+
+		let container: Docker.Container | undefined;
+		try {
+			container = await this.docker.createContainer({
+				Image: imageId,
+				name: containerName,
+				Cmd: ['/bin/sh', BROWSER_VIEWER_SCRIPT],
+				Env: [
+					`${BROWSER_VIEWER_INTERACTIVE_ENV}=${target.interactive ? '1' : '0'}`,
+					`${BROWSER_VIEWER_PORT_ENV}=${vncPort}`,
+				],
+				Labels: labels,
+				HostConfig: {
+					...(sharesRuntimeNetns
+						? { NetworkMode: `container:${selfContainerId}` }
+						: this.actorsOnDefaultNetwork
+							? {}
+							: { NetworkMode: NETWORK_NAME }),
+					...(this.resourceLimits.memory ? { Memory: BROWSER_VIEWER_MEMORY_BYTES } : {}),
+					AutoRemove: false,
+					Mounts: [{ Type: 'volume', Source: volumeName, Target: X11_SOCKET_DIR }],
+				},
+				Tty: false,
+			});
+			this.browserViewers.set(target.runId, { container, volumeName });
+			await container.start();
+
+			if (sharesRuntimeNetns) {
+				return { vncHost: '127.0.0.1', vncPort, x11SocketVolume: volumeName };
+			}
+			const info = await container.inspect();
+			const address = containerAddress(info, this.actorsOnDefaultNetwork ? undefined : NETWORK_NAME);
+			return {
+				// The IP also works from a runtime running outside Docker; the name only resolves from inside.
+				vncHost: address || containerName,
+				vncPort,
+				x11SocketVolume: volumeName,
+			};
+		} catch (error) {
+			this.browserViewers.delete(target.runId);
+			if (container) await container.remove({ force: true }).catch(() => undefined);
+			await this.removeVolumeWithRetry(volumeName);
+			throw error;
+		}
+	}
+
+	async stopBrowserViewer(runId: string): Promise<void> {
+		const viewer = this.browserViewers.get(runId);
+		if (!viewer) return;
+		this.browserViewers.delete(runId);
+		await viewer.container.remove({ force: true }).catch(() => undefined);
+		await this.removeVolumeWithRetry(viewer.volumeName);
+	}
+
+	/** Best-effort: a 404 is success, the last failure is logged, never thrown. */
+	private async removeVolumeWithRetry(volumeName: string): Promise<void> {
+		const volume = this.docker.getVolume(volumeName);
+		for (let attempt = 1; ; attempt++) {
+			try {
+				await volume.remove({ force: true });
+				return;
+			} catch (error) {
+				if (hasStatusCode(error) && error.statusCode === 404) return;
+				if (attempt >= VOLUME_REMOVE_ATTEMPTS) {
+					console.warn(`Could not remove browser-view volume ${volumeName}: ${(error as Error).message}`);
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, VOLUME_REMOVE_RETRY_MS));
+			}
+		}
 	}
 
 	/**
@@ -902,22 +1720,39 @@ export class DockerDriver implements Driver {
 		if (!this.available) return;
 		const runIdSet = new Set(runIds);
 
-		const [runLabelled, probeLabelled] = await Promise.all([
+		const [runLabelled, probeLabelled, viewerLabelled] = await Promise.all([
 			this.docker.listContainers({ all: true, filters: JSON.stringify({ label: [RUN_LABEL] }) }),
 			this.docker.listContainers({ all: true, filters: JSON.stringify({ label: [PROBE_LABEL] }) }),
+			this.docker.listContainers({ all: true, filters: JSON.stringify({ label: [BROWSER_VIEWER_LABEL] }) }),
 		]);
 		const byId = new Map<string, Docker.ContainerInfo>();
-		for (const info of [...runLabelled, ...probeLabelled]) byId.set(info.Id, info);
+		for (const info of [...runLabelled, ...probeLabelled, ...viewerLabelled]) byId.set(info.Id, info);
 
 		for (const info of byId.values()) {
 			const isOrphanedRun = runIdSet.has(info.Labels?.[RUN_LABEL] ?? '');
 			const isLeftoverProbe = info.Labels?.[PROBE_LABEL] !== undefined;
-			if (!isOrphanedRun && !isLeftoverProbe) continue;
+			// Swept unconditionally, like a probe.
+			const isLeftoverViewer = info.Labels?.[BROWSER_VIEWER_LABEL] !== undefined;
+			if (!isOrphanedRun && !isLeftoverProbe && !isLeftoverViewer) continue;
 			const container = this.docker.getContainer(info.Id);
 			// `{ v: true }` alongside `force: true`: an orphaned run's anonymous `node_modules` volume (if
 			// it had a `devMount`) must not survive reconciliation either (mirrors `startRun`'s finally
 			// block's identical fix).
 			await container.remove({ force: true, v: true }).catch(() => undefined);
+		}
+
+		// Named volumes are not covered by `{ v: true }` above.
+		const { Volumes: viewerVolumes } = await this.docker.listVolumes({
+			filters: JSON.stringify({ label: [BROWSER_VIEWER_LABEL] }),
+		});
+		for (const volume of viewerVolumes ?? []) {
+			await this.removeVolumeWithRetry(volume.Name);
+		}
+		const { Volumes: devVolumes } = await this.docker.listVolumes({
+			filters: JSON.stringify({ name: [DEV_NODE_MODULES_VOLUME_PREFIX] }),
+		});
+		for (const volume of devVolumes ?? []) {
+			if (volume.Name.startsWith(DEV_NODE_MODULES_VOLUME_PREFIX)) await this.removeVolumeWithRetry(volume.Name);
 		}
 	}
 }

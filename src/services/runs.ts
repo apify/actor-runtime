@@ -3,7 +3,7 @@ import type { ActorRecord, ActorVersionRecord, BuildRecord, JobStatus, RunRecord
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
 import { openKeyValueStore } from '../storage/open.js';
-import { DebugPortInUseError, type Driver } from '../driver/types.js';
+import { DebugPortInUseError, type BrowserViewerHandle, type Driver } from '../driver/types.js';
 import { appendLog, flushLog, markLogTerminal } from './logs.js';
 import { markEventsTerminal, publishAborting, publishPersistState, publishSystemInfo } from './events-channel.js';
 import { clearRunRestartState, consumeRunRestart } from './migrations.js';
@@ -16,6 +16,7 @@ import {
 	resolveDebugPlan,
 	type DebugPlan,
 } from './debug-mode.js';
+import { browserViewLogLine, describeBrowserViewerStartFailure } from './browser-view.js';
 import { dedicatedCpusFor } from '../resources.js';
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
 
@@ -311,12 +312,32 @@ export async function runInBackground(
 		);
 	}
 
+	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
+	// so an abort landing during this (possibly slow) step is still caught by it.
+	let browserViewer: BrowserViewerHandle | undefined;
+	if (actor.localBrowserView) {
+		const { interactive } = actor.localBrowserView;
+		try {
+			browserViewer = await driver.startBrowserViewer({ runId: record.id, interactive });
+		} catch (error) {
+			const message = `Cannot start run: ${describeBrowserViewerStartFailure(actor.id, error)}`;
+			await failBeforeContainer(record.id, message, message);
+			return;
+		}
+		const { vncHost, vncPort } = browserViewer;
+		await runs.update(record.id, (current) =>
+			current ? { ...current, localBrowserView: { interactive, vncHost, vncPort } } : current,
+		);
+		appendLog(record.id, browserViewLogLine(record.id, interactive));
+	}
+
 	// Re-check right before creating the container: an abort issued while the registry/version lookups
 	// above were in flight may have already moved the record to ABORTING. Closing this window is the fix
 	// for the "abort races the pre-start window" finding - without it, an abort landing here would still
 	// let `driver.startRun` create and start a container nothing will ever stop.
 	const preStart = await runs.get(record.id);
 	if (!preStart || preStart.status !== 'RUNNING') {
+		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		if (preStart?.status === 'ABORTING') {
 			await driver.abortRun(record.id).catch(() => undefined);
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
@@ -337,6 +358,8 @@ export async function runInBackground(
 					timeoutSecs: remainingTimeoutSecs(record),
 					devMount,
 					debug: debugPlan ? { language: debugPlan.language, port: debugPlan.port } : undefined,
+					// The sidecar outlives a migration/reboot restart; the new container mounts the same volume.
+					x11SocketVolume: browserViewer?.x11SocketVolume,
 				},
 				(chunk) => appendLog(record.id, chunk),
 				(sample) => publishSystemInfo(record.id, sample, record.options),
@@ -377,18 +400,22 @@ export async function runInBackground(
 			return;
 		}
 	} catch (error) {
-		await flushLog(record.id);
 		// This is the one place that knows both the Actor id and its stored language preference, so it
 		// composes the port-conflict remediation from the driver's typed error.
 		const statusMessage =
 			error instanceof DebugPortInUseError && actor.localDebug
 				? describeDebugPortConflict(actor.id, actor.localDebug.language, error.port)
 				: (error as Error).message;
+		// Into the run's own log too: the engine refusing the container (a network it cannot set up, an
+		// unusable mount) is what `apify call` streams, and the status message alone leaves it empty.
+		appendLog(record.id, `Cannot start run: ${statusMessage}\n`);
+		await flushLog(record.id);
 		await transitionJobStatus(runs, record.id, 'FAILED', {
 			finishedAt: new Date().toISOString(),
 			statusMessage,
 		});
 	} finally {
+		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
 		clearRunRestartState(record.id);
 		markLogTerminal(record.id);
