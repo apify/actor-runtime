@@ -70,10 +70,7 @@ export interface StartRunOptions {
 	 * imports that same constant as its local `DEFAULT_TAG` and always resolves and passes the actual tag
 	 * it used, so this default only matters for direct service-layer callers, e.g. tests. */
 	build?: string;
-	/** Whether this run applies the Actor's registered local dev folder (`actor-driver.md`'s bind-mount
-	 * feature). Defaults to `true`; `false` - `POST .../runs?devFolder=false`, this runtime's own
-	 * extension of the run-start route - makes this one run start from the built image alone, leaving
-	 * the Actor's registration itself untouched. */
+	/** `false` skips the registered dev folder for this run only (`?devFolder=false`). */
 	devFolder?: boolean;
 	proxyPassword?: string;
 	apiBaseUrl: string;
@@ -298,8 +295,6 @@ export async function runInBackground(
 	// directory, gets `devMount: undefined`, which `docker-driver.ts`'s `startRun` treats identically to
 	// "no `Mounts` key at all" - the regression guarantee that an unregistered/cleared Actor's run
 	// container is unaffected.
-	// A per-run `devFolder: false` (`?devFolder=false` on run start) skips the mount for this run only -
-	// the Actor's registration is untouched, so the very next run without the opt-out mounts again.
 	const devMountApplicable =
 		actor.localDevFolder && build.imageWorkingDirectory
 			? { localDevFolder: actor.localDevFolder, imageWorkingDirectory: build.imageWorkingDirectory }
@@ -312,8 +307,6 @@ export async function runInBackground(
 				`(started with devFolder=false) - running from the built image alone.\n`,
 		);
 	}
-	// The log opens with a clearly delimited section for this runtime's own, local-only settings, ahead
-	// of the driver's own lines - the developer must not miss that a run uses local files, not the image.
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
 	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));
 
@@ -516,7 +509,6 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 	);
 }
 
-/** A bold, ruled "Local Actor runtime" block - the one place in a run's log for runtime-specific notes. */
 function renderRuntimeLogSection(lines: string[]): string {
 	const bold = (line: string) => `\x1b[1m${line}\x1b[0m`;
 	const title = ' Local Actor runtime ';

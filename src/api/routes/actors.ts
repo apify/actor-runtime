@@ -311,10 +311,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				memoryMbytes: queryNumber(req, 'memory'),
 				timeoutSecs: queryNumber(req, 'timeout'),
 				build: tag,
-				// This runtime's own extension of the run-start route (`api.md`'s "Actor runtime API"):
-				// `?devFolder=false` runs from the built image alone, ignoring the Actor's registered local
-				// dev folder for this one run. Absent (what the real platform's clients send) means the
-				// mount applies whenever the Actor has one registered.
+				// Runtime-only extension (`api.md`): `?devFolder=false` skips the dev-folder mount for this run.
 				devFolder: queryBoolean(req, 'devFolder'),
 				proxyPassword: resolveProxyPassword(requireUser(req)),
 				apiBaseUrl: CONTAINER_API_BASE_URL,

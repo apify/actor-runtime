@@ -47,7 +47,7 @@ const CONTAINER_NAME = 'actor-runtime-e2e-devfolder';
 const IMAGE_TAG = 'actor-runtime:e2e-devfolder';
 // `sample_actor_ts/Dockerfile` sets no `WORKDIR` of its own, so it inherits the base image's - the
 // `apify/actor-node` image's own Dockerfile sets `WORKDIR /usr/src/app`. Asserted independently below
-// via the run's own runtime section, not only assumed here - if the base image ever moves its
+// via the run's own log, not only assumed here - if the base image ever moves its
 // `WORKDIR`, that assertion (not the mount itself) is what will fail first and explain why.
 const EXPECTED_IMAGE_WORKING_DIR = '/usr/src/app';
 const ORIGINAL_MARKER = 'Crawl finished.';
@@ -194,12 +194,8 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
 
-			// Image built from the pristine source (`ORIGINAL_MARKER`); the host folder then gets the edited
-			// compile, so the two are distinguishable by which marker a run prints. The previous test left a
-			// locally compiled `dist/` in `actorDir`; it has to go before the push, since `apify push` uploads
-			// it (the folder has no `.gitignore`) and the Dockerfile's final `COPY . ./` would then bake that
-			// stale compile into the image over the builder stage's own - which Docker's API build does,
-			// `.dockerignore` being a client-side convention it never sees.
+			// The previous test's local `dist/` must not be pushed: Docker's API build ignores `.dockerignore`
+			// and would bake the edited compile into the image.
 			writeFileSync(mainTs, originalMainTs);
 			rmSync(join(actorDir, 'dist'), { recursive: true, force: true });
 			const push = JSON.parse(apify(['push', '--json', '--force'], { cwd: actorDir, env })) as PushResult;
@@ -209,7 +205,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			writeFileSync(mainTs, originalMainTs.replace(ORIGINAL_MARKER, EDITED_MARKER));
 			execFileSync('npm', ['run', 'build'], { cwd: actorDir, stdio: 'inherit' });
 
-			// The opted-out run prints the image's own marker, never the host folder's, and says why.
 			const optedOut = JSON.parse(
 				apify(
 					[
@@ -231,8 +226,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(optedOutLog).not.toContain(EDITED_MARKER);
 			expect(optedOutLog).not.toContain('Local Actor runtime');
 
-			// The registration survived: the very next plain run mounts the host folder again, and its log
-			// opens with the runtime section carrying the live-folder warning.
+			// The registration survived.
 			const call = JSON.parse(
 				apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], { cwd: actorDir, env }),
 			) as CallResult;
@@ -305,8 +299,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(log).toContain(EDITED_MARKER);
 			expect(log).not.toContain(`${ORIGINAL_MARKER}\n`);
 
-			// The runtime section at the top of the run's log names both the host path and the container
-			// path being mounted.
 			expect(log).toContain(actorDir);
 			expect(log).toContain(EXPECTED_IMAGE_WORKING_DIR);
 		},
@@ -350,7 +342,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 
 			const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
-			// No runtime section at all - it only appears for a run that actually mounts something.
 			expect(log).not.toContain('Local Actor runtime');
 		},
 		5 * 60 * 1000,

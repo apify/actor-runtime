@@ -130,12 +130,7 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 	return { localDevFolder: actor.localDevFolder ?? null };
 }
 
-/**
- * The lines the run log's "Local Actor runtime" section (`services/runs.ts`) shows when the registered
- * dev folder is mounted. Loud on purpose: the mount also hides the image's compiled output, so an
- * un-rebuilt TypeScript Actor would otherwise fail with a confusing "cannot find module dist/main.js"
- * instead of running stale code. Red and bold on a terminal (`apify call` streams the log verbatim).
- */
+/** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails confusingly. */
 export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): string[] {
 	const red = (line: string) => `\x1b[1;31m${line}\x1b[0m`;
 	return [

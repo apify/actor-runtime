@@ -832,7 +832,6 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			localDevFolder: '/abs/dev/src',
 			imageWorkingDirectory: '/usr/src/app',
 		});
-		// The log opens with the warning block, naming the folder and the way out.
 		const log = await server.client.log(run.id).get();
 		expect(log).toContain('Local Actor runtime');
 		expect(log).toContain('Live dev folder: /abs/dev/src');
@@ -901,9 +900,7 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 	});
 });
 
-/** `POST /v2/actors/:actorId/runs` with this runtime's own `?devFolder=` extension (`api.md`'s "Actor
- * runtime API") - `apify-client`'s `start()` validates its options with an exact shape, so the CLI (and
- * this test) send the parameter on the raw request instead. Resolves to the run's JSON `data`. */
+/** Raw run start: `apify-client`'s `start()` rejects unknown options such as `devFolder`. */
 async function startRunRaw(server: TestServerHandle, actorId: string, query: string) {
 	const res = await axios.post(`${server.baseUrl}/v2/actors/${actorId}/runs?waitForFinish=5&${query}`, undefined, {
 		headers: { Authorization: `Bearer ${server.token}` },
@@ -930,8 +927,6 @@ describe('per-run opt-out: POST /v2/actors/:actorId/runs?devFolder=false (servic
 		const run = await startRunRaw(server, actor.id, 'devFolder=false');
 		expect(run.status).toBe('SUCCEEDED');
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
-		// The skip is visible in the run's own log, naming the folder that was NOT mounted - and the
-		// live-folder warning block is absent, since nothing was mounted.
 		const log = await server.client.log(run.id).get();
 		expect(log).toContain('Skipping the registered local dev folder /abs/dev/src for this run');
 		expect(log).not.toContain('Local Actor runtime');
