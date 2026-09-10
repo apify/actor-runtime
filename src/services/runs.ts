@@ -385,13 +385,16 @@ export async function runInBackground(
 			return;
 		}
 	} catch (error) {
-		await flushLog(record.id);
 		// This is the one place that knows both the Actor id and its stored language preference, so it
 		// composes the port-conflict remediation from the driver's typed error.
 		const statusMessage =
 			error instanceof DebugPortInUseError && actor.localDebug
 				? describeDebugPortConflict(actor.id, actor.localDebug.language, error.port)
 				: (error as Error).message;
+		// Into the run's own log too: the engine refusing the container (a network it cannot set up, an
+		// unusable mount) is what `apify call` streams, and the status message alone leaves it empty.
+		appendLog(record.id, `Cannot start run: ${statusMessage}\n`);
+		await flushLog(record.id);
 		await transitionJobStatus(runs, record.id, 'FAILED', {
 			finishedAt: new Date().toISOString(),
 			statusMessage,

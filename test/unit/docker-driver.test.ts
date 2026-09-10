@@ -1310,9 +1310,13 @@ describe('DockerDriver host-capacity warning (actor-driver.md: warn, never clamp
  * `init()` + `startRun()` stub with a controllable `getNetwork()` (`inspect`/`connect`), for
  * `selfAttachToNetwork`'s three outcomes and the `ExtraHosts` fallback `startRun` derives from them.
  */
-function stubDockerForNetwork(network: { inspect: () => Promise<unknown>; connect: () => Promise<unknown> }) {
+function stubDockerForNetwork(
+	network: { inspect: () => Promise<unknown>; connect: () => Promise<unknown> },
+	selfInspect: () => Promise<unknown> = async () => ({}),
+) {
 	const run = stubDockerForRun();
 	const getNetwork = vi.fn(() => network);
+	const getContainer = vi.fn(() => ({ inspect: selfInspect }));
 	const docker = {
 		...run.docker,
 		ping: vi.fn(async () => undefined),
@@ -1320,8 +1324,22 @@ function stubDockerForNetwork(network: { inspect: () => Promise<unknown>; connec
 		createNetwork: vi.fn(async () => undefined),
 		info: vi.fn(async () => ({})),
 		getNetwork,
+		getContainer,
 	} as unknown as Docker;
-	return { ...run, docker, getNetwork };
+	return { ...run, docker, getNetwork, getContainer };
+}
+
+const SELF_FULL_ID = 'abc123def456789000000000000000000000000000000000000000000000000000';
+
+function attachedNetwork() {
+	return {
+		inspect: vi.fn(async () => ({ Containers: { [SELF_FULL_ID]: {} } })),
+		connect: vi.fn(async () => undefined),
+	};
+}
+
+function selfOnNetwork(endpoint: { Aliases?: string[]; IPAddress?: string }) {
+	return async () => ({ NetworkSettings: { Networks: { 'apify-local': endpoint } } });
 }
 
 describe('DockerDriver - how Actor containers reach the API (network alias, or the host-gateway fallback)', () => {
@@ -1373,15 +1391,32 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		expect(await extraHostsOfOneRun(stub, driver)).toBeUndefined();
 	});
 
-	it('recognises its own container as already attached by full-id prefix (HOSTNAME is the short id) - no connect, no warning, no ExtraHosts', async () => {
+	it('recognises its own container as already attached by full-id prefix (HOSTNAME is the short id) with the alias registered - no connect, no warning, no ExtraHosts', async () => {
 		vi.stubEnv('HOSTNAME', 'abc123def456');
-		const network = {
-			inspect: vi.fn(async () => ({
-				Containers: { abc123def456789000000000000000000000000000000000000000000000000000: {} },
-			})),
-			connect: vi.fn(async () => undefined),
-		};
-		const stub = stubDockerForNetwork(network);
+		const network = attachedNetwork();
+		const stub = stubDockerForNetwork(
+			network,
+			selfOnNetwork({ Aliases: ['abc123def456', 'apify-api'], IPAddress: '10.89.0.2' }),
+		);
+		const driver = new DockerDriver(stub.docker);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await driver.init();
+
+		expect(network.connect).not.toHaveBeenCalled();
+		expect(stub.getContainer).toHaveBeenCalledWith('abc123def456');
+		expect(warn).not.toHaveBeenCalled();
+		expect(await extraHostsOfOneRun(stub, driver)).toBeUndefined();
+		warn.mockRestore();
+	});
+
+	it("started on the network without the alias (`--network apify-local`, no `--network-alias`): run containers get apify-api -> this container's own address, no connect, no warning", async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const network = attachedNetwork();
+		const stub = stubDockerForNetwork(
+			network,
+			selfOnNetwork({ Aliases: ['abc123def456'], IPAddress: '10.89.0.2' }),
+		);
 		const driver = new DockerDriver(stub.docker);
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -1389,7 +1424,24 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 
 		expect(network.connect).not.toHaveBeenCalled();
 		expect(warn).not.toHaveBeenCalled();
-		expect(await extraHostsOfOneRun(stub, driver)).toBeUndefined();
+		expect(await extraHostsOfOneRun(stub, driver)).toEqual(['apify-api:10.89.0.2']);
+		warn.mockRestore();
+	});
+
+	it('on the network but with its own address unreadable: warns and falls back to the host-gateway extra host', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const network = attachedNetwork();
+		const stub = stubDockerForNetwork(network, async () => {
+			throw new Error('inspect failed');
+		});
+		const driver = new DockerDriver(stub.docker);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await driver.init();
+
+		expect(driver.available).toBe(true);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('host-gateway'));
+		expect(await extraHostsOfOneRun(stub, driver)).toEqual(['apify-api:host-gateway']);
 		warn.mockRestore();
 	});
 

@@ -148,9 +148,12 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - On startup, the runtime ensures a Docker network `apify-local` exists and joins it under the fixed
   DNS alias `apify-api`. Every Actor container is started on that network, so it can reach the
   runtime's API at `http://apify-api:3333` regardless of the host's own networking.
-- `http://apify-api:3333` must reach the runtime from every Actor container even when the runtime's
-  own container cannot join that network (for example under rootless Podman, or when the runtime runs
-  outside a container). The runtime says so at startup, naming the cause.
+- `http://apify-api:3333` must reach the runtime from every Actor container however the runtime's own
+  container ended up on that network - joined by itself, or started there without the alias - and even
+  when it cannot join it at all (for example under rootless Podman, or when the runtime runs outside a
+  container). The runtime says so at startup, naming the cause.
+- A run the engine refuses to start (for example a network it cannot set up) fails with the engine's
+  reason in both the run's status message and its log.
 
 # Actor run
 

@@ -153,7 +153,7 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		vi.stubEnv('HOSTNAME', 'abc123def456');
 		const stub = stubDockerForViewer({ imagePresent: true });
 		const driver = new DockerDriver(stub.docker);
-		driver.available = true; // `apiReachableByAlias` stays false: `init()` never attached this container.
+		driver.available = true; // `onActorNetwork` stays false: `init()` never attached this container.
 
 		const handle = await driver.startBrowserViewer({ runId: 'run-netns', interactive: false });
 
@@ -172,7 +172,7 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		const stub = stubDockerForViewer({ imagePresent: true });
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
-		(driver as unknown as { apiReachableByAlias: boolean }).apiReachableByAlias = true;
+		(driver as unknown as { onActorNetwork: boolean }).onActorNetwork = true;
 
 		const handle = await driver.startBrowserViewer({ runId: 'run-alias', interactive: false });
 

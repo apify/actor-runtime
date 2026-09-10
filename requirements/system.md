@@ -47,10 +47,11 @@
       actor-runtime
     ```
 
-- **Docker and Podman are equally supported**, rootful or rootless. Everything the system offers is
-  achievable with either engine and behaves the same on both; the user picks the engine simply by
-  mounting its Docker-compatible API socket into the runtime container, e.g.
-  `-v /run/podman/podman.sock:/var/run/docker.sock` for Podman.
+- **Docker and Podman (4 or newer) are equally supported**, rootful or rootless. Everything the system
+  offers is achievable with either engine and behaves the same on both; the user picks the engine simply
+  by mounting its Docker-compatible API socket into the runtime container, e.g.
+  `-v /run/podman/podman.sock:/var/run/docker.sock` for Podman. The runtime container may be started
+  on the `apify-local` network (`--network apify-local`, after creating it) or left to join it itself.
 
 - Optionally set `APIFY_PROXY_PASSWORD` in the runtime's own environment to have it forwarded into
   every Actor container (see `actor-driver.md`).

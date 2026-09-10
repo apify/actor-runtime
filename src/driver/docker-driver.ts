@@ -426,13 +426,18 @@ export class DockerDriver implements Driver {
 	private probeImageBuild: Promise<string> | undefined;
 	/** Python debug payload tar + debugpy version, read from disk at most once and cached. */
 	private debugPayload: { tar: Buffer; debugpyVersion: string } | undefined;
-	/** True once this process's own container is confirmed on the `apify-local` network under the
-	 * `apify-api` alias (`selfAttachToNetwork`), so Actor containers on that network resolve the alias
-	 * through the engine's DNS. False - the fallback `startRun` compensates for with an `ExtraHosts`
-	 * entry - whenever that could not be arranged: this process is not in a container at all (`pnpm dev`),
-	 * or the engine refused the attach (rootless Podman runs the runtime container under
-	 * slirp4netns/pasta, where joining a second network is unsupported). */
-	private apiReachableByAlias = false;
+	/** True once this process's own container is confirmed on the `apify-local` network
+	 * (`selfAttachToNetwork`): joined by this process, or started there with `--network apify-local`.
+	 * False when this process is not in a container at all (`pnpm dev`) or the engine refused the attach
+	 * (rootless Podman runs the runtime container under slirp4netns/pasta, where joining a second network
+	 * is unsupported). */
+	private onActorNetwork = false;
+	/** The `ExtraHosts` entry every Actor container gets so `apify-api` reaches this API, or undefined when
+	 * the network's own DNS resolves the alias (this process registered it when it joined). Set by
+	 * `selfAttachToNetwork`: `apify-api:host-gateway` (the host's published port) when this process is
+	 * off the network; `apify-api:<own address>` when it sits on the network without the alias - a
+	 * container started with `--network apify-local` has no alias unless the user also passed one. */
+	private apiHostEntry: string | undefined = `${CONTAINER_API_ALIAS}:host-gateway`;
 	private browserViewerImageId: string | undefined;
 	/** Shared by concurrent callers; cleared on failure so a later call retries (like `probeImageBuild`). */
 	private browserViewerImport: Promise<string> | undefined;
@@ -527,7 +532,8 @@ export class DockerDriver implements Driver {
 		// (the shipped runtime image) - a bare `node dist/index.js` on the host has nothing to attach.
 		const selfId = process.env.HOSTNAME;
 		if (!selfId) {
-			this.apiReachableByAlias = false;
+			this.onActorNetwork = false;
+			this.apiHostEntry = `${CONTAINER_API_ALIAS}:host-gateway`;
 			console.warn(
 				`Not running inside a container (no HOSTNAME): Actor containers will reach this API through ` +
 					`the host's port ${API_PORT} (${CONTAINER_API_ALIAS} -> host-gateway) instead of the ${NETWORK_NAME} ` +
@@ -543,18 +549,21 @@ export class DockerDriver implements Driver {
 		// every restart of the runtime container re-attempted the connect and logged the daemon's
 		// "already connected" rejection as a warning.
 		if (Object.keys(info?.Containers ?? {}).some((id) => id.startsWith(selfId))) {
-			this.apiReachableByAlias = true;
+			this.onActorNetwork = true;
+			this.apiHostEntry = await this.apiHostEntryWhenAlreadyAttached(selfId);
 			return;
 		}
 
 		try {
 			await network.connect({ Container: selfId, EndpointConfig: { Aliases: [CONTAINER_API_ALIAS] } });
-			this.apiReachableByAlias = true;
+			this.onActorNetwork = true;
+			this.apiHostEntry = undefined;
 		} catch (error) {
 			// Not fatal: `startRun` falls back to routing Actor containers to this API through the host's
 			// published port (`ExtraHosts: apify-api -> host-gateway`). The usual cause is rootless Podman,
 			// whose default slirp4netns/pasta network mode cannot join a second network at runtime.
-			this.apiReachableByAlias = false;
+			this.onActorNetwork = false;
+			this.apiHostEntry = `${CONTAINER_API_ALIAS}:host-gateway`;
 			console.warn(
 				`Could not attach the runtime's own container to the ${NETWORK_NAME} network: ${(error as Error).message}. ` +
 					`Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
@@ -563,6 +572,27 @@ export class DockerDriver implements Driver {
 					`and start the runtime container with \`--network ${NETWORK_NAME}\`.`,
 			);
 		}
+	}
+
+	/** For a runtime container that was put on the network by whoever started it (`--network apify-local`)
+	 * rather than by `selfAttachToNetwork`: the alias is registered only if they also passed
+	 * `--network-alias apify-api`. Otherwise the container's own address on the network stands in for it -
+	 * a hosts-file entry needs no DNS at all, so this route also works on engines whose network has no
+	 * name resolution. The host's published port is the last resort if even the address is unknown. */
+	private async apiHostEntryWhenAlreadyAttached(selfId: string): Promise<string | undefined> {
+		const self = await this.docker
+			.getContainer(selfId)
+			.inspect()
+			.catch(() => undefined);
+		const endpoint = self?.NetworkSettings?.Networks?.[NETWORK_NAME];
+		if (endpoint?.Aliases?.includes(CONTAINER_API_ALIAS)) return undefined;
+		if (endpoint?.IPAddress) return `${CONTAINER_API_ALIAS}:${endpoint.IPAddress}`;
+		console.warn(
+			`The runtime's own container is on the ${NETWORK_NAME} network but its address there could not be ` +
+				`read; Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
+				`(${CONTAINER_API_ALIAS} -> host-gateway), so keep -p ${API_PORT}:${API_PORT} published on all interfaces.`,
+		);
+		return `${CONTAINER_API_ALIAS}:host-gateway`;
 	}
 
 	async startBuild(ctx: BuildContext, onLog: (chunk: string) => void): Promise<BuildOutcome> {
@@ -751,12 +781,12 @@ export class DockerDriver implements Driver {
 			...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 			HostConfig: {
 				NetworkMode: NETWORK_NAME,
-				// Only when the alias cannot resolve through the network's own DNS (`apiReachableByAlias`'s
-				// doc comment): `host-gateway` is the engine's own keyword for the host's address as seen from
-				// the container, on Docker and Podman alike, so the alias then lands on the host's published
-				// API port. Never added when the alias works - a hosts-file entry would override the DNS
-				// alias and force every Actor through the host even when the direct route exists.
-				...(this.apiReachableByAlias ? {} : { ExtraHosts: [`${CONTAINER_API_ALIAS}:host-gateway`] }),
+				// Only when the alias cannot resolve through the network's own DNS (`apiHostEntry`'s doc
+				// comment): either this API's own address on the network, or `host-gateway` - the engine's
+				// keyword for the host's address as seen from the container, on Docker and Podman alike - so
+				// the alias then lands on the host's published API port. Never added when the alias works: a
+				// hosts-file entry would override the DNS alias and force every Actor through the host.
+				...(this.apiHostEntry ? { ExtraHosts: [this.apiHostEntry] } : {}),
 				Memory: ctx.memoryMbytes * 1024 * 1024,
 				// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 				// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
@@ -1212,11 +1242,11 @@ export class DockerDriver implements Driver {
 
 		// How the console reaches the sidecar's VNC server. Normally the sidecar joins `apify-local` and is
 		// reached by its address there. When this process runs in a container that could not join that
-		// network (`apiReachableByAlias`'s doc comment - rootless Podman), the sidecar shares this
-		// container's own network namespace instead, so the console reaches it on localhost; every sidecar
-		// then needs a port of its own in that shared namespace, allocated here where it will be used.
+		// network (`onActorNetwork`'s doc comment - rootless Podman), the sidecar shares this container's
+		// own network namespace instead, so the console reaches it on localhost; every sidecar then needs
+		// a port of its own in that shared namespace, allocated here where it will be used.
 		const selfContainerId = process.env.HOSTNAME;
-		const sharesRuntimeNetns = !this.apiReachableByAlias && !!selfContainerId;
+		const sharesRuntimeNetns = !this.onActorNetwork && !!selfContainerId;
 		const vncPort = sharesRuntimeNetns ? await allocateFreePort() : BROWSER_VIEWER_VNC_PORT;
 
 		let container: Docker.Container | undefined;
