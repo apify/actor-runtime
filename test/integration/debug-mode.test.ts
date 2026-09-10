@@ -58,6 +58,10 @@ function debugCapturingDriver(
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			return target;
 		},
@@ -740,6 +744,10 @@ describe('run-start debug-plan resolution (services/runs.ts, through the real st
 			async ensureProbeImage() {
 				throw new Error('not used by this stub');
 			},
+			async startBrowserViewer() {
+				throw new Error('not used by this stub');
+			},
+			async stopBrowserViewer() {},
 			async inspectDebugTarget() {
 				return { cmd: ['node', 'dist/main.js'], env: {} };
 			},

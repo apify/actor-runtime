@@ -5,6 +5,7 @@ import { createDriver } from './driver/index.js';
 import { createApiServer } from './api/server.js';
 import { attachEventsWebSocket } from './api/events-ws.js';
 import { createConsoleServer } from './console/server.js';
+import { attachBrowserViewWebSocket } from './console/browser-view-ws.js';
 import { startLogFlusher } from './services/logs.js';
 import { gracefulShutdown } from './shutdown.js';
 import { API_PORT, CONSOLE_PORT, DEFAULT_DATA_DIR } from './config.js';
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
 	// `api/events-ws.ts`'s own doc comment for why this attaches here rather than inside `createApiServer`
 	// (Express never sees an `upgrade` event, so this needs the actual `http.Server` `listen()` returned).
 	const eventsWebSocketServer = attachEventsWebSocket(apiServer);
+	const browserViewWebSocketServer = attachBrowserViewWebSocket(consoleServer);
 
 	console.log(`actor-runtime API listening on port ${API_PORT}`);
 
@@ -38,7 +40,7 @@ async function main(): Promise<void> {
 	}
 
 	const shutdown = async () => {
-		await gracefulShutdown({ apiServer, consoleServer, eventsWebSocketServer });
+		await gracefulShutdown({ apiServer, consoleServer, eventsWebSocketServer, browserViewWebSocketServer });
 		process.exit(0);
 	};
 

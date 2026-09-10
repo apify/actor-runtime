@@ -6,10 +6,10 @@
 - The console has no login of its own, so with multiple users it lists and shows every user's objects
   rather than scoping to one - the API's own endpoints stay strictly scoped to the calling token's user
   (`storage.md`'s "Users" section).
-- The console is unauthenticated. Every route is a read except the console's only four writes: the
-  dev-folder form, the debug-mode form, the run detail view's Migrate button, and the Settings form
-  (all below).
-- All four of those writes reject a submission that identifies itself as cross-site (via the
+- The console is unauthenticated. Every route is a read except the console's only five writes: the
+  dev-folder form, the debug-mode form, the browser-view form, the run detail view's Migrate button, and
+  the Settings form (all below).
+- All five of those writes reject a submission that identifies itself as cross-site (via the
   `Sec-Fetch-Site` header) with a plain `403`; a submission that does not is unaffected.
 - There are three types of objects: key-value store, dataset, request queue.
     - For each object type there must be exactly one widget for inspection.
@@ -40,6 +40,8 @@
 - A run whose debug plan resolved (`actor-driver.md`'s "Debug mode" section) gets one extra row on its
   detail view: `debug` - `<language>, attach at 127.0.0.1:<port>`. Absent entirely for a non-debug run.
   This field is local-only and never appears in the emulated `/v2` run object (`api.md`).
+- A run with browser view (`actor-driver.md`) gets one extra row on its detail view: `browser view` - a
+  link to its viewer page (below). Absent for other runs; never in the emulated `/v2` run object.
 - Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself.
 - The console accepts the real Apify Console's URL shapes (as printed by stock apify-cli, e.g. `/actors/:actorId/runs/:runId`, `/storage/datasets/:id`) via redirects to its own pages.
 
@@ -65,6 +67,17 @@
 - For any given input, the form and the API endpoint produce the same outcome.
 - A submission that fails validation redirects back to the same detail page with the classified error
   message shown inline, never silently applied.
+
+## Browser-view form (Actor detail view)
+
+- The Actor detail view shows the browser-view toggle status and a form with the API body's two fields,
+  `enabled` and `interactive`, as checkboxes. For any input, the form and the API produce the same outcome.
+
+## Browser view page (`/runs/:runId/browser`)
+
+- Shows the run's live display, view-only or interactive per the run's toggle, and says which. It reconnects
+  on its own while the run's browser is still starting.
+- For a run that has ended, or never had browser view, the page says so instead.
 
 ## Migrate button (run detail view)
 

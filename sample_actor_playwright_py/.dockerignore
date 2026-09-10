@@ -1,0 +1,11 @@
+.git
+.mise.toml
+.nvim.lua
+storage
+__pycache__/
+*.py[cod]
+.venv
+venv/
+.idea/
+.vscode
+.zed

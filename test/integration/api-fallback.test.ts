@@ -1061,6 +1061,10 @@ describe('api-fallback: dev-folder-* and internal-error types never forward', ()
 		async ensureProbeImage() {
 			return 'stub-probe-image:test';
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},

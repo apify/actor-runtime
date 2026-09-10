@@ -26,9 +26,20 @@ jobs:
             - run: pnpm test
 
     e2e:
-        name: Actor dev-loop e2e (apify-cli + Docker)
+        name: e2e ${{ matrix.file }} (apify-cli + Docker)
         runs-on: ubuntu-latest
         timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            # One job per e2e file. Each file starts its own runtime container on the fixed host ports
+            # (3333/3000), so files cannot share a daemon; separate runners make them parallel instead.
+            matrix:
+                file:
+                    - actor-dev-loop
+                    - debug-mode
+                    - dev-folder-bind-mount
+                    - browser-view-ts
+                    - browser-view-py
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v4
@@ -40,10 +51,13 @@ jobs:
             # The suite manages Docker itself against the runner's daemon: it pre-pulls the
             # Actor base images, builds the runtime image, starts the runtime container with
             # the host Docker socket, and drives it with stock apify-cli via npx.
-            - run: pnpm run test:e2e
+            - run: pnpm exec vitest run test/e2e/${{ matrix.file }}.test.ts
             # The e2e's runtime container is normally removed by the suite's afterAll; on
             # failure it is left running, so its server-side view of any failed request
             # (log-stream lifecycle included) is captured here for diagnosis.
             - name: Dump runtime container logs on failure
               if: failure()
-              run: docker logs actor-runtime-e2e --tail 300 || true
+              run: |
+                  for c in $(docker ps -aq --filter name=actor-runtime-e2e); do
+                    docker logs --tail 300 "$c" || true
+                  done

@@ -1,0 +1,14 @@
+{
+	"$schema": "https://apify.com/schemas/v1/actor.ide.json",
+	"actorSpecification": 1,
+	"name": "my-playwright-actor-py",
+	"title": "Python Playwright sample actor for actor-runtime",
+	"description": "Crawls up to max_requests_per_crawl same-hostname pages from start_urls with a headful Chromium driven by Playwright (Crawlee for Python), pushing one dataset item per page.",
+	"version": "0.0",
+	"buildTag": "latest",
+	"meta": {
+		"templateId": "python-crawlee-playwright"
+	},
+	"inputSchema": "./input_schema.json",
+	"dockerfile": "../Dockerfile"
+}
