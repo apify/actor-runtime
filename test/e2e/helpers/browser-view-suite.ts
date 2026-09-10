@@ -234,7 +234,9 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				expect(await endedPage.text()).toContain('This run has ended');
 				await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 			},
-			10 * 60 * 1000,
+			// One retry: the sample crawls a real external site (deliberately - the route out of an Actor is part
+			// of what is tested), and CI runners occasionally see its navigations time out; a defect reproduces.
+			{ timeout: 10 * 60 * 1000, retry: 1 },
 		);
 
 		it.runIf(sample.withToggleClearedCase)(
@@ -272,7 +274,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				) as DatasetInfoResult;
 				expect(info.itemCount).toBe(2);
 			},
-			5 * 60 * 1000,
+			{ timeout: 5 * 60 * 1000, retry: 1 },
 		);
 	});
 }
