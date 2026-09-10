@@ -102,7 +102,10 @@ Good to know:
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
 After the one push+build above, register your Actor's local source folder so every future run picks up
-local edits without a rebuild:
+local edits without a rebuild. An `apify-cli` that knows about the runtime does this for you: when
+`APIFY_CLIENT_BASE_URL` points at the runtime, `apify push` registers the pushed folder as the dev folder
+right after uploading it, and `apify call --no-dev-folder` runs once from the built image alone without
+touching the registration. Against the real Apify platform the flag is a no-op. To register by hand instead:
 
 ```bash
 apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/sample_actor_ts"'
@@ -128,7 +131,9 @@ from the built image - a per-run volume preserves it underneath the bind mount -
 in `package.json` still needs a real `apify push`/build; only source edits skip it. An entrypoint script
 the image keeps in its working directory (Apify's Playwright images start through an Xvfb wrapper there)
 stays available too, unless your folder carries its own copy. Clear the
-registration with an empty body (`--body '""'`) to go back to running purely from the built image. Full
+registration with an empty body (`--body '""'`) to go back to running purely from the built image, or
+skip it for a single run with `apify call --no-dev-folder` (the raw form is
+`POST /v2/actors/<actorId>/runs?devFolder=false`, which the run's log then records). Full
 mechanics: `requirements/actor-driver.md`'s "Bind mount volumes with Actor source code";
 endpoint/console details: `requirements/api.md`'s `/actor-runtime/*` section and
 `requirements/console.md`.

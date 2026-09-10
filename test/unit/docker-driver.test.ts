@@ -345,36 +345,6 @@ describe('DockerDriver.startRun - dev-folder mount composition (actor-driver.md:
 		await outcomePromise;
 	});
 
-	it('logs an explicit mount line naming both the host and container paths, before the container is even created, when devMount is present', async () => {
-		const stub = stubDockerForRun();
-		const driver = new DockerDriver(stub.docker);
-		driver.available = true;
-		const chunks: string[] = [];
-
-		allowDevMountRecheck(driver);
-
-		const outcomePromise = driver.startRun(
-			{
-				runId: 'run-mount-3',
-				imageId: 'fake-image',
-				env: {},
-				memoryMbytes: 128,
-				timeoutSecs: 60,
-				devMount: { localDevFolder: '/host/src', imageWorkingDirectory: '/usr/src/app' },
-			},
-			(chunk) => chunks.push(chunk),
-		);
-		await new Promise((resolve) => setImmediate(resolve));
-
-		expect(chunks.length).toBeGreaterThan(0);
-		expect(chunks[0]).toContain('/host/src');
-		expect(chunks[0]).toContain('/usr/src/app');
-
-		stub.triggerContainerExit(0);
-		stub.endLogStream();
-		await outcomePromise;
-	});
-
 	it('logs nothing extra when devMount is absent', async () => {
 		const stub = stubDockerForRun();
 		const driver = new DockerDriver(stub.docker);

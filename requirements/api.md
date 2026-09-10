@@ -144,6 +144,9 @@
 - The console's own dev-folder form (`console.md`) does **not** go through this endpoint - it posts to a
   console-local, unauthenticated route on the console's own port - but the two surfaces accept and
   reject exactly the same inputs with the same outcomes.
+- **`POST /v2/actors/:actorId/runs?devFolder=false`** - runs from the built image alone, ignoring the
+  registered dev folder for that one run only; the registration itself is unchanged. Any other value, or
+  no parameter, means the default behaviour.
 - **`POST /actor-runtime/debug/:actorId`** - sets (or clears) the Actor's persistent debug-mode toggle
   (`actor-driver.md`'s "Debug mode" section). `:actorId` accepts the same forms as the rest of the API.
     - **Authenticated** the same way as every `/v2` route, and scoped to the caller's own Actors.

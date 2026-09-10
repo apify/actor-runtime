@@ -311,6 +311,8 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				memoryMbytes: queryNumber(req, 'memory'),
 				timeoutSecs: queryNumber(req, 'timeout'),
 				build: tag,
+				// Runtime-only extension (`api.md`): `?devFolder=false` skips the dev-folder mount for this run.
+				devFolder: queryBoolean(req, 'devFolder'),
 				proxyPassword: resolveProxyPassword(requireUser(req)),
 				apiBaseUrl: CONTAINER_API_BASE_URL,
 				token: requireUser(req).token,

@@ -1,4 +1,5 @@
 import { generateId } from '../storage/ids.js';
+import { liveDevFolderWarningLines } from './dev-folder.js';
 import type { ActorRecord, ActorVersionRecord, BuildRecord, JobStatus, RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
@@ -69,6 +70,8 @@ export interface StartRunOptions {
 	 * imports that same constant as its local `DEFAULT_TAG` and always resolves and passes the actual tag
 	 * it used, so this default only matters for direct service-layer callers, e.g. tests. */
 	build?: string;
+	/** `false` skips the registered dev folder for this run only (`?devFolder=false`). */
+	devFolder?: boolean;
 	proxyPassword?: string;
 	apiBaseUrl: string;
 	token: string;
@@ -292,10 +295,20 @@ export async function runInBackground(
 	// directory, gets `devMount: undefined`, which `docker-driver.ts`'s `startRun` treats identically to
 	// "no `Mounts` key at all" - the regression guarantee that an unregistered/cleared Actor's run
 	// container is unaffected.
-	const devMount =
+	const devMountApplicable =
 		actor.localDevFolder && build.imageWorkingDirectory
 			? { localDevFolder: actor.localDevFolder, imageWorkingDirectory: build.imageWorkingDirectory }
 			: undefined;
+	const devMount = options.devFolder === false ? undefined : devMountApplicable;
+	if (devMountApplicable && !devMount) {
+		appendLog(
+			record.id,
+			`Skipping the registered local dev folder ${devMountApplicable.localDevFolder} for this run ` +
+				`(started with devFolder=false) - running from the built image alone.\n`,
+		);
+	}
+	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
+	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));
 
 	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
 	// so an abort landing during this (possibly slow) step is still caught by it.
@@ -494,4 +507,12 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 			}),
 		),
 	);
+}
+
+function renderRuntimeLogSection(lines: string[]): string {
+	const bold = (line: string) => `\x1b[1m${line}\x1b[0m`;
+	const title = ' Local Actor runtime ';
+	const width = 100;
+	const head = `${'='.repeat(4)}${title}${'='.repeat(width - 4 - title.length)}`;
+	return `${[bold(head), ...lines, bold('='.repeat(width))].join('\n')}\n`;
 }
