@@ -1009,6 +1009,110 @@ describe('DockerDriver.probeDevFolder (actor-driver.md: "A host-side existence-a
 	});
 });
 
+describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would hide (actor-driver.md: "stays available to the run")', () => {
+	const devMountRun = {
+		runId: 'run-entry',
+		imageId: 'fake-image',
+		env: {},
+		memoryMbytes: 128,
+		timeoutSecs: 60,
+		devMount: { localDevFolder: '/host/src', imageWorkingDirectory: '/usr/src/app' },
+	};
+
+	function scriptArchive(name: string, content: string): NodeJS.ReadableStream {
+		const pack = tar.pack();
+		pack.entry({ name, mode: 0o755 }, content);
+		pack.finalize();
+		return pack as unknown as NodeJS.ReadableStream;
+	}
+
+	async function entryNamesOf(archive: Buffer): Promise<Array<{ name: string; type?: string; content: string }>> {
+		const entries: Array<{ name: string; type?: string; content: string }> = [];
+		const extract = tar.extract();
+		await new Promise<void>((resolve, reject) => {
+			extract.on('entry', (header, stream, next) => {
+				const chunks: Buffer[] = [];
+				stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+				stream.on('end', () => {
+					entries.push({ name: header.name, type: header.type, content: Buffer.concat(chunks).toString() });
+					next();
+				});
+				stream.resume();
+			});
+			extract.once('finish', resolve);
+			extract.once('error', reject);
+			extract.end(archive);
+		});
+		return entries;
+	}
+
+	it('a relative entrypoint inside the working directory that the dev folder lacks: the file comes out of the image, lands in the container before start, and the run starts through that copy - the run log says so', async () => {
+		const stub = stubDockerForRun();
+		stub.imageInspect.mockResolvedValue({
+			Config: {
+				Entrypoint: ['./xvfb-entrypoint.sh'],
+				Cmd: ['python', '-m', 'my_actor'],
+				WorkingDir: '/usr/src/app',
+			},
+		});
+		stub.container.getArchive.mockResolvedValue(scriptArchive('xvfb-entrypoint.sh', '#!/bin/sh\nexec "$@"\n'));
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		allowDevMountRecheck(driver);
+		const hasEntry = vi.spyOn(driver, 'devFolderHasEntry').mockResolvedValue(false);
+		const logged: string[] = [];
+
+		const outcomePromise = driver.startRun(devMountRun, (chunk) => logged.push(chunk));
+		await new Promise((resolve) => setImmediate(resolve));
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		expect(hasEntry).toHaveBeenCalledWith('/host/src', './xvfb-entrypoint.sh');
+		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/usr/src/app/xvfb-entrypoint.sh' });
+		// Two containers: the throwaway one the file is read from, then the run's own.
+		expect(stub.createContainer).toHaveBeenCalledTimes(2);
+		const runOptions = stub.createContainer.mock.calls[1]![0];
+		expect(runOptions.Entrypoint).toEqual(['/apify-runtime-entrypoint/xvfb-entrypoint.sh']);
+		expect(runOptions.Cmd).toBeUndefined();
+		const [archive, putOptions] = stub.container.putArchive.mock.calls[0]!;
+		expect(putOptions).toEqual({ path: '/' });
+		expect(await entryNamesOf(archive as Buffer)).toEqual([
+			{ name: 'apify-runtime-entrypoint', type: 'directory', content: '' },
+			{ name: 'apify-runtime-entrypoint/xvfb-entrypoint.sh', type: 'file', content: '#!/bin/sh\nexec "$@"\n' },
+		]);
+		expect(logged.join('')).toContain('starts through ./xvfb-entrypoint.sh in its working directory');
+	});
+
+	it('the dev folder providing the file itself, an absolute entrypoint, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
+		for (const [config, devFolderHasIt] of [
+			[{ Entrypoint: ['./xvfb-entrypoint.sh'], WorkingDir: '/usr/src/app' }, true],
+			[{ Entrypoint: ['/usr/local/bin/xvfb-run', 'node', 'main.js'], WorkingDir: '/usr/src/app' }, false],
+			[{ Cmd: ['npm', 'start'], WorkingDir: '/usr/src/app' }, false],
+		] as Array<[Record<string, unknown>, boolean]>) {
+			const stub = stubDockerForRun();
+			stub.imageInspect.mockResolvedValue({ Config: config });
+			const driver = new DockerDriver(stub.docker);
+			driver.available = true;
+			allowDevMountRecheck(driver);
+			vi.spyOn(driver, 'devFolderHasEntry').mockResolvedValue(devFolderHasIt);
+
+			const outcomePromise = driver.startRun(devMountRun, () => {});
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+			stub.triggerContainerExit(0);
+			stub.endLogStream();
+			await outcomePromise;
+
+			expect(stub.container.getArchive).not.toHaveBeenCalled();
+			expect(stub.createContainer).toHaveBeenCalledTimes(1);
+			expect(stub.createContainer.mock.calls[0]![0].Entrypoint).toBeUndefined();
+			expect(stub.container.putArchive).not.toHaveBeenCalled();
+		}
+	});
+});
+
 /** Lets a `startRun` test with a `devMount` get past the run-start dev-folder re-check
  * (`assertDevFolderStillPresent`) when that check is not what the test is about. */
 function allowDevMountRecheck(driver: DockerDriver): void {

@@ -123,8 +123,10 @@ apify call --input '{"maxPages":3}'   # picks up the new dist/, no rebuild
 
 Node doesn't hot-reload a running process, so a local recompile is picked up by the **next** run's
 container start, not by any run already in progress. `node_modules` inside the container still comes
-from the built image - an anonymous volume preserves it underneath the bind mount - so a new dependency
-in `package.json` still needs a real `apify push`/build; only source edits skip it. Clear the
+from the built image - a per-run volume preserves it underneath the bind mount - so a new dependency
+in `package.json` still needs a real `apify push`/build; only source edits skip it. An entrypoint script
+the image keeps in its working directory (Apify's Playwright images start through an Xvfb wrapper there)
+stays available too, unless your folder carries its own copy. Clear the
 registration with an empty body (`--body '""'`) to go back to running purely from the built image. Full
 mechanics: `requirements/actor-driver.md`'s "Bind mount volumes with Actor source code";
 endpoint/console details: `requirements/api.md`'s `/actor-runtime/*` section and

@@ -14,7 +14,7 @@
  * Requires a reachable Docker daemon and fails loudly, never skips, mirroring `actor-dev-loop.test.ts`.
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -294,6 +294,63 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
 			// No mount line at all - the observability line only appears for a run that actually has one.
 			expect(log).not.toContain('Mounting local dev folder');
+		},
+		5 * 60 * 1000,
+	);
+
+	it(
+		"an entrypoint the image keeps inside its working directory (Apify's Playwright images start through one) stays available under the mount when the dev folder lacks it",
+		() => {
+			const env = apifyEnv(isolatedApifyHome);
+			// A tiny Actor of its own: busybox, an entrypoint script at ./entry.sh in the working directory
+			// (what `apify/actor-*-playwright*` images do with their Xvfb wrapper), and a dev folder that has
+			// no such file - mounting it over /app would hide the script.
+			const entryActorDir = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-devfolder-entry-'));
+			const devFolder = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-devfolder-entry-src-'));
+			try {
+				mkdirSync(join(entryActorDir, '.actor'));
+				writeFileSync(
+					join(entryActorDir, '.actor', 'actor.json'),
+					JSON.stringify({
+						actorSpecification: 1,
+						name: 'devfolder-entrypoint',
+						version: '0.0',
+						buildTag: 'latest',
+					}),
+				);
+				writeFileSync(
+					join(entryActorDir, 'entry.sh'),
+					'#!/bin/sh\necho "entry.sh from the image: $0"\nexec "$@"\n',
+				);
+				writeFileSync(
+					join(entryActorDir, 'Dockerfile'),
+					[
+						'FROM docker.io/library/busybox',
+						'WORKDIR /app',
+						'COPY entry.sh ./entry.sh',
+						'RUN chmod 755 ./entry.sh',
+						'ENTRYPOINT ["./entry.sh"]',
+						'CMD ["sh", "-c", "ls /app; echo run-body-done"]',
+						'',
+					].join('\n'),
+				);
+				writeFileSync(join(devFolder, 'only-in-dev-folder.txt'), 'x');
+
+				const push = JSON.parse(apify(['push', '--json'], { cwd: entryActorDir, env })) as PushResult;
+				expect(push.build.status).toBe('SUCCEEDED');
+				registerDevFolder(push.actor.id, devFolder, env);
+
+				// `apify call` streams the run log; a FAILED run makes it exit non-zero, which throws here.
+				const output = apifyAllOutput(['call'], { cwd: entryActorDir, env });
+				expect(output).toContain('starts through ./entry.sh in its working directory');
+				expect(output).toContain('entry.sh from the image: /apify-runtime-entrypoint/entry.sh');
+				// The dev folder, not the image's /app, is what the run sees in the working directory.
+				expect(output).toContain('only-in-dev-folder.txt');
+				expect(output).toContain('run-body-done');
+			} finally {
+				rmSync(entryActorDir, { recursive: true, force: true });
+				rmSync(devFolder, { recursive: true, force: true });
+			}
 		},
 		5 * 60 * 1000,
 	);

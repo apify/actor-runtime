@@ -224,6 +224,46 @@ function devNodeModulesVolumeName(runId: string): string {
 	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
 }
 
+/** A command token the engine resolves against the working directory rather than `PATH`: `./x.sh`,
+ * `bin/x` - relative, with a slash. A bare `x.sh` goes through `PATH`, an absolute path is unaffected
+ * by what is mounted over the working directory. */
+function isWorkingDirectoryRelative(token: string): boolean {
+	return !token.startsWith('/') && token.includes('/');
+}
+
+function readStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+		stream.once('error', reject);
+		stream.once('end', () => resolve(Buffer.concat(chunks)));
+	});
+}
+
+/** Re-packs the single-file archive `getArchive` returns so its entries land under `directory` when
+ * extracted at `/`, with an explicit directory entry so no engine has to invent the parent. */
+async function repackUnderDirectory(archive: Buffer, directory: string): Promise<Buffer> {
+	const dir = directory.replace(/^\/+/, '');
+	const pack = tar.pack();
+	const extract = tar.extract();
+	const packed = readStream(pack);
+	pack.entry({ name: dir, type: 'directory', mode: 0o755 });
+	await new Promise<void>((resolve, reject) => {
+		extract.on('entry', (header, content, next) => {
+			const entry = pack.entry({ ...header, name: `${dir}/${header.name}` }, (error) => {
+				if (error) reject(error);
+				else next();
+			});
+			content.pipe(entry);
+		});
+		extract.once('error', reject);
+		extract.once('finish', resolve);
+		extract.end(archive);
+	});
+	pack.finalize();
+	return packed;
+}
+
 /** A container's address on `network`, else on whatever network it does have. */
 function containerAddress(info: Docker.ContainerInspectInfo, network: string | undefined): string | undefined {
 	const networks = info.NetworkSettings?.Networks ?? {};
@@ -252,6 +292,17 @@ const X11_SOCKET_DIR = '/tmp/.X11-unix';
  * follows. Named, not anonymous, because Podman 3.x refuses a volume mount without a source ("must set
  * source volume"). Removed with the run, and swept by this prefix after a restart. */
 const DEV_NODE_MODULES_VOLUME_PREFIX = 'actor-runtime-node-modules-';
+/** Where a `devMount` run keeps the image's own copy of an entrypoint file the bind mount would hide
+ * (`preserveHiddenEntrypoint`). */
+const PRESERVED_ENTRYPOINT_DIR = '/apify-runtime-entrypoint';
+
+/** The image command a `devMount` run starts through instead of its own, plus the tar that puts the
+ * preserved file in place before the container starts. */
+interface PreservedEntrypoint {
+	field: 'Entrypoint' | 'Cmd';
+	command: string[];
+	tar: Buffer;
+}
 /** Reachable only on `apify-local`; never published on the host. */
 const BROWSER_VIEWER_VNC_PORT = 5900;
 const BROWSER_VIEWER_MEMORY_BYTES = 256 * 1024 * 1024;
@@ -1017,12 +1068,14 @@ export class DockerDriver implements Driver {
 		// bind whose source vanished since registration, but Podman's Docker-compatible API auto-creates the
 		// missing source instead - which would silently start the run against an empty directory, exactly
 		// what `actor-driver.md` forbids ("fail visibly - never silently mount an empty directory").
+		let preservedEntrypoint: PreservedEntrypoint | undefined;
 		if (ctx.devMount) {
 			await this.assertDevFolderStillPresent(ctx.devMount.localDevFolder);
 			onLog(
 				`Mounting local dev folder ${ctx.devMount.localDevFolder} over the image's working directory ` +
-					`${ctx.devMount.imageWorkingDirectory} (node_modules preserved via an anonymous volume).\n`,
+					`${ctx.devMount.imageWorkingDirectory} (node_modules preserved via a per-run volume).\n`,
 			);
+			preservedEntrypoint = await this.preserveHiddenEntrypoint(ctx.imageId, ctx.devMount, onLog);
 		}
 
 		// Loaded and logged before `createContainer` so a missing payload fails the run before any
@@ -1055,6 +1108,7 @@ export class DockerDriver implements Driver {
 				Image: ctx.imageId,
 				Env: env,
 				Labels: { [RUN_LABEL]: ctx.runId },
+				...(preservedEntrypoint ? { [preservedEntrypoint.field]: preservedEntrypoint.command } : {}),
 				...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 				HostConfig: {
 					...(await this.actorNetworkHostConfig(onActorNetwork)),
@@ -1094,6 +1148,7 @@ export class DockerDriver implements Driver {
 
 		try {
 			// Inside the try so a failed upload still reaches the finally below and removes the container.
+			if (preservedEntrypoint) await container.putArchive(preservedEntrypoint.tar, { path: '/' });
 			if (debugPayload) {
 				await container.putArchive(debugPayload.tar, { path: '/' });
 			}
@@ -1117,6 +1172,7 @@ export class DockerDriver implements Driver {
 				this.runContainers.set(ctx.runId, retry);
 				container = retry;
 				try {
+					if (preservedEntrypoint) await retry.putArchive(preservedEntrypoint.tar, { path: '/' });
 					if (debugPayload) await retry.putArchive(debugPayload.tar, { path: '/' });
 					await retry.start();
 				} catch (retryError) {
@@ -1243,6 +1299,75 @@ export class DockerDriver implements Driver {
 				`registration (POST /actor-runtime/dev-folder/<actorId> with an empty string body) to run from the ` +
 				`built image alone.`,
 		);
+	}
+
+	/**
+	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when that names a file
+	 * inside the working directory - Apify's Playwright base images start through `./xvfb-entrypoint.sh`
+	 * there - the bind mount hides it unless the dev folder happens to carry the same file, and the engine
+	 * refuses to start ("executable file not found"). Unless the dev folder provides it, the file is
+	 * taken from the image and the run starts through that copy, at a path no mount covers. Anything
+	 * `PATH`-resolved or absolute is left alone: the mount cannot hide it.
+	 */
+	private async preserveHiddenEntrypoint(
+		imageId: string,
+		devMount: DevFolderMount,
+		onLog: (chunk: string) => void,
+	): Promise<PreservedEntrypoint | undefined> {
+		const info = await this.docker.getImage(imageId).inspect();
+		const entrypointRaw = info.Config?.Entrypoint;
+		const entrypoint = Array.isArray(entrypointRaw) ? entrypointRaw : entrypointRaw ? [entrypointRaw] : [];
+		const field: PreservedEntrypoint['field'] = entrypoint.length > 0 ? 'Entrypoint' : 'Cmd';
+		const command = field === 'Entrypoint' ? entrypoint : (info.Config?.Cmd ?? []);
+		const first = command[0];
+		if (!first || !isWorkingDirectoryRelative(first)) return undefined;
+		if (await this.devFolderHasEntry(devMount.localDevFolder, first)) return undefined;
+
+		const inImage = path.posix.resolve(devMount.imageWorkingDirectory, first);
+		const archive = await this.extractFromImage(imageId, inImage);
+		const tarball = await repackUnderDirectory(archive, PRESERVED_ENTRYPOINT_DIR);
+		onLog(
+			`The image starts through ${first} in its working directory, which the dev folder does not contain; ` +
+				`using the image's own copy of it.\n`,
+		);
+		return {
+			field,
+			command: [`${PRESERVED_ENTRYPOINT_DIR}/${path.posix.basename(inImage)}`, ...command.slice(1)],
+			tar: tarball,
+		};
+	}
+
+	/** Whether `relativePath` exists inside the registered dev folder on the host - through the same probe
+	 * container `probeDevFolder` uses, so the answer is the engine's own. Public for tests. */
+	async devFolderHasEntry(localDevFolder: string, relativePath: string): Promise<boolean> {
+		const container = await this.docker.createContainer({
+			Image: await this.ensureProbeImage(),
+			Labels: { [PROBE_LABEL]: 'true' },
+			HostConfig: {
+				Mounts: [{ Type: 'bind', Source: PROBE_MOUNT_SOURCE, Target: PROBE_MOUNT_TARGET, ReadOnly: true }],
+			},
+		});
+		try {
+			const outcome = await statInProbe(
+				container,
+				path.posix.join(PROBE_MOUNT_TARGET, localDevFolder, relativePath),
+			);
+			return outcome.ok;
+		} finally {
+			await container.remove().catch((error: Error) => {
+				console.warn(`Could not remove dev-folder probe container ${container.id}: ${error.message}`);
+			});
+		}
+	}
+
+	/** The archive of one path from an image, read through a container created (never started) from it. */
+	private async extractFromImage(imageId: string, pathInImage: string): Promise<Buffer> {
+		const container = await this.docker.createContainer({ Image: imageId, Labels: { [PROBE_LABEL]: 'true' } });
+		try {
+			return await readStream((await container.getArchive({ path: pathInImage })) as NodeJS.ReadableStream);
+		} finally {
+			await container.remove().catch(() => undefined);
+		}
 	}
 
 	/** The two `HostConfig.Mounts` entries for a `devMount` run: a read-write bind for the dev folder

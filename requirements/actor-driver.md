@@ -52,6 +52,9 @@
       else unverifiable reports a generic "could not verify".
 - **Registration has no build-first precondition** - it requires no build of the Actor to exist,
   succeeded or otherwise.
+- An entrypoint the image keeps inside its working directory (Apify's Playwright base images start
+  through an Xvfb script there) stays available to the run even though the mount covers that directory,
+  unless the dev folder provides its own copy; the run log says so.
 - The working directory the mount covers is recorded **per build**, never on the Actor
   (`storage.md`); the mount a run applies always uses the one from _that run's own resolved build_,
   never any other build the Actor happens to have.
