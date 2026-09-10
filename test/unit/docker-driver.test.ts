@@ -7,7 +7,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Docker from 'dockerode';
 import * as tar from 'tar-stream';
 
-import { DockerDriver, hostAddressSeenFromContainers } from '../../src/driver/docker-driver.js';
+import {
+	chooseDefaultNetworkRoute,
+	defaultGatewayFromRouteTable,
+	DockerDriver,
+	hostAddressSeenFromContainers,
+} from '../../src/driver/docker-driver.js';
 import { stubDockerForRun } from './helpers/docker-stubs.js';
 
 /**
@@ -1537,6 +1542,41 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		warn.mockRestore();
 	});
 
+	it('the fallback container under rootless Podman 3.x (slirp4netns view) is started in slirp4netns:allow_host_loopback=true with apify-api at the gateway', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const dir = await mkdtemp(path.join(os.tmpdir(), 'netview-'));
+		const hostsFile = path.join(dir, 'hosts');
+		await writeFile(hostsFile, '10.0.2.2 host.containers.internal\n');
+		const routeFile = path.join(dir, 'route');
+		await writeFile(routeFile, 'Iface\tDestination\tGateway\ntap0\t00000000\t0202000A\n');
+		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
+		const stub = stubDockerForNetwork(network);
+		const driver = new DockerDriver(stub.docker, {
+			hostsFile,
+			routeFile,
+			networkInterfaces: () => ({
+				tap0: [{ address: '10.0.2.100', family: 'IPv4', internal: false } as os.NetworkInterfaceInfo],
+			}),
+		});
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await driver.init();
+		stub.container.start.mockRejectedValueOnce(new Error('CNI network "apify-local" not found'));
+
+		const outcomePromise = driver.startRun(
+			{ runId: 'run-slirp', imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		const retry = stub.createContainer.mock.calls[1]![0].HostConfig!;
+		expect(retry.NetworkMode).toBe('slirp4netns:allow_host_loopback=true');
+		expect(retry.ExtraHosts).toEqual(['apify-api:10.0.2.2']);
+		vi.restoreAllMocks();
+	});
+
 	it('when the retry on the default network fails as well, the original failure is what propagates and the network is not written off', async () => {
 		vi.stubEnv('HOSTNAME', 'abc123def456');
 		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
@@ -1564,6 +1604,62 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		stub.endLogStream();
 		await outcomePromise;
 		expect(stub.createContainer.mock.calls[2]![0].HostConfig?.NetworkMode).toBe('apify-local');
+	});
+});
+
+describe("chooseDefaultNetworkRoute (Actors on the engine's default network, `actor-driver.md` Networking)", () => {
+	it("rootless Podman 3.x under slirp4netns: the engine's host entry is the slirp gateway, which only reaches the host with allow_host_loopback", () => {
+		expect(
+			chooseDefaultNetworkRoute({
+				hostAddress: '10.0.2.2',
+				gateway: '10.0.2.2',
+				own: { address: '10.0.2.100', iface: 'tap0' },
+			}),
+		).toEqual({ extraHost: 'apify-api:10.0.2.2', networkMode: 'slirp4netns:allow_host_loopback=true' });
+	});
+
+	it("rootful bridge: the host entry is the bridge gateway, so this container's own address on that bridge is the direct route", () => {
+		expect(
+			chooseDefaultNetworkRoute({
+				hostAddress: '10.88.0.1',
+				gateway: '10.88.0.1',
+				own: { address: '10.88.0.5', iface: 'eth0' },
+			}),
+		).toEqual({ extraHost: 'apify-api:10.88.0.5' });
+	});
+
+	it("otherwise the engine's host entry is the route (rootless Podman 4+: a real host address), or host-gateway without one (Docker Engine)", () => {
+		expect(
+			chooseDefaultNetworkRoute({
+				hostAddress: '192.168.1.20',
+				gateway: '10.0.2.2',
+				own: { address: '10.0.2.100', iface: 'tap0' },
+			}),
+		).toEqual({ extraHost: 'apify-api:192.168.1.20' });
+		expect(
+			chooseDefaultNetworkRoute({
+				hostAddress: undefined,
+				gateway: '172.17.0.1',
+				own: { address: '172.17.0.2', iface: 'eth0' },
+			}),
+		).toEqual({
+			extraHost: 'apify-api:host-gateway',
+		});
+		expect(chooseDefaultNetworkRoute({ hostAddress: undefined, gateway: undefined, own: undefined })).toEqual({
+			extraHost: 'apify-api:host-gateway',
+		});
+	});
+});
+
+describe('defaultGatewayFromRouteTable', () => {
+	it('decodes the little-endian default gateway of /proc/net/route, and returns undefined without a default route', () => {
+		const table =
+			'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n' +
+			'tap0\t00000000\t0202000A\t0003\t0\t0\t0\t00000000\t0\t0\t0\n' +
+			'tap0\t0002000A\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n';
+		expect(defaultGatewayFromRouteTable(table)).toBe('10.0.2.2');
+		expect(defaultGatewayFromRouteTable('Iface\tDestination\tGateway\neth0\t0002000A\t00000000\n')).toBeUndefined();
+		expect(defaultGatewayFromRouteTable('')).toBeUndefined();
 	});
 });
 

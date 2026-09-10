@@ -34,6 +34,7 @@
 import { PassThrough } from 'node:stream';
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import * as os from 'node:os';
 import { createServer } from 'node:net';
 import * as path from 'node:path';
 import Docker from 'dockerode';
@@ -80,12 +81,77 @@ const ENGINE_HOST_NAMES = ['host.containers.internal', 'host.docker.internal'];
  * entry - on Docker Engine, or when this process runs outside a container.
  */
 export async function hostAddressSeenFromContainers(hostsFile: string): Promise<string> {
+	return (await engineHostEntry(hostsFile)) ?? 'host-gateway';
+}
+
+async function engineHostEntry(hostsFile: string): Promise<string | undefined> {
 	const content = await readFile(hostsFile, 'utf8').catch(() => '');
 	for (const line of content.split('\n')) {
 		const fields = line.split('#')[0]!.trim().split(/\s+/);
 		if (fields.length >= 2 && fields.slice(1).some((name) => ENGINE_HOST_NAMES.includes(name))) return fields[0]!;
 	}
-	return 'host-gateway';
+	return undefined;
+}
+
+/** What this process can learn about its own container's network from the inside, with no engine call. */
+export interface OwnNetworkView {
+	/** Address the engine hands containers for the host (`hostAddressSeenFromContainers`), or undefined for `host-gateway`. */
+	hostAddress: string | undefined;
+	/** This container's default gateway, from `/proc/net/route`. */
+	gateway: string | undefined;
+	/** This container's first non-loopback IPv4 address and the interface it sits on. */
+	own: { address: string; iface: string } | undefined;
+}
+
+/** How an Actor container on the engine's DEFAULT network reaches this API (`actorNetworkUsable` false). */
+export interface DefaultNetworkRoute {
+	/** `ExtraHosts` entry for `apify-api`. */
+	extraHost: string;
+	/** Engine network mode the Actor container needs for that entry to work, if any. */
+	networkMode?: string;
+}
+
+const SLIRP4NETNS_GATEWAY = '10.0.2.2';
+const SLIRP4NETNS_INTERFACE = 'tap0';
+/** Podman's user-mode network with the host's loopback reachable at the gateway - Actors under rootless
+ * Podman before 4.0 need it, where the engine's own host entry IS that gateway and is otherwise blocked. */
+const SLIRP4NETNS_HOST_LOOPBACK_MODE = 'slirp4netns:allow_host_loopback=true';
+
+/**
+ * Picks the route for Actor containers on the engine's default network. The engine's own host entry is
+ * the default. Two cases where that entry is this container's gateway need more: under slirp4netns the
+ * gateway only reaches the host's loopback when the Actor is started with `allow_host_loopback`
+ * (rootless Podman 3.x points `host.containers.internal` there); on a rootful bridge every Actor shares
+ * this container's bridge, so this container's own address is a direct route with no port-forward hop.
+ */
+export function chooseDefaultNetworkRoute(view: OwnNetworkView): DefaultNetworkRoute {
+	const { hostAddress, gateway, own } = view;
+	if (hostAddress && gateway && hostAddress === gateway) {
+		if (own?.iface === SLIRP4NETNS_INTERFACE || gateway === SLIRP4NETNS_GATEWAY) {
+			return { extraHost: `${CONTAINER_API_ALIAS}:${gateway}`, networkMode: SLIRP4NETNS_HOST_LOOPBACK_MODE };
+		}
+		if (own) return { extraHost: `${CONTAINER_API_ALIAS}:${own.address}` };
+	}
+	return { extraHost: `${CONTAINER_API_ALIAS}:${hostAddress ?? 'host-gateway'}` };
+}
+
+/** The default gateway from a Linux `/proc/net/route` (little-endian hex), or undefined. */
+export function defaultGatewayFromRouteTable(routeTable: string): string | undefined {
+	for (const line of routeTable.split('\n').slice(1)) {
+		const [, destination, gateway] = line.trim().split(/\s+/);
+		if (destination !== '00000000' || !gateway || gateway.length !== 8) continue;
+		const bytes = gateway.match(/../g)!.map((hex) => parseInt(hex, 16));
+		return bytes.reverse().join('.');
+	}
+	return undefined;
+}
+
+function firstNonLoopbackIpv4(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): OwnNetworkView['own'] {
+	for (const [iface, infos] of Object.entries(interfaces)) {
+		const info = infos?.find((i) => i.family === 'IPv4' && !i.internal);
+		if (info) return { address: info.address, iface };
+	}
+	return undefined;
 }
 
 /** A container's address on `network`, else on whatever network it does have. */
@@ -481,7 +547,11 @@ export class DockerDriver implements Driver {
 	 * default network with `hostRouteEntry`. Ubuntu 22.04's Podman 3.4 lands here - its CNI plugins reject
 	 * the network config Podman itself writes, so no user-defined network can start a container. */
 	private actorNetworkUsable = true;
+	/** `chooseDefaultNetworkRoute`'s answer, computed once on first use. */
+	private defaultNetworkRoute: Promise<DefaultNetworkRoute> | undefined;
 	private readonly hostsFile: string;
+	private readonly routeFile: string;
+	private readonly networkInterfaces: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
 	private browserViewerImageId: string | undefined;
 	/** Shared by concurrent callers; cleared on failure so a later call retries (like `probeImageBuild`). */
 	private browserViewerImport: Promise<string> | undefined;
@@ -492,9 +562,18 @@ export class DockerDriver implements Driver {
 
 	/** `docker` is injectable (defaults to a real `Docker()` socket client) so tests can pass a stub
 	 * `dockerode`-shaped object - there is no Docker daemon in this sandbox to test against for real. */
-	constructor(docker: Docker = new Docker(), options: { hostsFile?: string } = {}) {
+	constructor(
+		docker: Docker = new Docker(),
+		options: {
+			hostsFile?: string;
+			routeFile?: string;
+			networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
+		} = {},
+	) {
 		this.docker = docker;
 		this.hostsFile = options.hostsFile ?? '/etc/hosts';
+		this.routeFile = options.routeFile ?? '/proc/net/route';
+		this.networkInterfaces = options.networkInterfaces ?? (() => os.networkInterfaces());
 	}
 
 	async init(): Promise<void> {
@@ -645,28 +724,46 @@ export class DockerDriver implements Driver {
 
 	/** The `HostConfig` network fields for an Actor-side container: on the `apify-local` network with the
 	 * alias route, or on the engine's default network with the host route. */
-	private actorNetworkHostConfig(onActorNetwork: boolean): Pick<Docker.HostConfig, 'NetworkMode' | 'ExtraHosts'> {
-		const entry = onActorNetwork ? this.apiHostEntry : this.hostRouteEntry;
-		return {
-			...(onActorNetwork ? { NetworkMode: NETWORK_NAME } : {}),
-			// Only when the alias cannot resolve through the network's own DNS (`apiHostEntry`'s doc
-			// comment). Never added when the alias works: a hosts-file entry would override the DNS alias
-			// and force every Actor through the host.
-			...(entry ? { ExtraHosts: [entry] } : {}),
-		};
+	private async actorNetworkHostConfig(
+		onActorNetwork: boolean,
+	): Promise<Pick<Docker.HostConfig, 'NetworkMode' | 'ExtraHosts'>> {
+		if (onActorNetwork) {
+			return {
+				NetworkMode: NETWORK_NAME,
+				// Only when the alias cannot resolve through the network's own DNS (`apiHostEntry`'s doc
+				// comment). Never added when the alias works: a hosts-file entry would override the DNS alias
+				// and force every Actor through the host.
+				...(this.apiHostEntry ? { ExtraHosts: [this.apiHostEntry] } : {}),
+			};
+		}
+		const route = await this.routeOnDefaultNetwork();
+		return { ...(route.networkMode ? { NetworkMode: route.networkMode } : {}), ExtraHosts: [route.extraHost] };
+	}
+
+	private routeOnDefaultNetwork(): Promise<DefaultNetworkRoute> {
+		this.defaultNetworkRoute ??= (async () => {
+			const view: OwnNetworkView = {
+				hostAddress: await engineHostEntry(this.hostsFile),
+				gateway: defaultGatewayFromRouteTable(await readFile(this.routeFile, 'utf8').catch(() => '')),
+				own: firstNonLoopbackIpv4(this.networkInterfaces()),
+			};
+			return chooseDefaultNetworkRoute(view);
+		})();
+		return this.defaultNetworkRoute;
 	}
 
 	/** Called the first time a container started on the engine's default network after failing to start
 	 * on `apify-local`: every later one skips the network, and the operator learns why once. */
-	private markActorNetworkUnusable(cause: unknown): void {
+	private async markActorNetworkUnusable(cause: unknown): Promise<void> {
 		if (!this.actorNetworkUsable) return;
 		this.actorNetworkUsable = false;
+		const route = await this.routeOnDefaultNetwork();
 		console.warn(
 			`Containers cannot start on the ${NETWORK_NAME} network (${(cause as Error).message}). Actor containers ` +
-				`run on the engine's default network instead and reach this API through the host's published port ` +
-				`${API_PORT} (${this.hostRouteEntry}), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
-				`On Ubuntu 22.04's Podman 3.4 the cause is its CNI plugins rejecting the network config Podman writes ` +
-				`(see README.md, "Running with Podman").`,
+				`run on the engine's default network instead and reach this API as ${route.extraHost}` +
+				`${route.networkMode ? ` (network mode ${route.networkMode})` : ''}; keep -p ${API_PORT}:${API_PORT} ` +
+				`published on all interfaces. On Ubuntu 22.04's Podman 3.4 the cause is its CNI plugins rejecting ` +
+				`the network config Podman writes (see README.md, "Running with Podman").`,
 		);
 	}
 
@@ -849,14 +946,14 @@ export class DockerDriver implements Driver {
 				: []),
 		];
 
-		const createRunContainer = (onActorNetwork: boolean): Promise<Docker.Container> =>
+		const createRunContainer = async (onActorNetwork: boolean): Promise<Docker.Container> =>
 			this.docker.createContainer({
 				Image: ctx.imageId,
 				Env: env,
 				Labels: { [RUN_LABEL]: ctx.runId },
 				...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 				HostConfig: {
-					...this.actorNetworkHostConfig(onActorNetwork),
+					...(await this.actorNetworkHostConfig(onActorNetwork)),
 					Memory: ctx.memoryMbytes * 1024 * 1024,
 					// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 					// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
@@ -921,7 +1018,7 @@ export class DockerDriver implements Driver {
 					throw error;
 				}
 				onActorNetwork = false;
-				this.markActorNetworkUnusable(error);
+				await this.markActorNetworkUnusable(error);
 			}
 
 			// Only started when someone is actually listening - an unconditional sampler would issue
@@ -1394,7 +1491,7 @@ export class DockerDriver implements Driver {
 				if (!this.actorNetworkUsable) throw error;
 				const handle = await launch(false).catch(() => undefined);
 				if (!handle) throw error;
-				this.markActorNetworkUnusable(error);
+				await this.markActorNetworkUnusable(error);
 				return handle;
 			}
 		} catch (error) {
