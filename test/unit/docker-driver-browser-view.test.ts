@@ -104,7 +104,8 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		const [volumeOptions] = stub.createVolume.mock.calls[0]!;
 		expect(volumeOptions.Name).toBe('actor-runtime-x11-run-1');
 		expect(volumeOptions.Driver).toBe('local');
-		expect(volumeOptions.DriverOpts).toEqual({ type: 'tmpfs', device: 'tmpfs', o: 'mode=1777' });
+		// A plain local volume: rootless Podman 3.x cannot mount tmpfs-backed volumes.
+		expect(volumeOptions.DriverOpts).toBeUndefined();
 		expect(volumeOptions.Labels).toEqual({ 'actor-runtime.runId': 'run-1', 'actor-runtime.browserViewer': 'true' });
 
 		const [containerOptions] = stub.createContainer.mock.calls[0]!;

@@ -1517,10 +1517,13 @@ export class DockerDriver implements Driver {
 		return tag;
 	}
 
-	/** The volume is created with mode 1777 up front: the Actor's Xvfb runs unprivileged and must be able
-	 * to create its socket there. No `size=` cap: it only ever holds one Unix socket, and Podman 5 rejects
-	 * a sized tmpfs volume outright on a filesystem without project quota ("Volume options size and inodes
-	 * not supported"). Anything created here is removed again if a later step fails. */
+	/** A plain local volume, no tmpfs options: rootless Podman 3.x cannot mount a tmpfs volume at all
+	 * ("cannot mount volumes without root privileges"), and Podman 5 rejects a sized one on a filesystem
+	 * without project quota. It only ever holds one Unix socket. The Actor's Xvfb runs unprivileged and
+	 * must be able to create that socket, so the directory must end up mode 1777: the sidecar image
+	 * carries `/tmp/.X11-unix` with that mode (copied onto the empty volume when the sidecar, which mounts
+	 * it first, starts) and its script chmods it again as root to be sure. Anything created here is
+	 * removed again if a later step fails. */
 	async startBrowserViewer(target: BrowserViewerTarget): Promise<BrowserViewerHandle> {
 		if (!this.available) {
 			throw new Error(this.unavailableReason ?? 'Docker is not available');
@@ -1531,12 +1534,7 @@ export class DockerDriver implements Driver {
 		const containerName = `actor-runtime-browser-viewer-${target.runId}`;
 		const labels = { [RUN_LABEL]: target.runId, [BROWSER_VIEWER_LABEL]: 'true' };
 
-		await this.docker.createVolume({
-			Name: volumeName,
-			Driver: 'local',
-			DriverOpts: { type: 'tmpfs', device: 'tmpfs', o: 'mode=1777' },
-			Labels: labels,
-		});
+		await this.docker.createVolume({ Name: volumeName, Driver: 'local', Labels: labels });
 
 		// How the console reaches the sidecar's VNC server. Normally the sidecar joins `apify-local` and is
 		// reached by its address there. When this process runs in a container that could not join that
