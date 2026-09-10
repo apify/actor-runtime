@@ -195,8 +195,13 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			const env = apifyEnv(isolatedApifyHome);
 
 			// Image built from the pristine source (`ORIGINAL_MARKER`); the host folder then gets the edited
-			// compile, so the two are distinguishable by which marker a run prints.
+			// compile, so the two are distinguishable by which marker a run prints. The previous test left a
+			// locally compiled `dist/` in `actorDir`; it has to go before the push, since `apify push` uploads
+			// it (the folder has no `.gitignore`) and the Dockerfile's final `COPY . ./` would then bake that
+			// stale compile into the image over the builder stage's own - which Docker's API build does,
+			// `.dockerignore` being a client-side convention it never sees.
 			writeFileSync(mainTs, originalMainTs);
+			rmSync(join(actorDir, 'dist'), { recursive: true, force: true });
 			const push = JSON.parse(apify(['push', '--json', '--force'], { cwd: actorDir, env })) as PushResult;
 			expect(push.build.status).toBe('SUCCEEDED');
 			const actorId = push.actor.id;
