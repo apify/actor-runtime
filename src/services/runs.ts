@@ -23,11 +23,9 @@ import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
 
 const DEFAULT_MEMORY_MBYTES = 1024;
 const DEFAULT_TIMEOUT_SECS = 300;
-/** No separate platform disk-default constant exists to match exactly (`apify-core` has no
- * `ACTOR_DEFAULT_DISK_MBYTES`-shaped constant alongside `ACTOR_DEFAULT_MEMORY_MBYTES`); this mirrors the
- * 2x ratio `apify-core`'s own OpenAPI examples use for the pair (`packages/consts/src/actors.ts`'s run
- * schema: `memoryMbytes: 1024` example paired with `diskMbytes: 2048`), also the exact ratio in
- * `apify-client`'s `RunOptions` pydantic model examples. */
+/** The public API docs don't state a separate disk default; this mirrors the 2x ratio the public
+ * OpenAPI examples use for the pair (`memoryMbytes: 1024` paired with `diskMbytes: 2048`), also the
+ * exact ratio in `apify-client`'s `RunOptions` pydantic model examples. */
 const DISK_MBYTES_PER_MEMORY_MBYTE = 2;
 /** `?gracefully=true`'s wait between the `aborting` frame and the stop, matching the platform's 30s. */
 const GRACEFUL_ABORT_WINDOW_MS = 30_000;
@@ -176,9 +174,9 @@ export async function startRun(
 		meta: { origin: 'API' },
 		// Same zeros the platform writes at run creation (see `RunRecord.stats`).
 		stats: { migrationCount: 0, rebootCount: 0, restartCount: 0, resurrectCount: 0 },
-		// The real platform's run-creation default (`RUN_GENERAL_ACCESS.FOLLOW_USER_SETTING`,
-		// `apify-core`'s `actor_jobs.server.ts`) - this runtime has no per-user "make runs public by
-		// default" setting to follow, so every run gets this fixed default.
+		// The real platform's run-creation default (`RUN_GENERAL_ACCESS.FOLLOW_USER_SETTING` from the
+		// public `@apify/consts`) - this runtime has no per-user "make runs public by default" setting to
+		// follow, so every run gets this fixed default.
 		generalAccess: 'FOLLOW_USER_SETTING',
 	};
 	await runs.set(record.id, record);

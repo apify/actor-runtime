@@ -39,8 +39,8 @@ jobs:
 
             # Fail here rather than three slow build steps later, with the fix named. The credentials
             # are the Apify service account's, the same ones apify-actor-docker publishes with; they
-            # reach this repository's Actions secrets through the Doppler -> GitHub sync, so a missing
-            # value is fixed in Doppler, not by adding a secret here by hand.
+            # reach this repository's Actions secrets through the org's secret-manager sync, so a missing
+            # value is fixed there, not by adding a secret here by hand.
             - name: Check Docker Hub credentials are configured
               env:
                   DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
@@ -48,8 +48,8 @@ jobs:
               run: |
                   if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
                     echo "::error::Missing APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME / APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN" \
-                      "repository secrets. They are synced from Doppler - check that the Doppler -> GitHub" \
-                      "integration for this repository includes both."
+                      "repository secrets. They are synced from the org's secret manager - check that its" \
+                      "GitHub integration for this repository includes both."
                     exit 1
                   fi
 

@@ -38,7 +38,7 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
 			if (!run) throw recordNotFound();
 			// Matches the real platform: deleting a still-running run is rejected, not
-			// aborted-then-deleted - see `cannotRemoveRunningRun`'s doc comment for the apify-core
+			// aborted-then-deleted - see `cannotRemoveRunningRun`'s doc comment for the public-API
 			// evidence. Rejecting here (rather than deleting the record first) is also what prevents an
 			// orphaned Docker container from ever losing its one remaining stop path
 			// (`POST /actor-runs/:runId/abort`, which needs the record to still resolve).
@@ -53,7 +53,7 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
 			if (!run) throw recordNotFound();
-			// Mirrors `apify-core`'s own abort route: `parseBooleanParameter(query.gracefully)`, default
+			// Mirrors the public abort route: `?gracefully` is a boolean query param defaulting to
 			// `false` - omitted or `false` is byte-identical to the pre-existing immediate-abort behavior
 			// (`services/runs.ts: abortRun`'s doc comment).
 			const gracefully = queryBoolean(req, 'gracefully') ?? false;

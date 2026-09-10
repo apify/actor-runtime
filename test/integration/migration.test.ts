@@ -267,7 +267,7 @@ describe('migration emulation and reboot', () => {
 		expect(log).toContain('Rebooting Actor run container.');
 	});
 
-	it('reboot of a finished run is rejected 403 job-finished, matching apify-core', async () => {
+	it('reboot of a finished run is rejected 403 job-finished, matching the public API', async () => {
 		const driver = restartTrackingDriver();
 		server = await startTestServer(driver);
 		const { runId } = await startRunningRun(server, driver, 'reboot-finished-actor');

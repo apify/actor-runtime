@@ -152,8 +152,8 @@ export function mountDatasets(router: Router): void {
 			const record = await getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset');
 			// Matches the real platform and this API's own documented contract (api.md's response
 			// envelopes section): a missing id 404s with `record-not-found`, the same as every other
-			// resource's DELETE - apify-core's `getDatasetById`/`ensureQueueExists`/`ensureStoreExists`
-			// all throw `record-not-found` for a missing storage id before ever reaching a delete.
+			// resource's DELETE - the public API answers `record-not-found` for a missing storage id on
+			// every storage type before ever reaching a delete.
 			if (!record) throw recordNotFound();
 			await dropStorage(record);
 			res.status(204).end();

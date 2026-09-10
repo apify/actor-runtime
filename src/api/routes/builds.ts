@@ -37,7 +37,7 @@ export function mountBuilds(router: Router, deps: ApiServerDeps): void {
 			const build = await getOwnedBuild(requireUser(req).id, req.params.buildId as string);
 			if (!build) throw recordNotFound();
 			// Matches the real platform: deleting a still-running build is rejected, not
-			// aborted-then-deleted - see `deletingUnfinishedBuild`'s doc comment for the apify-core
+			// aborted-then-deleted - see `deletingUnfinishedBuild`'s doc comment for the public-API
 			// evidence. Rejecting here (rather than deleting the record first) is also what prevents an
 			// orphaned in-flight `docker build` from ever losing its one remaining cancellation path
 			// (`POST /actor-builds/:buildId/abort`, which needs the record to still resolve).

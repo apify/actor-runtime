@@ -95,9 +95,8 @@ export interface ActorRecord {
 
 export type JobStatus = 'READY' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'ABORTING' | 'ABORTED' | 'TIMED-OUT';
 
-/** Matches the real platform's `RUN_GENERAL_ACCESS` enum (`@apify/consts`, `apify-core`'s
- * `packages/consts/src/iam.ts`-adjacent run-access constant) - `FOLLOW_USER_SETTING` is the default a
- * freshly-started run gets (`actor_jobs.server.ts`'s `startRun`), matched here in `services/runs.ts`. */
+/** Matches the real platform's `RUN_GENERAL_ACCESS` enum (public `@apify/consts`) - `FOLLOW_USER_SETTING`
+ * is the default a freshly-started run gets, matched here in `services/runs.ts`. */
 export type RunGeneralAccess = 'FOLLOW_USER_SETTING' | 'RESTRICTED' | 'ANYONE_WITH_ID_CAN_READ';
 
 export interface BuildRecord {
@@ -141,13 +140,13 @@ export interface RunRecord {
 		memoryMbytes: number;
 		timeoutSecs: number;
 		/** Which build tag or build number this run used - the real platform's `options.build`
-		 * (`apify-core`'s `ActorRunOptions.build`). Optional here (unlike the always-populated real
+		 * (the public API's `ActorRunOptions.build`). Optional here (unlike the always-populated real
 		 * platform field) purely so pre-existing directly-seeded test fixtures keep compiling without
 		 * change; `startRun` always sets it for real runs, and `runDto` backfills `'latest'` for any
 		 * record that predates this field. */
 		build?: string;
-		/** In MB - the real platform's `options.diskMbytes` (`apify-core`'s `CheckedActorRunOptions`),
-		 * required by the Apify API contract (`apify-client`'s `RunOptions` pydantic model has no
+		/** In MB - the real platform's `options.diskMbytes`, required by the Apify API contract
+		 * (`apify-client`'s `RunOptions` pydantic model has no
 		 * default). Optional here for the same test-fixture-compatibility reason as `build`; `startRun`
 		 * always sets it for real runs, and `runDto` backfills a sensible default when absent. */
 		diskMbytes?: number;

@@ -107,9 +107,9 @@ export function mountKeyValueStoreOperations(router: Router, basePath: string, r
 	router.delete(
 		`${basePath}/records/:recordKey`,
 		h(async (req, res) => {
-			// A missing *store* 404s (matches apify-core's `getStoreById`, which throws before
-			// `deleteRecord` is ever reached) - but a missing *record key* inside an existing store stays
-			// a 204 no-op below, matching apify-core's S3 delete swallowing a `NotFound` for the key.
+			// A missing *store* 404s (matches the public API, which rejects the store id before ever
+			// reaching the record) - but a missing *record key* inside an existing store stays a 204 no-op
+			// below, matching the public API's idempotent record delete.
 			const record = await requireStore(req);
 			const store = await openKeyValueStore(record.id);
 			await store.setValue(req.params.recordKey as string, null);

@@ -217,8 +217,8 @@ tag serves x86_64 and Apple Silicon. Every run publishes `<branch>-<short-sha>` 
 account, using the same two repository secrets as
 [apify-actor-docker](https://github.com/apify/apify-actor-docker):
 `APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME` and `APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN`. They are
-synced into this repository's Actions secrets from Doppler, so they are managed there rather than
-added by hand.
+synced into this repository's Actions secrets from the org's secret manager, so they are managed
+there rather than added by hand.
 
 ## Development
 
