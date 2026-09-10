@@ -104,7 +104,7 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		const [volumeOptions] = stub.createVolume.mock.calls[0]!;
 		expect(volumeOptions.Name).toBe('actor-runtime-x11-run-1');
 		expect(volumeOptions.Driver).toBe('local');
-		expect(volumeOptions.DriverOpts).toEqual({ type: 'tmpfs', device: 'tmpfs', o: 'size=8m,mode=1777' });
+		expect(volumeOptions.DriverOpts).toEqual({ type: 'tmpfs', device: 'tmpfs', o: 'mode=1777' });
 		expect(volumeOptions.Labels).toEqual({ 'actor-runtime.runId': 'run-1', 'actor-runtime.browserViewer': 'true' });
 
 		const [containerOptions] = stub.createContainer.mock.calls[0]!;

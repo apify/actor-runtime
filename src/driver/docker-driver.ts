@@ -1190,7 +1190,9 @@ export class DockerDriver implements Driver {
 	}
 
 	/** The volume is created with mode 1777 up front: the Actor's Xvfb runs unprivileged and must be able
-	 * to create its socket there. Anything created here is removed again if a later step fails. */
+	 * to create its socket there. No `size=` cap: it only ever holds one Unix socket, and Podman 5 rejects
+	 * a sized tmpfs volume outright on a filesystem without project quota ("Volume options size and inodes
+	 * not supported"). Anything created here is removed again if a later step fails. */
 	async startBrowserViewer(target: BrowserViewerTarget): Promise<BrowserViewerHandle> {
 		if (!this.available) {
 			throw new Error(this.unavailableReason ?? 'Docker is not available');
@@ -1204,7 +1206,7 @@ export class DockerDriver implements Driver {
 		await this.docker.createVolume({
 			Name: volumeName,
 			Driver: 'local',
-			DriverOpts: { type: 'tmpfs', device: 'tmpfs', o: 'size=8m,mode=1777' },
+			DriverOpts: { type: 'tmpfs', device: 'tmpfs', o: 'mode=1777' },
 			Labels: labels,
 		});
 
