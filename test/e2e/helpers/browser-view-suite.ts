@@ -52,11 +52,18 @@ interface RunApi {
 	statusMessage?: string;
 }
 
+/** The default 1024 MB grants 0.25 core, on which a headful browser is too slow for a tight e2e budget. */
+const RUN_MEMORY_MBYTES = 4096;
+
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
-	const output = apify(['api', 'POST', `actors/${actorId}/runs`, '--body', JSON.stringify(input)], {
-		cwd: REPO_ROOT,
-		env,
-	});
+	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 600 });
+	const output = apify(
+		['api', 'POST', `actors/${actorId}/runs`, '--params', params, '--body', JSON.stringify(input)],
+		{
+			cwd: REPO_ROOT,
+			env,
+		},
+	);
 	return (JSON.parse(output) as ApiEnvelope<RunApi>).data;
 }
 
@@ -210,7 +217,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 							? current
 							: undefined;
 					},
-					4 * 60 * 1000,
+					8 * 60 * 1000,
 					'the browser-view run to finish',
 				);
 				expect(finished.status).toBe('SUCCEEDED');
@@ -242,10 +249,20 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 					env,
 				});
 
-				const callOutput = apify(['call', '--input', JSON.stringify(sample.input(2)), '--json'], {
-					cwd: actorDir,
-					env,
-				});
+				const callOutput = apify(
+					[
+						'call',
+						'--input',
+						JSON.stringify(sample.input(2)),
+						'--memory',
+						String(RUN_MEMORY_MBYTES),
+						'--json',
+					],
+					{
+						cwd: actorDir,
+						env,
+					},
+				);
 				const call = JSON.parse(callOutput) as CallResult;
 				expect(call.run.status).toBe('SUCCEEDED');
 				expect(currentLog(call.run.id, env)).not.toContain('Browser view:');
