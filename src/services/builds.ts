@@ -5,6 +5,8 @@ import type { ActorRecord, ActorVersionRecord } from '../storage/entities.js';
 import { recordTaggedBuild, updateActor } from './actors.js';
 import type { Driver } from '../driver/types.js';
 import { DriverTimedOutError } from '../driver/types.js';
+import { normalizeEntryName } from '../driver/tar-entry-name.js';
+import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
 import { appendLog, flushLog, markLogTerminal } from './logs.js';
 import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
@@ -76,6 +78,28 @@ async function nextBuildNumber(actorId: string, versionNumber: string): Promise<
 	const existing = await getRegistries().builds.list();
 	const count = existing.filter((b) => b.actorId === actorId && b.versionNumber === versionNumber).length;
 	return `${versionNumber}.${count + 1}`;
+}
+
+/**
+ * The build's Dockerfile with every short `FROM` image name qualified to Docker Hub
+ * (`services/dockerfile-image-refs.ts`), each rewrite stated in the build log. Only this build's copy
+ * of the file changes - the pushed source is never modified. The other files pass through untouched.
+ */
+function qualifyDockerfileImages(
+	sourceFiles: SourceFile[],
+	dockerfilePath: string,
+	log: (line: string) => void,
+): SourceFile[] {
+	return sourceFiles.map((file) => {
+		if (normalizeEntryName(file.name) !== dockerfilePath) return file;
+		const text = file.format === 'BASE64' ? Buffer.from(file.content, 'base64').toString('utf8') : file.content;
+		const { dockerfile, qualified } = qualifyDockerfileImageReferences(text);
+		if (qualified.length === 0) return file;
+		for (const { from, to } of qualified) {
+			log(`Using "${to}" for FROM "${from}" - a short image name means Docker Hub, as on the platform.\n`);
+		}
+		return { ...file, format: 'TEXT', content: dockerfile };
+	});
 }
 
 export interface StartBuildOptions {
@@ -193,10 +217,13 @@ export async function runBuildInBackground(
 		return;
 	}
 	for (const line of dockerfileResolution.logLines) appendLog(record.id, line);
-	const sourceFiles: SourceFile[] =
+	const sourceFiles: SourceFile[] = qualifyDockerfileImages(
 		dockerfileResolution.outcome === 'default'
 			? [...version.sourceFiles, dockerfileResolution.extraSourceFile]
-			: version.sourceFiles;
+			: version.sourceFiles,
+		dockerfileResolution.dockerfilePath,
+		(line) => appendLog(record.id, line),
+	);
 
 	try {
 		const outcome = await driver.startBuild(

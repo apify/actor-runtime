@@ -82,6 +82,10 @@ Good to know:
   the API through the runtime's published port 3333 instead. Keep `-p 3333:3333` published on all
   interfaces, or pre-create the network (`podman network create apify-local`) and add
   `--network apify-local` to the run command to use the direct route.
+- A short image name in an Actor's `FROM` line (`apify/actor-node:20`, `python:3.11`) means Docker Hub,
+  as on the platform. The runtime qualifies it to `docker.io/...` before building, so Podman resolves it
+  without any `unqualified-search-registries` entry in `registries.conf`. The build log shows the
+  substitution.
 - Rootless engines on a cgroups v1 host do not apply the per-run memory and CPU limits.
 - If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
   stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
