@@ -301,6 +301,10 @@ const PRESERVED_ENTRYPOINT_DIR = '/apify-runtime-entrypoint';
 interface PreservedEntrypoint {
 	field: 'Entrypoint' | 'Cmd';
 	command: string[];
+	/** The image's own `Cmd`, restated whenever `Entrypoint` is overridden: an engine drops the image's
+	 * `Cmd` from a create request that sets `Entrypoint` (Docker and Podman alike), which would have run
+	 * the Xvfb wrapper with no program to wrap. */
+	cmd?: string[];
 	tar: Buffer;
 }
 /** Reachable only on `apify-local`; never published on the host. */
@@ -1108,7 +1112,12 @@ export class DockerDriver implements Driver {
 				Image: ctx.imageId,
 				Env: env,
 				Labels: { [RUN_LABEL]: ctx.runId },
-				...(preservedEntrypoint ? { [preservedEntrypoint.field]: preservedEntrypoint.command } : {}),
+				...(preservedEntrypoint
+					? {
+							[preservedEntrypoint.field]: preservedEntrypoint.command,
+							...(preservedEntrypoint.cmd ? { Cmd: preservedEntrypoint.cmd } : {}),
+						}
+					: {}),
 				...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
 				HostConfig: {
 					...(await this.actorNetworkHostConfig(onActorNetwork)),
@@ -1333,6 +1342,7 @@ export class DockerDriver implements Driver {
 		return {
 			field,
 			command: [`${PRESERVED_ENTRYPOINT_DIR}/${path.posix.basename(inImage)}`, ...command.slice(1)],
+			...(field === 'Entrypoint' && info.Config?.Cmd ? { cmd: info.Config.Cmd } : {}),
 			tar: tarball,
 		};
 	}

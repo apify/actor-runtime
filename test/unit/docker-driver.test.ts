@@ -1075,7 +1075,8 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		expect(stub.createContainer).toHaveBeenCalledTimes(2);
 		const runOptions = stub.createContainer.mock.calls[1]![0];
 		expect(runOptions.Entrypoint).toEqual(['/apify-runtime-entrypoint/xvfb-entrypoint.sh']);
-		expect(runOptions.Cmd).toBeUndefined();
+		// Restated: an engine drops the image's Cmd from a create request that overrides Entrypoint.
+		expect(runOptions.Cmd).toEqual(['python', '-m', 'my_actor']);
 		const [archive, putOptions] = stub.container.putArchive.mock.calls[0]!;
 		expect(putOptions).toEqual({ path: '/' });
 		expect(await entryNamesOf(archive as Buffer)).toEqual([
