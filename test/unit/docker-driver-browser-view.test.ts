@@ -81,6 +81,7 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 	});
 
 	afterEach(() => {
+		vi.unstubAllEnvs();
 		rmSync(payloadDir, { recursive: true, force: true });
 		if (originalEnv === undefined) delete process.env[PAYLOAD_ENV];
 		else process.env[PAYLOAD_ENV] = originalEnv;
@@ -146,6 +147,42 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 
 		expect(stub.importImage).not.toHaveBeenCalled();
 		expect(stub.getImage).toHaveBeenCalledTimes(1);
+	});
+
+	it("when this process runs in a container that could not join apify-local (rootless Podman), the sidecar shares this container's network namespace on a port of its own and is reached on localhost", async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const stub = stubDockerForViewer({ imagePresent: true });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true; // `apiReachableByAlias` stays false: `init()` never attached this container.
+
+		const handle = await driver.startBrowserViewer({ runId: 'run-netns', interactive: false });
+
+		const [containerOptions] = stub.createContainer.mock.calls[0]!;
+		expect(containerOptions.HostConfig?.NetworkMode).toBe('container:abc123def456');
+		expect(handle.vncHost).toBe('127.0.0.1');
+		expect(handle.vncPort).toBeGreaterThan(0);
+		expect(handle.vncPort).not.toBe(5900);
+		expect(containerOptions.Env).toContain(`APIFY_BROWSER_VIEWER_PORT=${handle.vncPort}`);
+		// Nothing to look up on the network: the address is this container's own loopback.
+		expect(stub.container.inspect).not.toHaveBeenCalled();
+	});
+
+	it('joins apify-local as usual when this container did attach to it, even though it runs in a container', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const stub = stubDockerForViewer({ imagePresent: true });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		(driver as unknown as { apiReachableByAlias: boolean }).apiReachableByAlias = true;
+
+		const handle = await driver.startBrowserViewer({ runId: 'run-alias', interactive: false });
+
+		const [containerOptions] = stub.createContainer.mock.calls[0]!;
+		expect(containerOptions.HostConfig?.NetworkMode).toBe('apify-local');
+		expect(handle).toEqual({
+			vncHost: '172.18.0.9',
+			vncPort: 5900,
+			x11SocketVolume: 'actor-runtime-x11-run-alias',
+		});
 	});
 
 	it('falls back to the sidecar container name as vncHost when the daemon reports no IP on apify-local', async () => {

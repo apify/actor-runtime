@@ -34,6 +34,7 @@
 import { PassThrough } from 'node:stream';
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import * as path from 'node:path';
 import Docker from 'dockerode';
 import * as tar from 'tar-stream';
@@ -213,6 +214,22 @@ async function statInProbe(container: Docker.Container, containerPath: string): 
 	// A `HEAD` response has no body, but the socket is only released once the message is consumed.
 	(response as { resume?: () => void } | undefined)?.resume?.();
 	return parseProbeStatResponse(response);
+}
+
+/** A TCP port that is free in this process's own network namespace right now - bound on loopback and
+ * released again, for a sidecar about to share that namespace (`startBrowserViewer`). */
+async function allocateFreePort(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const server = createServer();
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', () => {
+			const address = server.address();
+			server.close(() => {
+				if (address && typeof address === 'object') resolve(address.port);
+				else reject(new Error('Could not allocate a free port for the browser-view sidecar'));
+			});
+		});
+	});
 }
 
 /**
@@ -542,8 +559,8 @@ export class DockerDriver implements Driver {
 				`Could not attach the runtime's own container to the ${NETWORK_NAME} network: ${(error as Error).message}. ` +
 					`Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
 					`(${CONTAINER_API_ALIAS} -> host-gateway), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
-					`Browser view needs the direct route: pre-create the network (\`podman network create ${NETWORK_NAME}\`) ` +
-					`and start the runtime container with \`--network ${NETWORK_NAME}\`, which also restores the alias.`,
+					`To use the network alias anyway, pre-create the network (\`podman network create ${NETWORK_NAME}\`) ` +
+					`and start the runtime container with \`--network ${NETWORK_NAME}\`.`,
 			);
 		}
 	}
@@ -1191,6 +1208,15 @@ export class DockerDriver implements Driver {
 			Labels: labels,
 		});
 
+		// How the console reaches the sidecar's VNC server. Normally the sidecar joins `apify-local` and is
+		// reached by its address there. When this process runs in a container that could not join that
+		// network (`apiReachableByAlias`'s doc comment - rootless Podman), the sidecar shares this
+		// container's own network namespace instead, so the console reaches it on localhost; every sidecar
+		// then needs a port of its own in that shared namespace, allocated here where it will be used.
+		const selfContainerId = process.env.HOSTNAME;
+		const sharesRuntimeNetns = !this.apiReachableByAlias && !!selfContainerId;
+		const vncPort = sharesRuntimeNetns ? await allocateFreePort() : BROWSER_VIEWER_VNC_PORT;
+
 		let container: Docker.Container | undefined;
 		try {
 			container = await this.docker.createContainer({
@@ -1199,11 +1225,11 @@ export class DockerDriver implements Driver {
 				Cmd: ['/bin/sh', BROWSER_VIEWER_SCRIPT],
 				Env: [
 					`${BROWSER_VIEWER_INTERACTIVE_ENV}=${target.interactive ? '1' : '0'}`,
-					`${BROWSER_VIEWER_PORT_ENV}=${BROWSER_VIEWER_VNC_PORT}`,
+					`${BROWSER_VIEWER_PORT_ENV}=${vncPort}`,
 				],
 				Labels: labels,
 				HostConfig: {
-					NetworkMode: NETWORK_NAME,
+					NetworkMode: sharesRuntimeNetns ? `container:${selfContainerId}` : NETWORK_NAME,
 					Memory: BROWSER_VIEWER_MEMORY_BYTES,
 					AutoRemove: false,
 					Mounts: [{ Type: 'volume', Source: volumeName, Target: X11_SOCKET_DIR }],
@@ -1213,12 +1239,15 @@ export class DockerDriver implements Driver {
 			this.browserViewers.set(target.runId, { container, volumeName });
 			await container.start();
 
+			if (sharesRuntimeNetns) {
+				return { vncHost: '127.0.0.1', vncPort, x11SocketVolume: volumeName };
+			}
 			const info = await container.inspect();
 			const address = info.NetworkSettings?.Networks?.[NETWORK_NAME]?.IPAddress;
 			return {
 				// The IP also works from a runtime running outside Docker; the name only resolves from inside.
 				vncHost: address || containerName,
-				vncPort: BROWSER_VIEWER_VNC_PORT,
+				vncPort,
 				x11SocketVolume: volumeName,
 			};
 		} catch (error) {
