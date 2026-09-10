@@ -45,6 +45,10 @@ export function unavailableDriver(): Driver {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -75,6 +79,10 @@ export function fixedRunOutcomeDriver(outcome: RunOutcome): Driver {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -109,6 +117,10 @@ export function fixedBuildOutcomeDriver(
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -172,6 +184,10 @@ export function deferredRunDriver(): DeferredRunDriver {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -228,6 +244,10 @@ export function deferredBuildDriver(): DeferredBuildDriver {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -311,6 +331,10 @@ export function multiRunDriver(): MultiRunDriver {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},

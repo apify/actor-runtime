@@ -8,6 +8,9 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - Build the docker image `docker build -t actor-runtime .`
 - Run the container `docker run --rm -p 3333:3333 -p 3000:3000 -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
     - `-v "$(pwd)/data:/data"` shared volumes `data` is used to store internal actor runtime data. When exposed it can be directly inspected to determine internal state and storage backend (It is not recommended to manually edit those files. Any edit should be done through http API call).
+- Podman (3.4 or newer) works the same way - mount Podman's Docker-compatible API socket where the runtime expects the Docker one:
+  `sudo systemctl enable --now podman.socket && podman build -t actor-runtime . && mkdir -p data && sudo podman run --rm -p 3333:3333 -p 3000:3000 -v /run/podman/podman.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
+  (rootless: mount `$XDG_RUNTIME_DIR/podman/podman.sock` instead and drop `sudo`). Unlike Docker, Podman does not create a missing `data` directory for the mount, hence the `mkdir -p`. See README.md's "Running with Podman" section for the details.
 
 ## Work through CLI
 
@@ -23,13 +26,15 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - Use `apify cli api ...` to send API calls and inspect the Actors, builds, runs, storages and other objects.
 - To simulate multiple users use custom token and in additional authorization header. For example: `apify cli api v2/datasets -H '{"authorization": "Bearer TOKEN"}'`
 - You can use already authenticated CLI or call `apify login --token TOKEN`
-- To iterate on an Actor's source without a rebuild for every change: push and build the Actor once, then
-  register its local source folder with
+- To iterate on an Actor's source without a rebuild for every change: push and build the Actor once with
+  `apify push`. When the CLI is pointed at this runtime it registers the pushed folder as the Actor's
+  local dev folder automatically. From then on, edit locally, recompile locally (`tsc` or the language-appropriate
+  equivalent), and `apify call` again - no `apify push`/build in between. `apify call --no-dev-folder`
+  runs once from the built image alone without touching the registration. Dependency changes still need
+  a real rebuild. To register a folder by hand (e.g. a different one than the pushed directory), use
   `apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/src"'` (this runtime's own
   `/actor-runtime/*` endpoint - also reachable at `/v2/actor-runtime/*`, purely because `apify api`
-  hardcodes a `/v2`-suffixed base URL). From then on, edit locally, recompile locally (`tsc` or the
-  language-appropriate equivalent), and `apify call` again - no `apify push`/build in between. Submitting
-  `--body '""'` clears the registration. Dependency changes still need a real rebuild.
+  hardcodes a `/v2`-suffixed base URL); submitting `--body '""'` clears the registration.
 - To debug an Actor with a real IDE debugger, turn on debug mode for it once:
   `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": true}'` (add `"language": "node"` or
   `"python"` if auto-detection can't classify the image, and/or `"port": <n>` to override the language
@@ -44,6 +49,12 @@ Local Actor runtime is an Actor development tool for developing, running, and de
   when you expect a slow attach. Clear the toggle with
   `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'` to go back to running
   normally.
+- To watch the browser of a Playwright/Puppeteer Actor while it runs, turn browser view on for it once:
+  `apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'` (`"interactive": true` also
+  sends mouse/keyboard input). Every subsequent run prints a viewer URL in its log,
+  `http://localhost:3000/runs/<runId>/browser` - a live view of the display the Actor's browser draws on. The
+  browser must run headful to show anything (Apify's templates default to headless, which shows as a black
+  display); see `sample_actor_playwright` and `sample_actor_playwright_py`. Clear with `--body '{"enabled": false}'`.
 - To test how an Actor handles platform migrations: while a run is `RUNNING`, call
   `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
   detail page. The run gets the platform migration experience: a `migrating` event, its container

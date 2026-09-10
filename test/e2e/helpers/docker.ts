@@ -1,9 +1,34 @@
 import { execFileSync } from 'node:child_process';
+import process from 'node:process';
 
-/** True when a Docker daemon is reachable from this process. Gates the whole e2e suite. */
+/**
+ * The container CLI the suite drives the host engine with - `docker` by default, `podman` via
+ * `CONTAINER_CLI=podman`. Both accept the exact `build`/`pull`/`run`/`logs`/`rm`/`volume rm` invocations
+ * below unchanged; the runtime container itself only ever sees the engine's Docker-compatible API socket.
+ */
+const CONTAINER_CLI = process.env.CONTAINER_CLI === 'podman' ? 'podman' : 'docker';
+
+/** Default location of the engine's API socket on the host, per CLI: Docker's, or rootful Podman's
+ * (`podman.socket` / `podman system service`). A `unix://` `DOCKER_HOST` overrides both - the way to
+ * point the suite at a rootless Podman socket (`$XDG_RUNTIME_DIR/podman/podman.sock`). */
+const DEFAULT_SOCKET_PATH = CONTAINER_CLI === 'podman' ? '/run/podman/podman.sock' : '/var/run/docker.sock';
+
+/** Where the runtime container looks for the socket - `docker-driver.ts`'s dockerode default. */
+const RUNTIME_SOCKET_PATH = '/var/run/docker.sock';
+
+/** The host socket path the runtime container gets mounted, so builds and runs land on the same engine
+ * the suite itself is talking to. */
+export function hostEngineSocketPath(): string {
+	const dockerHost = process.env.DOCKER_HOST;
+	if (dockerHost?.startsWith('unix://')) return dockerHost.slice('unix://'.length);
+	return DEFAULT_SOCKET_PATH;
+}
+
+/** True when a Docker-API-compatible engine (Docker, or Podman via `CONTAINER_CLI=podman`) is reachable
+ * from this process. Gates the whole e2e suite. */
 export function isDockerAvailable(): boolean {
 	try {
-		execFileSync('docker', ['info'], { stdio: 'ignore' });
+		execFileSync(CONTAINER_CLI, ['info'], { stdio: 'ignore' });
 		return true;
 	} catch {
 		return false;
@@ -11,21 +36,37 @@ export function isDockerAvailable(): boolean {
 }
 
 export function buildRuntimeImage(repoRoot: string, tag: string): void {
-	execFileSync('docker', ['build', '-t', tag, repoRoot], { stdio: 'inherit' });
+	execFileSync(CONTAINER_CLI, ['build', '-t', tag, repoRoot], { stdio: 'inherit' });
 }
 
 export function pullBaseImages(): void {
 	// Pre-pulled here rather than left to the first build, per `test.md`'s documented CI requirement -
 	// building an Actor image is the one step that still needs network, and doing it once up front
-	// keeps the timing of the actual push/call assertions predictable.
-	for (const image of ['apify/actor-node:24', 'apify/actor-python:3.13', 'python:3.11-slim']) {
-		execFileSync('docker', ['pull', image], { stdio: 'inherit' });
+	// keeps the timing of the actual push/call assertions predictable. Fully-qualified names so Podman's
+	// short-name resolution never has to guess a registry.
+	for (const image of [
+		'docker.io/apify/actor-node:24',
+		'docker.io/apify/actor-python:3.13',
+		'docker.io/library/python:3.11-slim',
+	]) {
+		execFileSync(CONTAINER_CLI, ['pull', image], { stdio: 'inherit' });
 	}
+}
+
+/** `sample_actor_playwright/Dockerfile`'s base image - pulled only by its own e2e file, not by
+ * `pullBaseImages`, since it is large and no other file builds against it. */
+export const PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-node-playwright-chrome:24-1.61.1';
+
+/** `sample_actor_playwright_py/Dockerfile`'s base image. */
+export const PYTHON_PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-python-playwright:3.14-1.61.0';
+
+export function pullImage(image: string): void {
+	execFileSync(CONTAINER_CLI, ['pull', image], { stdio: 'inherit' });
 }
 
 export function startRuntimeContainer(tag: string, containerName: string): void {
 	execFileSync(
-		'docker',
+		CONTAINER_CLI,
 		[
 			'run',
 			'-d',
@@ -35,16 +76,16 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 			// be bound to 3333/3000 at a time. `package.json`'s `test:e2e` script therefore runs
 			// `vitest run test/e2e --no-file-parallelism`: if a second e2e file's `beforeAll` ever raced
 			// this one, the loser's `docker run` would fail with "port is already allocated" and take that
-			// file's whole suite down with it. Adding a third e2e file is safe as long as the suite stays
-			// serialized - do not drop `--no-file-parallelism` (and do not add a `vitest.workspace.ts` or
-			// per-file config that re-enables parallelism for this directory) without also parameterizing
-			// these two ports per container.
+			// file's whole suite down with it. Adding an e2e file is safe as long as the suite stays
+			// serialized on one daemon - do not drop `--no-file-parallelism` without also parameterizing
+			// these two ports per container. CI parallelizes by running each file in its own job instead
+			// (`.github/workflows/ci.yml`).
 			'-p',
 			'3333:3333',
 			'-p',
 			'3000:3000',
 			'-v',
-			'/var/run/docker.sock:/var/run/docker.sock',
+			`${hostEngineSocketPath()}:${RUNTIME_SOCKET_PATH}`,
 			'-v',
 			`${containerName}-data:/data`,
 			tag,
@@ -61,7 +102,7 @@ export function stopRuntimeContainer(containerName: string): void {
 	// test stdout the failure shows up in, actually captures it; the workflow step stays as a harmless
 	// backstop for cases where the process is killed before `afterAll` runs at all.
 	try {
-		const logs = execFileSync('docker', ['logs', '--tail', '300', containerName], {
+		const logs = execFileSync(CONTAINER_CLI, ['logs', '--tail', '300', containerName], {
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		process.stdout.write(`\n--- ${containerName} container logs (last 300 lines) ---\n`);
@@ -72,12 +113,12 @@ export function stopRuntimeContainer(containerName: string): void {
 		// only, never a reason to skip the cleanup below.
 	}
 	try {
-		execFileSync('docker', ['rm', '-f', containerName], { stdio: 'ignore' });
+		execFileSync(CONTAINER_CLI, ['rm', '-f', containerName], { stdio: 'ignore' });
 	} catch {
 		// best-effort cleanup
 	}
 	try {
-		execFileSync('docker', ['volume', 'rm', '-f', `${containerName}-data`], { stdio: 'ignore' });
+		execFileSync(CONTAINER_CLI, ['volume', 'rm', '-f', `${containerName}-data`], { stdio: 'ignore' });
 	} catch {
 		// best-effort cleanup
 	}

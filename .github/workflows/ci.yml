@@ -41,9 +41,29 @@ jobs:
             - run: pnpm test
 
     e2e:
-        name: Actor dev-loop e2e (apify-cli + Docker)
-        runs-on: ubuntu-latest
+        name: e2e ${{ matrix.file }} (apify-cli + ${{ matrix.engine }})
+        # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
+        # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
+        runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
         timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            # One job per e2e file and container engine. Each file starts its own runtime container on
+            # the fixed host ports (3333/3000), so files cannot share a daemon; separate runners make them
+            # parallel instead. The `podman` legs drive the runner's preinstalled Podman rootless, as the
+            # runner user - the same suite, unchanged, against the other supported engine (`test.md`):
+            # Podman 4 on the default runner, Podman 3.4 on the Ubuntu 22.04 one.
+            matrix:
+                engine:
+                    - docker
+                    - podman
+                    - podman-3.4
+                file:
+                    - actor-dev-loop
+                    - debug-mode
+                    - dev-folder-bind-mount
+                    - browser-view-ts
+                    - browser-view-py
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v4
@@ -52,13 +72,30 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # The suite manages Docker itself against the runner's daemon: it pre-pulls the
+            # Rootless Podman serves its Docker-compatible API on a socket only when asked to. The suite
+            # drives Podman through `CONTAINER_CLI=podman` and mounts the socket named by `DOCKER_HOST`
+            # into the runtime container.
+            - name: Serve the Podman API socket
+              if: startsWith(matrix.engine, 'podman')
+              run: |
+                  podman --version
+                  sock="$RUNNER_TEMP/podman.sock"
+                  nohup podman system service --time=0 "unix://$sock" > "$RUNNER_TEMP/podman-service.log" 2>&1 &
+                  for _ in $(seq 1 30); do [ -S "$sock" ] && break; sleep 1; done
+                  podman --url "unix://$sock" info --format '{{.Host.Arch}}' >/dev/null
+                  echo "CONTAINER_CLI=podman" >> "$GITHUB_ENV"
+                  echo "DOCKER_HOST=unix://$sock" >> "$GITHUB_ENV"
+            # The suite manages the engine itself against the runner's daemon: it pre-pulls the
             # Actor base images, builds the runtime image, starts the runtime container with
-            # the host Docker socket, and drives it with stock apify-cli via npx.
-            - run: pnpm run test:e2e
+            # the host engine's socket, and drives it with stock apify-cli via npx.
+            - run: pnpm exec vitest run test/e2e/${{ matrix.file }}.test.ts
             # The e2e's runtime container is normally removed by the suite's afterAll; on
             # failure it is left running, so its server-side view of any failed request
             # (log-stream lifecycle included) is captured here for diagnosis.
             - name: Dump runtime container logs on failure
               if: failure()
-              run: docker logs actor-runtime-e2e --tail 300 || true
+              run: |
+                  cli=${{ matrix.engine == 'docker' && 'docker' || 'podman' }}
+                  for c in $($cli ps -aq --filter name=actor-runtime-e2e); do
+                    $cli logs --tail 300 "$c" || true
+                  done

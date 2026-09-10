@@ -17,6 +17,9 @@ importers:
       '@crawlee/fs-storage':
         specifier: 4.0.0-beta.145
         version: 4.0.0-beta.145
+      '@novnc/novnc':
+        specifier: 1.7.0
+        version: 1.7.0
       dockerode:
         specifier: ^4.0.5
         version: 4.0.12
@@ -568,6 +571,9 @@ packages:
     cpu: [x64]
     os: [linux]
     libc: [glibc]
+
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -2598,6 +2604,8 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@novnc/novnc@1.7.0': {}
 
   '@protobufjs/aspromise@1.1.2': {}
 

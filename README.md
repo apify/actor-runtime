@@ -15,6 +15,7 @@ See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 
 ```bash
 docker build -t actor-runtime .
+mkdir -p data
 docker run --rm -p 3333:3333 -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd)/data:/data" \
@@ -40,20 +41,80 @@ the real platform is reachable, the runtime also adopts that account's real user
 the first time it sees the token; fully offline (or with any other non-empty token) it just keeps using
 the single local user, with no error either way - see `requirements/cli.md`'s User bootstrap section.
 
+## Running with Podman instead of Docker
+
+The runtime talks to the container engine only through its Docker-compatible API socket, and Podman
+serves that same API. Everything works the same on Docker and Podman, rootful or rootless; the only
+difference is which socket you mount.
+
+```bash
+sudo systemctl enable --now podman.socket   # one-time: serve Podman's API socket
+
+podman build -t actor-runtime .
+mkdir -p data
+sudo podman run --rm -p 3333:3333 -p 3000:3000 \
+  -v /run/podman/podman.sock:/var/run/docker.sock \
+  -v "$(pwd)/data:/data" \
+  actor-runtime
+```
+
+Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
+(`systemctl --user enable --now podman.socket`); mount that path and drop the `sudo`. Rootless Docker
+works the same way with its `$XDG_RUNTIME_DIR/docker.sock`. The socket can also be mounted at any other
+path together with `-e DOCKER_HOST=unix:///that/path`.
+
+```bash
+mkdir -p data
+podman run --rm -p 3333:3333 -p 3000:3000 \
+  -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
+  -v "$(pwd)/data:/data" \
+  actor-runtime
+```
+
+Good to know:
+
+- Podman 3.4 (Ubuntu 22.04's stock package) and newer work. On Podman 4 and newer, Actors run on the
+  runtime's own `apify-local` network; on Podman 3.x they run on the engine's default network instead
+  (its user-defined networks are unreliable: Ubuntu 22.04's CNI plugins reject the config Podman writes),
+  and the runtime says so at startup. Whenever the runtime's own container is not on `apify-local`
+  (Podman 3.x, or rootless Podman, which refuses to attach it), Actors reach the API through the published
+  port 3333, so keep `-p 3333:3333` published on all interfaces. Optionally, on Podman 4 and newer, create
+  the network first and add `--network apify-local` to `podman run` for the direct route.
+- Podman does not create a missing host directory for a bind mount (Docker does), hence the
+  `mkdir -p data` before `podman run`. `apify runtime start` creates its data directory itself.
+- Actors run on the engine whose socket you mount, so a dev folder registered for the bind-mount dev
+  loop below is a path on the machine that engine runs on (inside the VM for `podman machine`), and
+  under a rootless engine it must be readable by that user.
+- A short image name in an Actor's `FROM` line (`apify/actor-node:20`, `python:3.11`) means Docker Hub,
+  as on the platform. The runtime qualifies it to `docker.io/...` before building, so Podman resolves it
+  without any `unqualified-search-registries` entry in `registries.conf`. The build log shows the
+  substitution.
+- A rootless engine can only enforce the per-run limits whose cgroup controllers are delegated to your
+  user: on cgroups v1 none are, and Ubuntu 22.04 delegates `memory` and `pids` but not `cpu`. The runtime
+  asks Podman which controllers it has, leaves out the limits it cannot apply, and says so at startup;
+  runs still start. (To get CPU limits under rootless Podman on Ubuntu 22.04, delegate the controller:
+  `sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload`, then log out and in.)
+- If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
+  stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
+- `podman images` lists the images the runtime builds as `actor-runtime/<actor>:<buildId>` under the
+  registry prefix Podman adds itself (`docker.io/` or `localhost/`, depending on the version).
+
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
 After the one push+build above, register your Actor's local source folder so every future run picks up
-local edits without a rebuild:
+local edits without a rebuild. An `apify-cli` that knows about the runtime does this for you: when
+`APIFY_CLIENT_BASE_URL` points at the runtime, `apify push` registers the pushed folder as the dev folder
+right after uploading it, and `apify call --no-dev-folder` runs once from the built image alone without
+touching the registration. Against the real Apify platform the flag is a no-op. To register by hand instead:
 
 ```bash
 apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/sample_actor_ts"'
 ```
 
 `<actorId>` is the id `apify push --json` printed (`.actor.id`); the path must be absolute and must
-already exist on the **host** - the runtime verifies this by actually trying to mount it, and rejects
-the call with a clear error if the Actor has no build tagged `latest` yet (a stock `apify push` always
-tags its build `latest`, so this is normally just "build at least once first") or the path can't be
-confirmed.
+already exist on the **host** - the runtime checks this and rejects the call with a clear error if the
+path can't be confirmed. The check runs again at every run start, so a folder deleted after
+registration fails the run instead of running against an empty directory.
 The same thing is also a single-field form on the Actor's page in the console (`http://localhost:3000`).
 
 From then on:
@@ -66,9 +127,13 @@ apify call --input '{"maxPages":3}'   # picks up the new dist/, no rebuild
 
 Node doesn't hot-reload a running process, so a local recompile is picked up by the **next** run's
 container start, not by any run already in progress. `node_modules` inside the container still comes
-from the built image - an anonymous volume preserves it underneath the bind mount - so a new dependency
-in `package.json` still needs a real `apify push`/build; only source edits skip it. Clear the
-registration with an empty body (`--body '""'`) to go back to running purely from the built image. Full
+from the built image - a per-run volume preserves it underneath the bind mount - so a new dependency
+in `package.json` still needs a real `apify push`/build; only source edits skip it. An entrypoint script
+the image keeps in its working directory (Apify's Playwright images start through an Xvfb wrapper there)
+stays available too, unless your folder carries its own copy. Clear the
+registration with an empty body (`--body '""'`) to go back to running purely from the built image, or
+skip it for a single run with `apify call --no-dev-folder` (the raw form is
+`POST /v2/actors/<actorId>/runs?devFolder=false`, which the run's log then records). Full
 mechanics: `requirements/actor-driver.md`'s "Bind mount volumes with Actor source code";
 endpoint/console details: `requirements/api.md`'s `/actor-runtime/*` section and
 `requirements/console.md`.
@@ -114,6 +179,27 @@ three-field form (`enabled`/`language`/`port`) on the Actor's page in the consol
 `requirements/actor-driver.md`'s "Debug mode" section; endpoint/console details: `requirements/api.md`'s
 `/actor-runtime/*` section and `requirements/console.md`.
 
+## Watching an Actor's browser
+
+Turn **browser view** on for an Actor once, and every run of it gets a live view of the display its browser draws
+on, served by the console:
+
+```bash
+apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'
+apify call
+```
+
+The run log prints the viewer URL (`http://localhost:3000/runs/<runId>/browser`); the run's console page links to
+it, and the Actor's console page has the same toggle as a form. `"interactive": true` also sends your mouse and
+keyboard to the display; `{"enabled": false}` turns the view off.
+
+The view only reads the display's pixels. The Actor's container, command, environment, network and ports are
+those of an ordinary run, so neither the browser nor the sites it visits can tell whether anyone is watching.
+Two things follow: the browser must run **headful** (Apify's templates default to headless, which shows as a
+black display - the bundled `sample_actor_playwright` and `sample_actor_playwright_py` set `headless: false` /
+`headless=False`), and the image must provide an X display, which the Apify Playwright and Puppeteer base images
+do. Like Python debug mode, this needs the runtime to run from its own built image.
+
 ## Publishing the image
 
 Images go to [`apify/actor-runtime`](https://hub.docker.com/r/apify/actor-runtime) on Docker Hub by
@@ -140,7 +226,7 @@ there rather than added by hand.
 pnpm install
 pnpm run build     # tsc
 pnpm test          # unit + integration (no Docker needed)
-pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker)
+pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker, or Podman with CONTAINER_CLI=podman; the browser-view case pulls the ~2 GB Playwright base image)
 pnpm run dev       # run the server directly against ./data with tsx
 ```
 

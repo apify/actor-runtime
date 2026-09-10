@@ -43,6 +43,7 @@
   surfaces.
 - Registration validates that the submitted value is an absolute POSIX path and that the path exists
   **on the host** and is a directory.
+    - Validation never creates anything on the host and follows symlinks.
     - Submitting the **empty string clears the registration** and skips validation.
     - Every non-success outcome is classified: unable to verify at all (e.g. Docker unreachable)
       reports "could not verify" - never "does not exist"; a path confirmed missing reports "path
@@ -50,16 +51,21 @@
       else unverifiable reports a generic "could not verify".
 - **Registration has no build-first precondition** - it requires no build of the Actor to exist,
   succeeded or otherwise.
+- An image that starts through a file inside its working directory still starts under the mount: the
+  dev folder's copy of that file is used when it has one, the image's own copy otherwise.
 - The working directory the mount covers is recorded **per build**, never on the Actor
   (`storage.md`); the mount a run applies always uses the one from _that run's own resolved build_,
   never any other build the Actor happens to have.
 - **The mount is applied only when both a registered dev folder and a known working directory exist**
   for the run's resolved build; either missing means the run starts exactly as if the feature did not
   exist.
+- **A single run can opt out** of the mount (`?devFolder=false` on run start, `api.md`) without touching
+  the registration. When a mount is skipped this way, the run's log says so.
 - The registration status the console and API report is the registered folder alone - never that a
   mount "will apply", since that depends on which build a given run resolves.
 - If the registered folder has since been deleted, moved, or made unreadable, the run must **fail
-  visibly** - never silently mount an empty directory in its place.
+  visibly** - never silently mount an empty directory in its place. The status message names the folder,
+  what is wrong with it, and how to clear the registration.
 - The Actor image's own installed dependencies (e.g. `node_modules`) must remain available to the Actor
   despite the mount covering the whole working directory.
 - **Registering or clearing a dev folder never bumps the Actor's `modifiedAt`.**
@@ -121,11 +127,34 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   apply to the same run when both are configured for an Actor, e.g. edit -> recompile -> `apify call` ->
   breakpoint, with no rebuild in between.
 
+# Browser view
+
+- Browser view is a persistent per-Actor toggle. While it is on, every run of the Actor offers a live view
+  of the display its browser draws on, reachable from the run's console page and from a URL printed in the
+  run log.
+- Two modes: **view-only** (the default) shows the display and sends nothing to it; **interactive** also
+  delivers the viewer's mouse and keyboard input to the display. Nothing else ever crosses in either
+  direction (no clipboard).
+- Watching is not observable from inside the browser or by the sites it visits: the run's container,
+  command, environment, network and ports are those of an ordinary run, and whether the view is on, off, or
+  being watched changes nothing about the browser.
+- The runtime never changes the browser's headless mode. A headless browser shows an empty display; an
+  Actor that wants to be watched runs its browser headful (the bundled `sample_actor_playwright` and
+  `sample_actor_playwright_py` do). The Actor image must provide an X display; the Apify Playwright and
+  Puppeteer base images do.
+- The view lives exactly as long as the run, survives a migration/reboot of the run, and is gone once the run
+  ends. It composes with debug mode and the dev-folder bind mount.
+
 # Networking
 
-- On startup, the runtime ensures a Docker network `apify-local` exists and joins it under the fixed
-  DNS alias `apify-api`. Every Actor container is started on that network, so it can reach the
-  runtime's API at `http://apify-api:3333` regardless of the host's own networking.
+- Every Actor container reaches the runtime's API at `http://apify-api:3333`, whatever the host's own
+  networking, whichever supported engine runs the containers, and however the runtime itself was started
+  (as a container or not). The runtime provides the `apify-local` network with the DNS alias `apify-api`
+  for this; when it has to reach the same goal another way, it says so at startup.
+- A per-run resource limit the engine cannot enforce for the current user is left out rather than
+  failing the run; the runtime says so at startup.
+- A run the engine refuses to start fails with the engine's reason in both the run's status message and
+  its log.
 
 # Actor run
 

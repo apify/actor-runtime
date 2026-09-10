@@ -57,8 +57,10 @@
           (`actor-driver.md`). When present: `{ language: "auto" | "node" | "python", port?: number }` -
           `port` absent means "resolve the language's own default port at run start", never a stored
           literal (`actor-driver.md`).
-        - Neither `localDevFolder`, `localDebug`, nor any build's `imageWorkingDirectory` is ever exposed
-          on the public `/v2` API.
+        - `localBrowserView` - **optional**, `{ interactive: boolean }`; absent means browser view is off.
+          Same rules as `localDebug`: set only through its endpoint or console form, never bumping `modifiedAt`.
+        - Neither `localDevFolder`, `localDebug`, `localBrowserView`, nor any build's
+          `imageWorkingDirectory` is ever exposed on the public `/v2` API.
 - The system stores Actor runs in dedicated key-value store called `__RUNS__`:
     - `key` is the id of the Actor run `runId`
     - `value` is the metadata of the Actor
@@ -70,6 +72,8 @@
 number }`, both already resolved (never `"auto"`, never absent-meaning-default). Absent for
           every non-debug run, and for a debug run that was refused before a plan could be resolved.
           Never exposed on the emulated `/v2` run object.
+        - `localBrowserView` - **optional**, specific to this one run: `{ interactive, vncHost, vncPort }`,
+          the run's browser view once it is up. Absent otherwise. Never exposed on the emulated `/v2` run object.
 - The system stores Actor builds in dedicated key-value store called `__BUILDS__`:
     - `key` is the id of the Actor build (`buildId`)
     - `value` is the metadata of the Actor

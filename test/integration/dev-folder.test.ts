@@ -61,6 +61,10 @@ function devFolderDriver(
 		async ensureProbeImage() {
 			return STUB_PROBE_IMAGE_ID;
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -794,6 +798,10 @@ function devMountCapturingDriver(): {
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -824,6 +832,12 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			localDevFolder: '/abs/dev/src',
 			imageWorkingDirectory: '/usr/src/app',
 		});
+		const log = await server.client.log(run.id).get();
+		expect(log).toContain('Local Actor runtime');
+		expect(log).toContain('Live dev folder: /abs/dev/src');
+		expect(log).toContain('Live dev folder mode');
+		expect(log).toContain('apify call --no-dev-folder');
+		expect(log!.indexOf('Local Actor runtime')).toBeLessThan(log!.indexOf('done'));
 	});
 
 	it('an Actor that was never registered gets devMount: undefined on the real run-start service path', async () => {
@@ -835,6 +849,7 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
 		expect(run.status).toBe('SUCCEEDED');
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		expect(await server.client.log(run.id).get()).not.toContain('Local Actor runtime');
 	});
 
 	it('an Actor whose registration was set and then cleared also gets devMount: undefined, not the stale pair', async () => {
@@ -882,5 +897,85 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			localDevFolder: '/abs/dev/src',
 			imageWorkingDirectory: '/app',
 		});
+	});
+});
+
+/** Raw run start: `apify-client`'s `start()` rejects unknown options such as `devFolder`. */
+async function startRunRaw(server: TestServerHandle, actorId: string, query: string) {
+	const res = await axios.post(`${server.baseUrl}/v2/actors/${actorId}/runs?waitForFinish=5&${query}`, undefined, {
+		headers: { Authorization: `Bearer ${server.token}` },
+		validateStatus: () => true,
+	});
+	expect(res.status).toBe(201);
+	return res.data.data as { id: string; status: string };
+}
+
+describe('per-run opt-out: POST /v2/actors/:actorId/runs?devFolder=false (services/runs.ts)', () => {
+	let server: TestServerHandle;
+
+	afterEach(async () => {
+		await server.close();
+	});
+
+	it('devFolder=false starts the run without the mount, even though the Actor has a registered folder and the build a known working directory', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-optout-actor' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await startRunRaw(server, actor.id, 'devFolder=false');
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		const log = await server.client.log(run.id).get();
+		expect(log).toContain('Skipping the registered local dev folder /abs/dev/src for this run');
+		expect(log).not.toContain('Local Actor runtime');
+	});
+
+	it('devFolder=false leaves the registration itself untouched - the next run without the opt-out mounts again', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-optout-once-actor' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		await startRunRaw(server, actor.id, 'devFolder=false');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		expect((await getRegistries().actors.get(actor.id))!.localDevFolder).toBe('/abs/dev/src');
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toEqual({
+			localDevFolder: '/abs/dev/src',
+			imageWorkingDirectory: '/usr/src/app',
+		});
+	});
+
+	it('devFolder=true (and any value other than false) mounts exactly like an absent parameter', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-optin-actor' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await startRunRaw(server, actor.id, 'devFolder=true');
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toEqual({
+			localDevFolder: '/abs/dev/src',
+			imageWorkingDirectory: '/usr/src/app',
+		});
+		expect(await server.client.log(run.id).get()).not.toContain('Skipping the registered local dev folder');
+	});
+
+	it('devFolder=false on an Actor with nothing registered is a plain run - no mount, and no "skipping" line either', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-optout-unregistered-actor' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+
+		const run = await startRunRaw(server, actor.id, 'devFolder=false');
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		expect(await server.client.log(run.id).get()).not.toContain('Skipping the registered local dev folder');
 	});
 });

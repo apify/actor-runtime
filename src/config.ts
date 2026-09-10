@@ -37,3 +37,18 @@ export function debugpyPayloadTarPath(): string {
 export function debugpyVersionFilePath(): string {
 	return `${debugpyPayloadDir()}/debugpy-version.txt`;
 }
+
+/** Read fresh on every call, like `debugpyPayloadDir()`, so tests can point it at a fixture directory. */
+function browserViewerPayloadDir(): string {
+	return process.env.ACTOR_RUNTIME_BROWSER_VIEWER_PAYLOAD_DIR ?? '/opt/apify-browser-viewer';
+}
+
+/** The browser-view sidecar's root filesystem, `docker import`ed on first use. */
+export function browserViewerRootfsTarPath(): string {
+	return `${browserViewerPayloadDir()}/rootfs.tar`;
+}
+
+/** Content hash of `rootfs.tar`, used as the imported image's tag. */
+export function browserViewerVersionFilePath(): string {
+	return `${browserViewerPayloadDir()}/version.txt`;
+}

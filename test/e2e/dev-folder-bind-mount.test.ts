@@ -14,7 +14,7 @@
  * Requires a reachable Docker daemon and fails loudly, never skips, mirroring `actor-dev-loop.test.ts`.
  */
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -47,7 +47,7 @@ const CONTAINER_NAME = 'actor-runtime-e2e-devfolder';
 const IMAGE_TAG = 'actor-runtime:e2e-devfolder';
 // `sample_actor_ts/Dockerfile` sets no `WORKDIR` of its own, so it inherits the base image's - the
 // `apify/actor-node` image's own Dockerfile sets `WORKDIR /usr/src/app`. Asserted independently below
-// via the run's own mount log line, not only assumed here - if the base image ever moves its
+// via the run's own log, not only assumed here - if the base image ever moves its
 // `WORKDIR`, that assertion (not the mount itself) is what will fail first and explain why.
 const EXPECTED_IMAGE_WORKING_DIR = '/usr/src/app';
 const ORIGINAL_MARKER = 'Crawl finished.';
@@ -190,6 +190,58 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 	);
 
 	it(
+		'a run started with devFolder=false uses the built image alone and leaves the registration in place',
+		() => {
+			const env = apifyEnv(isolatedApifyHome);
+
+			// The previous test's local `dist/` must not be pushed: Docker's API build ignores `.dockerignore`
+			// and would bake the edited compile into the image.
+			writeFileSync(mainTs, originalMainTs);
+			rmSync(join(actorDir, 'dist'), { recursive: true, force: true });
+			const push = JSON.parse(apify(['push', '--json', '--force'], { cwd: actorDir, env })) as PushResult;
+			expect(push.build.status).toBe('SUCCEEDED');
+			const actorId = push.actor.id;
+			registerDevFolder(actorId, actorDir, env);
+			writeFileSync(mainTs, originalMainTs.replace(ORIGINAL_MARKER, EDITED_MARKER));
+			execFileSync('npm', ['run', 'build'], { cwd: actorDir, stdio: 'inherit' });
+
+			const optedOut = JSON.parse(
+				apify(
+					[
+						'api',
+						'POST',
+						`actors/${actorId}/runs`,
+						'--params',
+						JSON.stringify({ devFolder: 'false', waitForFinish: 180 }),
+						'--body',
+						JSON.stringify({ maxPages: 1 }),
+					],
+					{ cwd: REPO_ROOT, env },
+				),
+			) as ApiEnvelope<{ id: string; status: string }>;
+			expect(optedOut.data.status).toBe('SUCCEEDED');
+			const optedOutLog = apifyAllOutput(['runs', 'log', optedOut.data.id], { cwd: REPO_ROOT, env });
+			expect(optedOutLog).toContain(`Skipping the registered local dev folder ${actorDir}`);
+			expect(optedOutLog).toContain(ORIGINAL_MARKER);
+			expect(optedOutLog).not.toContain(EDITED_MARKER);
+			expect(optedOutLog).not.toContain('Local Actor runtime');
+
+			// The registration survived.
+			const call = JSON.parse(
+				apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], { cwd: actorDir, env }),
+			) as CallResult;
+			expect(call.run.status).toBe('SUCCEEDED');
+			const callLog = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
+			expect(callLog).toContain(EDITED_MARKER);
+			expect(callLog).toContain('Local Actor runtime');
+			expect(callLog).toContain(`Live dev folder: ${actorDir}`);
+			expect(callLog).toContain('Live dev folder mode');
+			expect(callLog).toContain('apify call --no-dev-folder');
+		},
+		5 * 60 * 1000,
+	);
+
+	it(
 		'registers the host folder, then a local recompile (no push/build) is what the next run sees, with node_modules preserved',
 		async () => {
 			const env = apifyEnv(isolatedApifyHome);
@@ -247,8 +299,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(log).toContain(EDITED_MARKER);
 			expect(log).not.toContain(`${ORIGINAL_MARKER}\n`);
 
-			// An explicit mount line at the top of the run's log, naming both the host path and the
-			// container path being mounted.
 			expect(log).toContain(actorDir);
 			expect(log).toContain(EXPECTED_IMAGE_WORKING_DIR);
 		},
@@ -292,8 +342,67 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 
 			const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
-			// No mount line at all - the observability line only appears for a run that actually has one.
-			expect(log).not.toContain('Mounting local dev folder');
+			expect(log).not.toContain('Local Actor runtime');
+		},
+		5 * 60 * 1000,
+	);
+
+	it(
+		"an entrypoint the image keeps inside its working directory (Apify's Playwright images start through one) stays available under the mount when the dev folder lacks it",
+		() => {
+			const env = apifyEnv(isolatedApifyHome);
+			// A tiny Actor of its own: busybox, an entrypoint script at ./entry.sh in the working directory
+			// (what `apify/actor-*-playwright*` images do with their Xvfb wrapper), and a dev folder that has
+			// no such file - mounting it over /app would hide the script.
+			const entryActorDir = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-devfolder-entry-'));
+			const devFolder = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-devfolder-entry-src-'));
+			try {
+				mkdirSync(join(entryActorDir, '.actor'));
+				writeFileSync(
+					join(entryActorDir, '.actor', 'actor.json'),
+					JSON.stringify({
+						actorSpecification: 1,
+						name: 'devfolder-entrypoint',
+						version: '0.0',
+						buildTag: 'latest',
+					}),
+				);
+				writeFileSync(
+					join(entryActorDir, 'entry.sh'),
+					'#!/bin/sh\necho "entry.sh from the image: $0"\nexec "$@"\n',
+				);
+				writeFileSync(
+					join(entryActorDir, 'Dockerfile'),
+					[
+						'FROM docker.io/library/busybox',
+						'WORKDIR /app',
+						'COPY entry.sh ./entry.sh',
+						'RUN chmod 755 ./entry.sh',
+						'ENTRYPOINT ["./entry.sh"]',
+						'CMD ["sh", "-c", "ls /app; echo run-body-done"]',
+						'',
+					].join('\n'),
+				);
+				writeFileSync(join(devFolder, 'only-in-dev-folder.txt'), 'x');
+
+				const push = JSON.parse(apify(['push', '--json'], { cwd: entryActorDir, env })) as PushResult;
+				expect(push.build.status).toBe('SUCCEEDED');
+				registerDevFolder(push.actor.id, devFolder, env);
+
+				const call = JSON.parse(apify(['call', '--json'], { cwd: entryActorDir, env })) as CallResult;
+				expect(call.run.status).toBe('SUCCEEDED');
+				// The stored log, not `apify call`'s streamed copy: for an Actor that exits within milliseconds
+				// the CLI's stream can close before its last lines are flushed, on any engine.
+				const log = apify(['api', 'GET', `actor-runs/${call.run.id}/log`], { cwd: REPO_ROOT, env });
+				expect(log).toContain('starts through ./entry.sh in its working directory');
+				expect(log).toContain('entry.sh from the image: /apify-runtime-entrypoint/entry.sh');
+				// The dev folder, not the image's /app, is what the run sees in the working directory.
+				expect(log).toContain('only-in-dev-folder.txt');
+				expect(log).toContain('run-body-done');
+			} finally {
+				rmSync(entryActorDir, { recursive: true, force: true });
+				rmSync(devFolder, { recursive: true, force: true });
+			}
 		},
 		5 * 60 * 1000,
 	);

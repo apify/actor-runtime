@@ -100,6 +100,10 @@ function neverStartDriver(): Driver & { abortRunCalls: string[]; abortBuildCalls
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
