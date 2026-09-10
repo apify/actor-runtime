@@ -334,7 +334,7 @@ describe('DockerDriver.startRun - debug mode (actor-driver.md: "Debug mode")', (
 
 	it('does not rewrite an ordinary (non-port-conflict) start() failure for a debug run - the original error propagates', async () => {
 		const stub = stubDockerForRun();
-		stub.container.start.mockRejectedValue(new Error('some other daemon failure'));
+		stub.container.start.mockRejectedValueOnce(new Error('some other daemon failure'));
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
@@ -355,7 +355,7 @@ describe('DockerDriver.startRun - debug mode (actor-driver.md: "Debug mode")', (
 
 	it("a port-in-use start() failure for a NON-debug run is left as the daemon's own message, unrewritten", async () => {
 		const stub = stubDockerForRun();
-		stub.container.start.mockRejectedValue(new Error('port is already allocated'));
+		stub.container.start.mockRejectedValueOnce(new Error('port is already allocated'));
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 

@@ -96,7 +96,8 @@ Good to know:
   `sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload`, then log out and in.)
 - If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
   stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
-- `podman images` lists the images the runtime builds as `docker.io/actor-runtime/<actor>:<buildId>`.
+- `podman images` lists the images the runtime builds as `actor-runtime/<actor>:<buildId>` under the
+  registry prefix Podman adds itself (`docker.io/` or `localhost/`, depending on the version).
 
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
