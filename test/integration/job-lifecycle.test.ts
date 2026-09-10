@@ -47,6 +47,7 @@ import type {
 	SourceFile,
 } from '../../src/storage/entities.js';
 import { DEFAULT_DOCKERFILE_CONTENT, DEFAULT_DOCKERFILE_NAME } from '../../src/services/default-dockerfile.js';
+import { getFullLog } from '../../src/services/logs.js';
 
 /** Creates an Actor via the real client (so it has a genuine owner) and returns the underlying
  * `ActorRecord` for direct service-layer calls. */
@@ -240,6 +241,39 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			expect(finalActor?.taggedBuilds.latest).toEqual({ buildId: 'previous-build-id', buildNumber: '0.0.1' });
 		});
 
+		it('records the tag before the build record turns SUCCEEDED, so a client that polls the build to SUCCEEDED and immediately starts a run never finds the tag missing', async () => {
+			const driver = deferredBuildDriver();
+			server = await startTestServer(driver);
+			const actor = await seedActor(server, 'tag-before-succeeded-actor');
+
+			const record: BuildRecord = {
+				id: generateId(),
+				userId: actor.userId,
+				actorId: actor.id,
+				versionNumber: '0.0',
+				buildNumber: '0.0.1',
+				tag: 'latest',
+				status: 'READY',
+				startedAt: new Date().toISOString(),
+			};
+			await getRegistries().builds.set(record.id, record);
+
+			const bg = runBuildInBackground(driver, actor, VERSION, record, { tag: 'latest', useCache: true });
+			await driver.started;
+			driver.resolveBuild({ imageId: 'image:latest' });
+
+			// Poll the build record as tightly as a client can, and read the actor the instant it is
+			// SUCCEEDED - with the writes in the wrong order this observes the tag still missing.
+			let observed: BuildRecord | null = null;
+			while (observed?.status !== 'SUCCEEDED') {
+				observed = await getRegistries().builds.get(record.id);
+			}
+			const actorAtSuccess = await getRegistries().actors.get(actor.id);
+			expect(actorAtSuccess?.taggedBuilds.latest).toEqual({ buildId: record.id, buildNumber: '0.0.1' });
+
+			await bg;
+		});
+
 		it('a normal (non-aborted) successful build does record itself against the tag', async () => {
 			const driver = deferredBuildDriver();
 			server = await startTestServer(driver);
@@ -400,7 +434,14 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			expect(ctx.dockerfilePath).toBe(DEFAULT_DOCKERFILE_NAME);
 			expect(ctx.sourceFiles).toEqual([
 				...noDockerfileSourceFiles,
-				{ name: 'Dockerfile', format: 'TEXT', content: DEFAULT_DOCKERFILE_CONTENT },
+				{
+					name: 'Dockerfile',
+					format: 'TEXT',
+					content: DEFAULT_DOCKERFILE_CONTENT.replace(
+						'FROM apify/actor-node:20',
+						'FROM docker.io/apify/actor-node:20',
+					),
+				},
 			]);
 			expect(version.sourceFiles).toEqual(noDockerfileSourceFiles);
 
@@ -414,7 +455,7 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			const actor = await seedActor(server, 'dockerfile-resolved-actor');
 
 			const resolvedSourceFiles: SourceFile[] = [
-				{ name: '.actor/Dockerfile', format: 'TEXT', content: 'FROM node:20\n' },
+				{ name: '.actor/Dockerfile', format: 'TEXT', content: 'FROM docker.io/library/node:20\n' },
 				{ name: 'main.js', format: 'TEXT', content: 'console.log(1);\n' },
 			];
 			const version: ActorVersionRecord = { ...VERSION, sourceFiles: resolvedSourceFiles };
@@ -440,6 +481,52 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 
 			const final = await getRegistries().builds.get(record.id);
 			expect(final?.status).toBe('SUCCEEDED');
+		});
+
+		it("a short image name in the Dockerfile's FROM is qualified to Docker Hub before the driver sees it, and the build log says so", async () => {
+			const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
+			server = await startTestServer(driver);
+			const actor = await seedActor(server, 'dockerfile-short-name-actor');
+
+			const version: ActorVersionRecord = {
+				...VERSION,
+				sourceFiles: [
+					{
+						name: 'Dockerfile',
+						format: 'BASE64',
+						content: Buffer.from('FROM apify/actor-python-playwright:3.14-1.61.0\nCOPY . ./\n').toString(
+							'base64',
+						),
+					},
+				],
+			};
+
+			const record: BuildRecord = {
+				id: generateId(),
+				userId: actor.userId,
+				actorId: actor.id,
+				versionNumber: '0.0',
+				buildNumber: '0.0.1',
+				tag: 'latest',
+				status: 'READY',
+				startedAt: new Date().toISOString(),
+			};
+			await getRegistries().builds.set(record.id, record);
+
+			await runBuildInBackground(driver, actor, version, record, { tag: 'latest', useCache: true });
+
+			const ctx = driver.startBuildContexts[0]!;
+			expect(ctx.sourceFiles).toEqual([
+				{
+					name: 'Dockerfile',
+					format: 'TEXT',
+					content: 'FROM docker.io/apify/actor-python-playwright:3.14-1.61.0\nCOPY . ./\n',
+				},
+			]);
+			const log = await getFullLog(record.id);
+			expect(log).toContain(
+				'Using "docker.io/apify/actor-python-playwright:3.14-1.61.0" for FROM "apify/actor-python-playwright:3.14-1.61.0"',
+			);
 		});
 	});
 

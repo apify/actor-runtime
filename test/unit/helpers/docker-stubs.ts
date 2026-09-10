@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import * as tar from 'tar-stream';
 
 import { vi } from 'vitest';
 import type Docker from 'dockerode';
@@ -34,6 +35,13 @@ export function stubDockerForRun() {
 		remove: vi.fn(async (_options?: Record<string, unknown>) => undefined),
 		stop: vi.fn(async () => undefined),
 		putArchive: vi.fn(async (_file: unknown, _options: unknown) => undefined),
+		// `preserveHiddenEntrypoint` reads a file out of the image through a created container; an empty
+		// archive by default, tests that exercise it supply their own.
+		getArchive: vi.fn(async (_options: unknown) => {
+			const pack = tar.pack();
+			pack.finalize();
+			return pack as unknown as NodeJS.ReadableStream;
+		}),
 	};
 
 	// Real dockerode demuxing splits stdout/stderr apart by frame header; this stub doesn't need that
@@ -51,8 +59,17 @@ export function stubDockerForRun() {
 	// Typed with the real `dockerode` parameter shape so `mock.calls[0]` is genuinely a
 	// `[Docker.ContainerCreateOptions]` tuple below - no unsound cast needed to read it back.
 	const createContainer = vi.fn(async (_options: Docker.ContainerCreateOptions) => container);
+	// A `devMount` run removes its named `node_modules` volume after the container.
+	const volumeRemove = vi.fn(async (_options?: Record<string, unknown>) => undefined);
+	const getVolume = vi.fn((_name: string) => ({ remove: volumeRemove }));
+	// A `devMount` run inspects the image for an entrypoint the mount would hide; no `Config` here means
+	// there is nothing to preserve.
+	const imageInspect = vi.fn(async () => ({ Config: {} }));
+	const getImage = vi.fn((_name: string) => ({ inspect: imageInspect }));
 	const docker = {
 		createContainer,
+		getVolume,
+		getImage,
 		modem: { demuxStream },
 	} as unknown as Docker;
 
@@ -60,6 +77,10 @@ export function stubDockerForRun() {
 		docker,
 		container,
 		createContainer,
+		getVolume,
+		volumeRemove,
+		getImage,
+		imageInspect,
 		/** Simulates `container.wait()` resolving - the container process has exited. */
 		triggerContainerExit(statusCode = 0): void {
 			resolveWait({ StatusCode: statusCode });

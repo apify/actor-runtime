@@ -134,8 +134,9 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 
 	describe(`per-Actor browser view: live mirror of the ${sample.label} Playwright sample Actor (requires Docker)`, () => {
 		let isolatedApifyHome: string;
-		/** Set by the first case and reused by the second: a repeated `apify push` of an unchanged Actor is
-		 * refused by the CLI ("already exists ... newer changes than your local copy"). */
+		/** Pushed once for the whole suite: a repeated `apify push` of an unchanged Actor is refused by the CLI
+		 * ("already exists ... newer changes than your local copy"), so neither a retried case nor the second
+		 * case may push again. */
 		let pushedActorId: string;
 
 		beforeAll(
@@ -153,6 +154,16 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 
 				isolatedApifyHome = createIsolatedApifyHome();
 				loginApifyCli(REPO_ROOT, isolatedApifyHome);
+
+				const pushOutput = apify(['push', '--json'], {
+					cwd: join(REPO_ROOT, sample.dir),
+					env: apifyEnv(isolatedApifyHome),
+				});
+				const push = JSON.parse(pushOutput) as PushResult;
+				if (push.build.status !== 'SUCCEEDED') {
+					throw new Error(`apify push of ${sample.dir} ended with build status ${push.build.status}`);
+				}
+				pushedActorId = push.actor.id;
 			},
 			15 * 60 * 1000,
 		);
@@ -163,16 +174,11 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 		});
 
 		it(
-			`${sample.label} sample: push -> toggle on -> run: the log names the viewer URL, the viewer websocket reaches a live RFB server while the run crawls, the console links to the page, and the run finishes with the input-dependent item count`,
+			`${sample.label} sample: toggle on -> run: the log names the viewer URL, the viewer websocket reaches a live RFB server while the run crawls, the console links to the page, and the run finishes with the input-dependent item count`,
 			async () => {
 				const env = apifyEnv(isolatedApifyHome);
 				const actorDir = join(REPO_ROOT, sample.dir);
-
-				const pushOutput = apify(['push', '--json'], { cwd: actorDir, env });
-				const push = JSON.parse(pushOutput) as PushResult;
-				expect(push.build.status).toBe('SUCCEEDED');
-				const actorId = push.actor.id;
-				pushedActorId = actorId;
+				const actorId = pushedActorId;
 
 				const toggle = apify(
 					['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": true}'],
@@ -234,7 +240,9 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				expect(await endedPage.text()).toContain('This run has ended');
 				await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 			},
-			10 * 60 * 1000,
+			// One retry: the sample crawls a real external site (deliberately - the route out of an Actor is part
+			// of what is tested), and CI runners occasionally see its navigations time out; a defect reproduces.
+			{ timeout: 10 * 60 * 1000, retry: 1 },
 		);
 
 		it.runIf(sample.withToggleClearedCase)(
@@ -242,7 +250,6 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 			() => {
 				const env = apifyEnv(isolatedApifyHome);
 				const actorDir = join(REPO_ROOT, sample.dir);
-				expect(pushedActorId).toBeDefined();
 				const actorId = pushedActorId;
 				apify(['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": false}'], {
 					cwd: REPO_ROOT,
@@ -272,7 +279,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				) as DatasetInfoResult;
 				expect(info.itemCount).toBe(2);
 			},
-			5 * 60 * 1000,
+			{ timeout: 5 * 60 * 1000, retry: 1 },
 		);
 	});
 }

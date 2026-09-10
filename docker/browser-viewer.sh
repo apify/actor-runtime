@@ -5,6 +5,10 @@
 # Env names must match `src/driver/docker-driver.ts`.
 
 SOCKET_DIR=/tmp/.X11-unix
+# The socket directory is a shared volume the Actor's unprivileged Xvfb must be able to write to. This
+# sidecar mounts it first and runs as root, so it sets the mode itself rather than trusting the engine
+# to copy it from the image.
+chmod 1777 "$SOCKET_DIR" 2>/dev/null || true
 PORT="${APIFY_BROWSER_VIEWER_PORT:-5900}"
 if [ "$APIFY_BROWSER_VIEWER_INTERACTIVE" = "1" ]; then
 	INPUT_FLAG=""

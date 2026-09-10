@@ -81,6 +81,7 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 	});
 
 	afterEach(() => {
+		vi.unstubAllEnvs();
 		rmSync(payloadDir, { recursive: true, force: true });
 		if (originalEnv === undefined) delete process.env[PAYLOAD_ENV];
 		else process.env[PAYLOAD_ENV] = originalEnv;
@@ -94,20 +95,21 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		const handle = await driver.startBrowserViewer({ runId: 'run-1', interactive: false });
 
 		expect(stub.calls).toEqual(['inspectImage', 'importImage', 'createVolume', 'createContainer', 'start']);
-		expect(stub.getImage).toHaveBeenCalledWith('actor-runtime/browser-viewer:abc123def456');
+		expect(stub.getImage).toHaveBeenCalledWith('localhost/actor-runtime/browser-viewer:abc123def456');
+		// `name:tag` in `repo`, no separate `tag`: Podman 3.x ignores the `tag` parameter.
 		expect(stub.importImage.mock.calls[0]![1]).toEqual({
-			repo: 'actor-runtime/browser-viewer',
-			tag: 'abc123def456',
+			repo: 'localhost/actor-runtime/browser-viewer:abc123def456',
 		});
 
 		const [volumeOptions] = stub.createVolume.mock.calls[0]!;
 		expect(volumeOptions.Name).toBe('actor-runtime-x11-run-1');
 		expect(volumeOptions.Driver).toBe('local');
-		expect(volumeOptions.DriverOpts).toEqual({ type: 'tmpfs', device: 'tmpfs', o: 'size=8m,mode=1777' });
+		// A plain local volume: rootless Podman 3.x cannot mount tmpfs-backed volumes.
+		expect(volumeOptions.DriverOpts).toBeUndefined();
 		expect(volumeOptions.Labels).toEqual({ 'actor-runtime.runId': 'run-1', 'actor-runtime.browserViewer': 'true' });
 
 		const [containerOptions] = stub.createContainer.mock.calls[0]!;
-		expect(containerOptions.Image).toBe('actor-runtime/browser-viewer:abc123def456');
+		expect(containerOptions.Image).toBe('localhost/actor-runtime/browser-viewer:abc123def456');
 		expect(containerOptions.name).toBe('actor-runtime-browser-viewer-run-1');
 		expect(containerOptions.Cmd).toEqual(['/bin/sh', '/apify-browser-viewer.sh']);
 		expect(containerOptions.Env).toEqual(['APIFY_BROWSER_VIEWER_INTERACTIVE=0', 'APIFY_BROWSER_VIEWER_PORT=5900']);
@@ -146,6 +148,42 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 
 		expect(stub.importImage).not.toHaveBeenCalled();
 		expect(stub.getImage).toHaveBeenCalledTimes(1);
+	});
+
+	it("when this process runs in a container that could not join apify-local (rootless Podman), the sidecar shares this container's network namespace on a port of its own and is reached on localhost", async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const stub = stubDockerForViewer({ imagePresent: true });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true; // `onActorNetwork` stays false: `init()` never attached this container.
+
+		const handle = await driver.startBrowserViewer({ runId: 'run-netns', interactive: false });
+
+		const [containerOptions] = stub.createContainer.mock.calls[0]!;
+		expect(containerOptions.HostConfig?.NetworkMode).toBe('container:abc123def456');
+		expect(handle.vncHost).toBe('127.0.0.1');
+		expect(handle.vncPort).toBeGreaterThan(0);
+		expect(handle.vncPort).not.toBe(5900);
+		expect(containerOptions.Env).toContain(`APIFY_BROWSER_VIEWER_PORT=${handle.vncPort}`);
+		// Nothing to look up on the network: the address is this container's own loopback.
+		expect(stub.container.inspect).not.toHaveBeenCalled();
+	});
+
+	it('joins apify-local as usual when this container did attach to it, even though it runs in a container', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const stub = stubDockerForViewer({ imagePresent: true });
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		(driver as unknown as { onActorNetwork: boolean }).onActorNetwork = true;
+
+		const handle = await driver.startBrowserViewer({ runId: 'run-alias', interactive: false });
+
+		const [containerOptions] = stub.createContainer.mock.calls[0]!;
+		expect(containerOptions.HostConfig?.NetworkMode).toBe('apify-local');
+		expect(handle).toEqual({
+			vncHost: '172.18.0.9',
+			vncPort: 5900,
+			x11SocketVolume: 'actor-runtime-x11-run-alias',
+		});
 	});
 
 	it('falls back to the sidecar container name as vncHost when the daemon reports no IP on apify-local', async () => {
@@ -276,6 +314,9 @@ describe('DockerDriver.startRun - the X-socket volume mount', () => {
 		const stub = stubDockerForRun();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
+		// The run-start dev-folder re-check (`assertDevFolderStillPresent`) is not under test here.
+		vi.spyOn(driver, 'ensureProbeImage').mockResolvedValue('probe:image');
+		vi.spyOn(driver, 'probeDevFolder').mockResolvedValue({ ok: true });
 
 		const outcomePromise = driver.startRun(
 			{
@@ -294,7 +335,11 @@ describe('DockerDriver.startRun - the X-socket volume mount', () => {
 		const [options] = stub.createContainer.mock.calls[0]!;
 		expect(options.HostConfig?.Mounts).toEqual([
 			{ Type: 'bind', Source: '/host/src', Target: '/usr/src/app' },
-			{ Type: 'volume', Source: '', Target: '/usr/src/app/node_modules' },
+			{
+				Type: 'volume',
+				Source: expect.stringMatching(/^actor-runtime-node-modules-/),
+				Target: '/usr/src/app/node_modules',
+			},
 			{ Type: 'volume', Source: 'actor-runtime-x11-run-bv-2', Target: '/tmp/.X11-unix' },
 		]);
 

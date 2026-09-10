@@ -31,19 +31,25 @@
   overridable) - the runtime's own two ports above are unaffected, and no port is published for an Actor
   that never turned debug mode on.
 - Browser view (`actor-driver.md`) publishes no port on the host; the view is served on the console's port 3000.
-- Required `docker run` flags: mount the host Docker socket read-write
+- Required `docker run` flags: mount the host's Docker-Engine-API socket read-write
   (`-v /var/run/docker.sock:/var/run/docker.sock`) so the runtime can build and run Actor containers,
   and mount a persistent data directory (`-v <host-dir>:/data`, e.g. `-v "$(pwd)/data:/data"`) so
-  storages survive a restart and are easy to inspect from the host. Publish both fixed ports
+  storages survive a restart and are easy to inspect from the host; the directory must exist before the
+  runtime starts. Publish both fixed ports
   (`-p 3333:3333 -p 3000:3000`). The canonical start command is:
 
     ```bash
     docker build -t actor-runtime .
+    mkdir -p data
     docker run --rm -p 3333:3333 -p 3000:3000 \
       -v /var/run/docker.sock:/var/run/docker.sock \
       -v "$(pwd)/data:/data" \
       actor-runtime
     ```
+
+- **Docker and Podman are equally supported**, rootful or rootless: everything the system offers works
+  the same on either engine. The user picks the engine by mounting its Docker-compatible API socket in
+  place of the Docker one (e.g. `-v /run/podman/podman.sock:/var/run/docker.sock`).
 
 - Optionally set `APIFY_PROXY_PASSWORD` in the runtime's own environment to have it forwarded into
   every Actor container (see `actor-driver.md`).
