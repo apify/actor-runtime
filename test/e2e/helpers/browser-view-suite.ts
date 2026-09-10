@@ -32,14 +32,6 @@ import {
 	type PushResult,
 } from './apify-cli.js';
 
-/**
- * What the browser-view samples crawl: the runtime's own console, at the same `apify-api` name every
- * Actor container reaches the API through, on every engine and with no public internet involved. Its
- * pages link to each other (actors, builds, runs, storages, logs, settings), so a same-hostname crawl
- * always finds at least as many pages as the tests ask for.
- */
-export const CONSOLE_URL_FROM_ACTOR = 'http://apify-api:3000/';
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 const CONSOLE_URL = 'http://localhost:3000';
@@ -49,7 +41,7 @@ export interface BrowserViewSample {
 	dir: string;
 	label: string;
 	baseImage: string;
-	input: (maxRequests: number) => Record<string, unknown>;
+	input: (maxRequests: number) => Record<string, number>;
 	/** The "toggle cleared" case proves a runtime property; one sample is enough. */
 	withToggleClearedCase: boolean;
 }

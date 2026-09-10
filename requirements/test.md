@@ -24,7 +24,7 @@
   `DOCKER_HOST` when the engine's socket is not at its default path). CI's per-file jobs run against Docker,
   rootless Podman 4, and rootless Podman 3.4 (Ubuntu 22.04's stock package) - the browser-view tests included.
 - The sample Actors crawl a live site (`https://crawlee.dev/` by default), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
-- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls the two Playwright samples' base images itself, and its Actors crawl the runtime's own console rather than a public site, so no e2e run depends on the public internet beyond image pulls.
+- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls the two Playwright samples' base images itself.
 
 ## Actor full dev loop
 
