@@ -225,6 +225,19 @@ export async function runBuildInBackground(
 		// `undefined` on an inspect failure or an empty/`/` working directory) rather than written as
 		// `undefined` - `entities.ts`'s doc comment on the field: "never present on a non-SUCCEEDED build"
 		// stays true for the value too, there is simply nothing to record for this build.
+		// The tag is recorded BEFORE the SUCCEEDED write lands: a client that polls the build to SUCCEEDED
+		// and immediately starts a run against the tag (apify-client's `build(..., { waitForFinish })`
+		// followed by `start()`) must never find the tag still missing - with the writes the other way
+		// round that was a real, if narrow, window. The tag is still never left pointing at an aborted
+		// build: if the SUCCEEDED write below is refused because an abort won the race (`RUNNING` is the
+		// only status `SUCCEEDED` is a legal next-state from - see `job-status.ts`), the tag is put back to
+		// whatever it pointed at before, so `apify call`/`POST .../runs` against it keep working exactly as
+		// they did.
+		let previousTag: ActorRecord['taggedBuilds'][string] | undefined;
+		await updateActor(actor.id, (current) => {
+			previousTag = current.taggedBuilds[options.tag];
+			return recordTaggedBuild(current, options.tag, record.id, record.buildNumber);
+		});
 		const succeeded = await transitionJobStatus(builds, record.id, 'SUCCEEDED', {
 			finishedAt: new Date().toISOString(),
 			imageId: outcome.imageId,
@@ -233,15 +246,14 @@ export async function runBuildInBackground(
 				? { imageWorkingDirectory: outcome.imageWorkingDirectory }
 				: {}),
 		});
-		// Only tag the build against the actor if the SUCCEEDED write actually landed - if an abort won
-		// the race above, `succeeded.status` is `ABORTED` (or the record vanished) and tagging here would
-		// clobber `actor.taggedBuilds[<tag>]` with a build that has no image, breaking every future
-		// `apify call`/`POST .../runs` against that tag even though the build record itself correctly
-		// stayed ABORTED.
-		if (succeeded?.status === 'SUCCEEDED') {
-			await updateActor(actor.id, (current) =>
-				recordTaggedBuild(current, options.tag, record.id, record.buildNumber),
-			);
+		if (succeeded?.status !== 'SUCCEEDED') {
+			await updateActor(actor.id, (current) => {
+				if (current.taggedBuilds[options.tag]?.buildId !== record.id) return current;
+				const taggedBuilds = { ...current.taggedBuilds };
+				if (previousTag) taggedBuilds[options.tag] = previousTag;
+				else delete taggedBuilds[options.tag];
+				return { ...current, taggedBuilds };
+			});
 		}
 	} catch (error) {
 		const status: JobStatus = error instanceof DriverTimedOutError ? 'TIMED-OUT' : 'FAILED';

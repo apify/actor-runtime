@@ -240,6 +240,39 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			expect(finalActor?.taggedBuilds.latest).toEqual({ buildId: 'previous-build-id', buildNumber: '0.0.1' });
 		});
 
+		it('records the tag before the build record turns SUCCEEDED, so a client that polls the build to SUCCEEDED and immediately starts a run never finds the tag missing', async () => {
+			const driver = deferredBuildDriver();
+			server = await startTestServer(driver);
+			const actor = await seedActor(server, 'tag-before-succeeded-actor');
+
+			const record: BuildRecord = {
+				id: generateId(),
+				userId: actor.userId,
+				actorId: actor.id,
+				versionNumber: '0.0',
+				buildNumber: '0.0.1',
+				tag: 'latest',
+				status: 'READY',
+				startedAt: new Date().toISOString(),
+			};
+			await getRegistries().builds.set(record.id, record);
+
+			const bg = runBuildInBackground(driver, actor, VERSION, record, { tag: 'latest', useCache: true });
+			await driver.started;
+			driver.resolveBuild({ imageId: 'image:latest' });
+
+			// Poll the build record as tightly as a client can, and read the actor the instant it is
+			// SUCCEEDED - with the writes in the wrong order this observes the tag still missing.
+			let observed: BuildRecord | null = null;
+			while (observed?.status !== 'SUCCEEDED') {
+				observed = await getRegistries().builds.get(record.id);
+			}
+			const actorAtSuccess = await getRegistries().actors.get(actor.id);
+			expect(actorAtSuccess?.taggedBuilds.latest).toEqual({ buildId: record.id, buildNumber: '0.0.1' });
+
+			await bg;
+		});
+
 		it('a normal (non-aborted) successful build does record itself against the tag', async () => {
 			const driver = deferredBuildDriver();
 			server = await startTestServer(driver);
