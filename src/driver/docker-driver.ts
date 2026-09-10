@@ -70,6 +70,16 @@ import {
 
 const NETWORK_NAME = 'apify-local';
 
+/**
+ * Prefix for the images this driver builds or imports for its own use and later looks up BY NAME (the
+ * browser-view sidecar, the dev-folder probe). A bare `actor-runtime/...` is a short name: Docker and
+ * Podman 4 resolve it to the local image, but Podman 3.x resolves short names only through its search
+ * registries and reports the locally stored `localhost/actor-runtime/...` as "image not known". Naming
+ * the image `localhost/...` outright is what every engine stores it as anyway. Actor images need no
+ * prefix: they are always referenced by image id.
+ */
+const LOCAL_IMAGE_PREFIX = 'localhost/';
+
 /** The names an engine gives the host in every container's hosts file: Podman (3.3+) the first, Docker
  * Desktop the second (Docker Engine adds neither). */
 const ENGINE_HOST_NAMES = ['host.containers.internal', 'host.docker.internal'];
@@ -231,7 +241,7 @@ const PROBE_MOUNT_TARGET = '/probe';
 /** On the browser-view sidecar container and its volume, so `reconcileOrphans` can sweep leftovers. */
 const BROWSER_VIEWER_LABEL = 'actor-runtime.browserViewer';
 /** Tagged with the payload's content hash, so a rebuilt runtime imports a fresh image. */
-const BROWSER_VIEWER_IMAGE_REPO = 'actor-runtime/browser-viewer';
+const BROWSER_VIEWER_IMAGE_REPO = `${LOCAL_IMAGE_PREFIX}actor-runtime/browser-viewer`;
 /** Shared between the Actor container and the sidecar through a tmpfs volume. */
 const X11_SOCKET_DIR = '/tmp/.X11-unix';
 /** Reachable only on `apify-local`; never published on the host. */
@@ -248,7 +258,7 @@ const VOLUME_REMOVE_RETRY_MS = 200;
  * An explicit `:probe` suffix, deliberately never `latest` (Docker's own implicit default for an
  * untagged name) - this image has nothing to do with an Actor's `latest`-tagged build, and an untagged
  * name would silently print as `...probe:latest` and invite exactly that confusion. */
-const PROBE_IMAGE_TAG = 'actor-runtime/dev-folder-probe:probe';
+const PROBE_IMAGE_TAG = `${LOCAL_IMAGE_PREFIX}actor-runtime/dev-folder-probe:probe`;
 /**
  * `FROM scratch` with nothing else would build fine but fails every `createContainer` against it with
  * HTTP 400 "no command specified" (moby refuses to create a container for an image with no `Cmd`/

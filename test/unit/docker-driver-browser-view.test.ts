@@ -95,9 +95,9 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		const handle = await driver.startBrowserViewer({ runId: 'run-1', interactive: false });
 
 		expect(stub.calls).toEqual(['inspectImage', 'importImage', 'createVolume', 'createContainer', 'start']);
-		expect(stub.getImage).toHaveBeenCalledWith('actor-runtime/browser-viewer:abc123def456');
+		expect(stub.getImage).toHaveBeenCalledWith('localhost/actor-runtime/browser-viewer:abc123def456');
 		expect(stub.importImage.mock.calls[0]![1]).toEqual({
-			repo: 'actor-runtime/browser-viewer',
+			repo: 'localhost/actor-runtime/browser-viewer',
 			tag: 'abc123def456',
 		});
 
@@ -108,7 +108,7 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		expect(volumeOptions.Labels).toEqual({ 'actor-runtime.runId': 'run-1', 'actor-runtime.browserViewer': 'true' });
 
 		const [containerOptions] = stub.createContainer.mock.calls[0]!;
-		expect(containerOptions.Image).toBe('actor-runtime/browser-viewer:abc123def456');
+		expect(containerOptions.Image).toBe('localhost/actor-runtime/browser-viewer:abc123def456');
 		expect(containerOptions.name).toBe('actor-runtime-browser-viewer-run-1');
 		expect(containerOptions.Cmd).toEqual(['/bin/sh', '/apify-browser-viewer.sh']);
 		expect(containerOptions.Env).toEqual(['APIFY_BROWSER_VIEWER_INTERACTIVE=0', 'APIFY_BROWSER_VIEWER_PORT=5900']);
