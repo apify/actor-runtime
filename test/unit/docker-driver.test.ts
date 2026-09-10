@@ -13,6 +13,7 @@ import {
 	detectResourceLimitSupport,
 	DockerDriver,
 	hostAddressSeenFromContainers,
+	podmanMajorVersion,
 } from '../../src/driver/docker-driver.js';
 import { stubDockerForRun } from './helpers/docker-stubs.js';
 
@@ -1661,6 +1662,82 @@ describe('defaultGatewayFromRouteTable', () => {
 		expect(defaultGatewayFromRouteTable(table)).toBe('10.0.2.2');
 		expect(defaultGatewayFromRouteTable('Iface\tDestination\tGateway\neth0\t0002000A\t00000000\n')).toBeUndefined();
 		expect(defaultGatewayFromRouteTable('')).toBeUndefined();
+	});
+});
+
+describe('Podman 3.x: no user-defined network at all', () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it('never creates or joins apify-local; run containers go straight to the default network with the chosen route, and one startup line says so', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const dir = await mkdtemp(path.join(os.tmpdir(), 'pm3-'));
+		const hostsFile = path.join(dir, 'hosts');
+		await writeFile(hostsFile, '10.0.2.2 host.containers.internal\n');
+		const routeFile = path.join(dir, 'route');
+		await writeFile(routeFile, 'Iface\tDestination\tGateway\ntap0\t00000000\t0202000A\n');
+		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
+		const stub = stubDockerForNetwork(network);
+		(stub.docker as unknown as { version: unknown }).version = vi.fn(async () => ({
+			Components: [{ Name: 'Podman Engine', Version: '3.4.4' }],
+		}));
+		(stub.docker.modem as unknown as { dial: unknown }).dial = vi.fn(
+			(_o: unknown, cb: (e: Error | null, d: unknown) => void) =>
+				cb(null, { host: { cgroupControllers: ['cpu', 'memory', 'pids'] } }),
+		);
+		const driver = new DockerDriver(stub.docker, {
+			hostsFile,
+			routeFile,
+			networkInterfaces: () => ({
+				tap0: [{ address: '10.0.2.100', family: 'IPv4', internal: false } as os.NetworkInterfaceInfo],
+			}),
+		});
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await driver.init();
+
+		expect(driver.available).toBe(true);
+		expect(
+			(stub.docker as unknown as { createNetwork: ReturnType<typeof vi.fn> }).createNetwork,
+		).not.toHaveBeenCalled();
+		expect(stub.getNetwork).not.toHaveBeenCalled();
+		expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('Podman 3.x'))).toHaveLength(1);
+
+		const outcomePromise = driver.startRun(
+			{ runId: 'run-pm3', imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		expect(stub.createContainer).toHaveBeenCalledTimes(1);
+		const hostConfig = stub.createContainer.mock.calls[0]![0].HostConfig!;
+		expect(hostConfig.NetworkMode).toBe('slirp4netns:allow_host_loopback=true');
+		expect(hostConfig.ExtraHosts).toEqual(['apify-api:10.0.2.2']);
+		warn.mockRestore();
+	});
+
+	it('podmanMajorVersion reads the Podman component and is undefined for Docker or an unreachable engine', async () => {
+		await expect(
+			podmanMajorVersion({
+				version: async () => ({ Components: [{ Name: 'Podman Engine', Version: '4.9.3' }] }),
+			} as unknown as Docker),
+		).resolves.toBe(4);
+		await expect(
+			podmanMajorVersion({
+				version: async () => ({ Components: [{ Name: 'Engine', Version: '29.3.1' }] }),
+			} as unknown as Docker),
+		).resolves.toBeUndefined();
+		await expect(
+			podmanMajorVersion({
+				version: async () => {
+					throw new Error('down');
+				},
+			} as unknown as Docker),
+		).resolves.toBeUndefined();
 	});
 });
 

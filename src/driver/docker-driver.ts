@@ -169,6 +169,19 @@ const ALL_LIMITS_SUPPORTED: ResourceLimitSupport = { cpu: true, memory: true };
  * at start. Podman's own (non-Docker) info endpoint lists the controllers it can use; a limit whose
  * controller is missing is left out, and `init` says so once. Anything unexpected keeps every limit.
  */
+/** The engine behind the Docker API, as far as this driver needs to know: Podman's major version, or
+ * undefined for Docker (and for anything that does not identify itself). */
+export async function podmanMajorVersion(docker: Docker): Promise<number | undefined> {
+	try {
+		const version = (await docker.version()) as { Components?: Array<{ Name: string; Version?: string }> };
+		const podman = version.Components?.find((component) => component.Name === 'Podman Engine');
+		const major = podman?.Version ? Number.parseInt(podman.Version, 10) : Number.NaN;
+		return Number.isNaN(major) ? undefined : major;
+	} catch {
+		return undefined;
+	}
+}
+
 export async function detectResourceLimitSupport(docker: Docker): Promise<ResourceLimitSupport> {
 	try {
 		const version = (await docker.version()) as { Components?: Array<{ Name: string }> };
@@ -646,6 +659,25 @@ export class DockerDriver implements Driver {
 
 		this.hostRouteEntry = `${CONTAINER_API_ALIAS}:${await hostAddressSeenFromContainers(this.hostsFile)}`;
 		this.apiHostEntry = this.hostRouteEntry;
+
+		// Podman 3.x (the CNI generation, e.g. Ubuntu 22.04's 3.4): its user-defined networks are not worth
+		// touching - the stock config is unusable on the most common install, rootless cannot attach a
+		// running container at all, and a failed attach can wreck this container's own networking. Actors
+		// run on the engine's default network from the start, on the same route the fallback would pick.
+		if ((await podmanMajorVersion(this.docker)) === 3) {
+			this.onActorNetwork = false;
+			this.apiHostEntry = this.hostRouteEntry;
+			this.actorNetworkUsable = false;
+			const route = await this.routeOnDefaultNetwork();
+			console.warn(
+				`Podman 3.x: Actor containers run on the engine's default network (its user-defined networks are ` +
+					`not used) and reach this API as ${route.extraHost}` +
+					`${route.networkMode ? ` (network mode ${route.networkMode})` : ''}; keep -p ${API_PORT}:${API_PORT} ` +
+					`published on all interfaces.`,
+			);
+			this.available = true;
+			return;
+		}
 
 		try {
 			await this.ensureNetwork();
