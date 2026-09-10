@@ -6,7 +6,7 @@
 # `--platform=$BUILDPLATFORM`: this stage's whole output is architecture-independent (a pure-Python
 # wheel plus a .py file, tarred), so on a multi-arch build it runs once natively on the builder rather
 # than once per target under QEMU. Requires BuildKit, which is the default builder in Docker >= 23.
-FROM --platform=$BUILDPLATFORM python:3.11-slim AS debugpy-payload
+FROM --platform=$BUILDPLATFORM docker.io/library/python:3.11-slim AS debugpy-payload
 ARG DEBUGPY_VERSION=1.8.21
 # Must match `services/debug-mode.ts`'s `PYTHON_DEBUG_PAYLOAD_DIR` - the in-Actor-container path the
 # tar is extracted to.
@@ -32,14 +32,14 @@ RUN tar -cf /payload/debugpy-payload.tar -C /payload/root .
 # --- Browser-view sidecar: an Alpine rootfs with x11vnc, tarred so the runtime can `docker import` it at
 # run time without a registry. Not pinned to $BUILDPLATFORM: it runs on the Actor containers' daemon, so it
 # must be the target architecture's.
-FROM alpine:3.21 AS browser-viewer-rootfs
+FROM docker.io/library/alpine:3.21 AS browser-viewer-rootfs
 RUN apk add --no-cache x11vnc
 RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 COPY docker/browser-viewer.sh /apify-browser-viewer.sh
 RUN chmod 755 /apify-browser-viewer.sh
 
 # Tars the stage above and records its content hash, which the runtime uses as the imported image's tag.
-FROM --platform=$BUILDPLATFORM alpine:3.21 AS browser-viewer-payload
+FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.21 AS browser-viewer-payload
 COPY --from=browser-viewer-rootfs / /rootfs
 RUN mkdir -p /payload \
 	&& tar -cf /payload/rootfs.tar -C /rootfs . \
@@ -48,7 +48,7 @@ RUN mkdir -p /payload \
 # Also architecture-independent: this stage only runs `tsc`, and the `dist/` it hands to the final
 # stage is plain JavaScript. The final stage does its own `pnpm install --prod`, so the target
 # architecture's native bindings still come from a native (emulated) install there.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/node:24-bookworm-slim AS builder
 
 WORKDIR /usr/src/app
 
@@ -62,7 +62,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN pnpm run build
 
-FROM node:24-bookworm-slim
+FROM docker.io/library/node:24-bookworm-slim
 
 WORKDIR /usr/src/app
 

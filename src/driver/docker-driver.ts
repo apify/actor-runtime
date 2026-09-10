@@ -1480,10 +1480,9 @@ export class DockerDriver implements Driver {
 		rootfs.on('error', (error: Error) => {
 			rootfsError = error;
 		});
-		const stream = await this.docker.importImage(rootfs, {
-			repo: BROWSER_VIEWER_IMAGE_REPO,
-			tag: version,
-		});
+		// The tag travels inside `repo` (`name:tag`, which the Docker API allows) rather than as the separate
+		// `tag` parameter: Podman 3.x ignores that parameter and would store the image as `:latest`.
+		const stream = await this.docker.importImage(rootfs, { repo: tag });
 		await new Promise<void>((resolve, reject) => {
 			if (rootfsError) {
 				reject(rootfsError);

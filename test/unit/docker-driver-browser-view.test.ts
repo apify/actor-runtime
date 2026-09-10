@@ -96,9 +96,9 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 
 		expect(stub.calls).toEqual(['inspectImage', 'importImage', 'createVolume', 'createContainer', 'start']);
 		expect(stub.getImage).toHaveBeenCalledWith('localhost/actor-runtime/browser-viewer:abc123def456');
+		// `name:tag` in `repo`, no separate `tag`: Podman 3.x ignores the `tag` parameter.
 		expect(stub.importImage.mock.calls[0]![1]).toEqual({
-			repo: 'localhost/actor-runtime/browser-viewer',
-			tag: 'abc123def456',
+			repo: 'localhost/actor-runtime/browser-viewer:abc123def456',
 		});
 
 		const [volumeOptions] = stub.createVolume.mock.calls[0]!;

@@ -27,18 +27,22 @@ jobs:
 
     e2e:
         name: e2e ${{ matrix.file }} (apify-cli + ${{ matrix.engine }})
-        runs-on: ubuntu-latest
+        # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
+        # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
+        runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
         timeout-minutes: 30
         strategy:
             fail-fast: false
             # One job per e2e file and container engine. Each file starts its own runtime container on
             # the fixed host ports (3333/3000), so files cannot share a daemon; separate runners make them
-            # parallel instead. The `podman` leg drives the runner's preinstalled Podman rootless, as the
-            # runner user - the same suite, unchanged, against the other supported engine (`test.md`).
+            # parallel instead. The `podman` legs drive the runner's preinstalled Podman rootless, as the
+            # runner user - the same suite, unchanged, against the other supported engine (`test.md`):
+            # Podman 4 on the default runner, Podman 3.4 on the Ubuntu 22.04 one.
             matrix:
                 engine:
                     - docker
                     - podman
+                    - podman-3.4
                 file:
                     - actor-dev-loop
                     - debug-mode
@@ -57,8 +61,9 @@ jobs:
             # drives Podman through `CONTAINER_CLI=podman` and mounts the socket named by `DOCKER_HOST`
             # into the runtime container.
             - name: Serve the Podman API socket
-              if: matrix.engine == 'podman'
+              if: startsWith(matrix.engine, 'podman')
               run: |
+                  podman --version
                   sock="$RUNNER_TEMP/podman.sock"
                   nohup podman system service --time=0 "unix://$sock" > "$RUNNER_TEMP/podman-service.log" 2>&1 &
                   for _ in $(seq 1 30); do [ -S "$sock" ] && break; sleep 1; done
@@ -75,6 +80,7 @@ jobs:
             - name: Dump runtime container logs on failure
               if: failure()
               run: |
-                  for c in $(${{ matrix.engine }} ps -aq --filter name=actor-runtime-e2e); do
-                    ${{ matrix.engine }} logs --tail 300 "$c" || true
+                  cli=${{ matrix.engine == 'docker' && 'docker' || 'podman' }}
+                  for c in $($cli ps -aq --filter name=actor-runtime-e2e); do
+                    $cli logs --tail 300 "$c" || true
                   done
