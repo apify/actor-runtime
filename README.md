@@ -76,7 +76,7 @@ Good to know:
 - Under rootless Podman the runtime container cannot join the `apify-local` network, so Actors reach
   the API through the runtime's published port 3333 instead. Keep `-p 3333:3333` published on all
   interfaces, or pre-create the network (`podman network create apify-local`) and add
-  `--network apify-local` to the run command to use the direct route.
+  `--network apify-local` to the run command to use the direct route (browser view needs it).
 - Rootless engines on a cgroups v1 host do not apply the per-run memory and CPU limits.
 - If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
   stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
@@ -155,6 +155,27 @@ three-field form (`enabled`/`language`/`port`) on the Actor's page in the consol
 `requirements/actor-driver.md`'s "Debug mode" section; endpoint/console details: `requirements/api.md`'s
 `/actor-runtime/*` section and `requirements/console.md`.
 
+## Watching an Actor's browser
+
+Turn **browser view** on for an Actor once, and every run of it gets a live view of the display its browser draws
+on, served by the console:
+
+```bash
+apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'
+apify call
+```
+
+The run log prints the viewer URL (`http://localhost:3000/runs/<runId>/browser`); the run's console page links to
+it, and the Actor's console page has the same toggle as a form. `"interactive": true` also sends your mouse and
+keyboard to the display; `{"enabled": false}` turns the view off.
+
+The view only reads the display's pixels. The Actor's container, command, environment, network and ports are
+those of an ordinary run, so neither the browser nor the sites it visits can tell whether anyone is watching.
+Two things follow: the browser must run **headful** (Apify's templates default to headless, which shows as a
+black display - the bundled `sample_actor_playwright` and `sample_actor_playwright_py` set `headless: false` /
+`headless=False`), and the image must provide an X display, which the Apify Playwright and Puppeteer base images
+do. Like Python debug mode, this needs the runtime to run from its own built image.
+
 ## Publishing the image
 
 Images go to [`apify/actor-runtime`](https://hub.docker.com/r/apify/actor-runtime) on Docker Hub by
@@ -181,7 +202,7 @@ added by hand.
 pnpm install
 pnpm run build     # tsc
 pnpm test          # unit + integration (no Docker needed)
-pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker, or Podman with CONTAINER_CLI=podman)
+pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker, or Podman with CONTAINER_CLI=podman; the browser-view case pulls the ~2 GB Playwright base image)
 pnpm run dev       # run the server directly against ./data with tsx
 ```
 

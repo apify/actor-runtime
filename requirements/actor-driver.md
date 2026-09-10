@@ -125,6 +125,24 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   apply to the same run when both are configured for an Actor, e.g. edit -> recompile -> `apify call` ->
   breakpoint, with no rebuild in between.
 
+# Browser view
+
+- Browser view is a persistent per-Actor toggle. While it is on, every run of the Actor offers a live view
+  of the display its browser draws on, reachable from the run's console page and from a URL printed in the
+  run log.
+- Two modes: **view-only** (the default) shows the display and sends nothing to it; **interactive** also
+  delivers the viewer's mouse and keyboard input to the display. Nothing else ever crosses in either
+  direction (no clipboard).
+- Watching is not observable from inside the browser or by the sites it visits: the run's container,
+  command, environment, network and ports are those of an ordinary run, and whether the view is on, off, or
+  being watched changes nothing about the browser.
+- The runtime never changes the browser's headless mode. A headless browser shows an empty display; an
+  Actor that wants to be watched runs its browser headful (the bundled `sample_actor_playwright` and
+  `sample_actor_playwright_py` do). The Actor image must provide an X display; the Apify Playwright and
+  Puppeteer base images do.
+- The view lives exactly as long as the run, survives a migration/reboot of the run, and is gone once the run
+  ends. It composes with debug mode and the dev-folder bind mount.
+
 # Networking
 
 - On startup, the runtime ensures a Docker network `apify-local` exists and joins it under the fixed

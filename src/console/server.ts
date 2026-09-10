@@ -16,6 +16,8 @@
  * form is runtime-global by nature (`api.md`'s "Upstream fallback" section), so ownership doesn't apply
  * to it at all.
  */
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import express, { type Express, type Request } from 'express';
 
 import { getActorById, listAllActors } from '../services/actors.js';
@@ -27,9 +29,12 @@ import {
 	type DevFolderStatus,
 } from '../services/dev-folder.js';
 import { debugStatus, setDebugMode } from '../services/debug-mode.js';
+import { browserViewStatus, setBrowserView } from '../services/browser-view.js';
 import { getBuildById, listAllBuilds } from '../services/builds.js';
 import { getRunById, listAllRuns } from '../services/runs.js';
 import { migrateRun } from '../services/migrations.js';
+import { isTerminalJobStatus } from '../services/job-status.js';
+import { isBrowserViewPending } from './browser-view-ws.js';
 import { getFullLog } from '../services/logs.js';
 import { getStorageById, listAllStorages } from '../services/storages.js';
 import { listRequests } from '../services/request-queues.js';
@@ -40,6 +45,8 @@ import { ansiToHtml } from './ansi.js';
 import { newestFirst } from './order.js';
 import {
 	apiFallbackWarning,
+	browserViewForm,
+	browserViewPage,
 	debugModeForm,
 	definitionList,
 	devFolderForm,
@@ -83,6 +90,9 @@ export interface ConsoleServerDeps {
 	driver: Driver;
 }
 
+/** `@novnc/novnc`'s `exports` points at `core/rfb.js`; the package root is two levels up from it. */
+const NOVNC_ROOT = dirname(dirname(createRequire(import.meta.url).resolve('@novnc/novnc')));
+
 /** The dev-folder registration form + its one read-only status row, rendered on the Actor detail view
  * (`console.md`'s "Local dev-folder registration form" section). Deliberately shows only the registered
  * folder, never a build's working directory or a "mount will apply" claim - whether a mount actually
@@ -114,9 +124,32 @@ function debugModeSection(actorId: string, localDebug: ActorRecord['localDebug']
 	);
 }
 
+function browserViewSection(
+	actorId: string,
+	localBrowserView: ActorRecord['localBrowserView'],
+	errorMessage?: string,
+): string {
+	const status = browserViewStatus({ localBrowserView });
+	return (
+		'<h2>Browser view</h2>' +
+		definitionList([
+			[
+				'browser view',
+				status.localBrowserView
+					? `on, ${status.localBrowserView.interactive ? 'interactive' : 'view-only'}`
+					: '(browser view is off)',
+			],
+		]) +
+		browserViewForm(actorId, localBrowserView ?? null, errorMessage)
+	);
+}
+
 export function createConsoleServer(deps: ConsoleServerDeps): Express {
 	const app = express();
 	app.disable('x-powered-by');
+	// The noVNC client for the browser-view page, served straight from the installed package.
+	app.use('/vendor/novnc/core', express.static(join(NOVNC_ROOT, 'core')));
+	app.use('/vendor/novnc/vendor', express.static(join(NOVNC_ROOT, 'vendor')));
 	// The dev-folder form, the debug-mode form, the run detail view's Migrate button, and the `/settings`
 	// form below are the console's only four writes - every other route is a plain `GET` (`console.md`'s
 	// "Every route is a read except..." list).
@@ -149,6 +182,8 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		}
 		const devFolderError = typeof req.query.devFolderError === 'string' ? req.query.devFolderError : undefined;
 		const debugModeError = typeof req.query.debugModeError === 'string' ? req.query.debugModeError : undefined;
+		const browserViewError =
+			typeof req.query.browserViewError === 'string' ? req.query.browserViewError : undefined;
 		const body =
 			definitionList([
 				['id', actor.id],
@@ -171,8 +206,35 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				'/builds',
 			) +
 			devFolderSection(actor.id, devFolderStatus(actor), devFolderError) +
-			debugModeSection(actor.id, actor.localDebug, debugModeError);
+			debugModeSection(actor.id, actor.localDebug, debugModeError) +
+			browserViewSection(actor.id, actor.localBrowserView, browserViewError);
 		res.send(layout(`Actor ${actor.name}`, body));
+	});
+
+	/** Same `setBrowserView` as the API endpoint, cross-user like the debug-mode form above. */
+	app.post('/actors/:id/browser-view', async (req, res) => {
+		if (isCrossSiteWrite(req)) {
+			res.status(403).send('Cross-site form submissions are not allowed.');
+			return;
+		}
+		const actor = await getActorById(req.params.id);
+		if (!actor) {
+			res.status(404).send(layout('Not found', '<p>Actor not found.</p>'));
+			return;
+		}
+		const body = req.body as Record<string, unknown> | undefined;
+		const enabled = body?.enabled === 'on';
+		const requestBody: Record<string, unknown> = { enabled };
+		if (enabled) requestBody.interactive = body?.interactive === 'on';
+
+		const result = await setBrowserView(actor, requestBody);
+		if (result.kind !== 'ok') {
+			res.redirect(
+				`/actors/${encodeURIComponent(actor.id)}?browserViewError=${encodeURIComponent(result.message)}`,
+			);
+			return;
+		}
+		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
 	/** One of the console's four mutations - funnels through the same `setDevFolder` the API endpoint uses,
@@ -367,6 +429,15 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		if (run.localDebug) {
 			rows.push(['debug', `${run.localDebug.language}, attach at 127.0.0.1:${run.localDebug.port}`]);
 		}
+		if (run.localBrowserView) {
+			rows.push([
+				'browser view',
+				{
+					text: `${run.localBrowserView.interactive ? 'interactive' : 'view-only'} live mirror of the run's display`,
+					href: `/runs/${encodeURIComponent(run.id)}/browser`,
+				},
+			]);
+		}
 		const body =
 			definitionList(rows) +
 			migrateSection +
@@ -374,6 +445,61 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			(log ? ansiToHtml(log) : '(empty)') +
 			'</pre>';
 		res.send(layout(`Run ${run.id}`, body));
+	});
+
+	/** The viewer page; its websocket is handled by `console/browser-view-ws.ts`, not Express. */
+	app.get('/runs/:id/browser', async (req, res) => {
+		const run = await getRunById(req.params.id);
+		if (!run) {
+			res.status(404).send(layout('Not found', '<p>Run not found.</p>'));
+			return;
+		}
+		const backLink = `<p><a href="/runs/${encodeURIComponent(run.id)}">Back to the run</a></p>`;
+		// Mirror still starting: render the client, which retries.
+		if (!run.localBrowserView && (await isBrowserViewPending(run))) {
+			const actor = await getActorById(run.actorId);
+			res.send(
+				layout(
+					`Browser view of run ${run.id}`,
+					browserViewPage({
+						...run,
+						localBrowserView: {
+							interactive: actor?.localBrowserView?.interactive ?? false,
+							vncHost: '',
+							vncPort: 0,
+						},
+					}),
+				),
+			);
+			return;
+		}
+		if (!run.localBrowserView) {
+			res.status(404).send(
+				layout(
+					`Browser view of run ${run.id}`,
+					'<p class="empty">Browser view was not on for this run when it started, so there is no display ' +
+						'mirror to show. Turn it on for the Actor and start a new run.</p>' +
+						backLink,
+				),
+			);
+			return;
+		}
+		if (isTerminalJobStatus(run.status)) {
+			res.send(
+				layout(
+					`Browser view of run ${run.id}`,
+					`<p class="empty">This run has ended (status: ${escapeHtml(run.status)}); its display mirror is gone.</p>` +
+						backLink,
+				),
+			);
+			return;
+		}
+		res.send(
+			layout(
+				`Browser view of run ${run.id}`,
+				browserViewPage(run as typeof run & { localBrowserView: NonNullable<typeof run.localBrowserView> }),
+			),
+		);
 	});
 
 	/** One of the console's four writes (`console.md`) - the same `migrateRun` as the API endpoint, cross-user

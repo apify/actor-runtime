@@ -1,0 +1,29 @@
+{
+	"name": "my-playwright-actor",
+	"version": "0.0.1",
+	"type": "module",
+	"description": "Playwright + Crawlee sample Actor for actor-runtime, based on the ts-crawlee-playwright-chrome template.",
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"dependencies": {
+		"apify": "^3.7.0",
+		"@crawlee/playwright": "^3.15.3",
+		"playwright": "1.61.1"
+	},
+	"devDependencies": {
+		"@apify/tsconfig": "^0.2.0",
+		"@types/node": "^24.0.0",
+		"tsx": "^4.20.3",
+		"typescript": "^6.0.0"
+	},
+	"scripts": {
+		"start": "npm run start:dev",
+		"start:prod": "node dist/main.js",
+		"start:dev": "tsx src/main.ts",
+		"build": "tsc",
+		"postinstall": "npx crawlee install-playwright-browsers"
+	},
+	"author": "It's not you it's me",
+	"license": "ISC"
+}

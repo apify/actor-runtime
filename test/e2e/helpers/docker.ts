@@ -53,6 +53,17 @@ export function pullBaseImages(): void {
 	}
 }
 
+/** `sample_actor_playwright/Dockerfile`'s base image - pulled only by its own e2e file, not by
+ * `pullBaseImages`, since it is large and no other file builds against it. */
+export const PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-node-playwright-chrome:24-1.61.1';
+
+/** `sample_actor_playwright_py/Dockerfile`'s base image. */
+export const PYTHON_PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-python-playwright:3.14-1.61.0';
+
+export function pullImage(image: string): void {
+	execFileSync(CONTAINER_CLI, ['pull', image], { stdio: 'inherit' });
+}
+
 export function startRuntimeContainer(tag: string, containerName: string): void {
 	execFileSync(
 		CONTAINER_CLI,
@@ -65,10 +76,10 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 			// be bound to 3333/3000 at a time. `package.json`'s `test:e2e` script therefore runs
 			// `vitest run test/e2e --no-file-parallelism`: if a second e2e file's `beforeAll` ever raced
 			// this one, the loser's `docker run` would fail with "port is already allocated" and take that
-			// file's whole suite down with it. Adding a third e2e file is safe as long as the suite stays
-			// serialized - do not drop `--no-file-parallelism` (and do not add a `vitest.workspace.ts` or
-			// per-file config that re-enables parallelism for this directory) without also parameterizing
-			// these two ports per container.
+			// file's whole suite down with it. Adding an e2e file is safe as long as the suite stays
+			// serialized on one daemon - do not drop `--no-file-parallelism` without also parameterizing
+			// these two ports per container. CI parallelizes by running each file in its own job instead
+			// (`.github/workflows/ci.yml`).
 			'-p',
 			'3333:3333',
 			'-p',

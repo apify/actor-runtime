@@ -47,6 +47,12 @@ Local Actor runtime is an Actor development tool for developing, running, and de
   when you expect a slow attach. Clear the toggle with
   `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'` to go back to running
   normally.
+- To watch the browser of a Playwright/Puppeteer Actor while it runs, turn browser view on for it once:
+  `apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'` (`"interactive": true` also
+  sends mouse/keyboard input). Every subsequent run prints a viewer URL in its log,
+  `http://localhost:3000/runs/<runId>/browser` - a live view of the display the Actor's browser draws on. The
+  browser must run headful to show anything (Apify's templates default to headless, which shows as a black
+  display); see `sample_actor_playwright` and `sample_actor_playwright_py`. Clear with `--body '{"enabled": false}'`.
 - To test how an Actor handles platform migrations: while a run is `RUNNING`, call
   `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
   detail page. The run gets the platform migration experience: a `migrating` event, its container

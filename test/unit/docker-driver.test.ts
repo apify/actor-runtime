@@ -17,7 +17,10 @@ import { stubDockerForRun } from './helpers/docker-stubs.js';
  * for the `PROBE_LABEL` call - exactly the daemon-side semantics a single combined call would get
  * wrong (it would require one container to carry both keys at once, matching nothing).
  */
-function stubDocker(containers: Array<{ Id: string; Labels: Record<string, string> }>) {
+function stubDocker(
+	containers: Array<{ Id: string; Labels: Record<string, string> }>,
+	volumes: Array<{ Name: string; Labels: Record<string, string> }> = [],
+) {
 	const removed: string[] = [];
 	const removeCallOptions: Array<Record<string, unknown> | undefined> = [];
 	const listContainers = vi.fn(async (options: { all: boolean; filters: string }) => {
@@ -32,12 +35,26 @@ function stubDocker(containers: Array<{ Id: string; Labels: Record<string, strin
 			removeCallOptions.push(options);
 		}),
 	}));
+	// The browser-view sidecars' labelled X-socket volumes (`startBrowserViewer`) are swept by the same
+	// call; modelled with the same per-key label semantics as `listContainers` above.
+	const removedVolumes: string[] = [];
+	const listVolumes = vi.fn(async (options: { filters: string }) => {
+		const filters = JSON.parse(options.filters) as { label?: string[] };
+		const labelKeys = filters.label ?? [];
+		return { Volumes: volumes.filter((v) => labelKeys.every((key) => key in v.Labels)) };
+	});
+	const getVolume = vi.fn((name: string) => ({
+		remove: vi.fn(async () => {
+			removedVolumes.push(name);
+		}),
+	}));
 	return {
-		docker: { listContainers, getContainer } as unknown as Docker,
+		docker: { listContainers, getContainer, listVolumes, getVolume } as unknown as Docker,
 		listContainers,
 		getContainer,
 		removed,
 		removeCallOptions,
+		removedVolumes,
 	};
 }
 
@@ -57,8 +74,12 @@ describe('DockerDriver.reconcileOrphans', () => {
 			expect(filters.label?.length ?? 0).toBeLessThanOrEqual(1);
 			if (filters.label) allLabelValues.push(...filters.label);
 		}
-		// Both label keys are still queried, just never together in one call.
-		expect(allLabelValues.sort()).toEqual(['actor-runtime.devFolderProbe', 'actor-runtime.runId']);
+		// All three label keys are still queried, just never together in one call.
+		expect(allLabelValues.sort()).toEqual([
+			'actor-runtime.browserViewer',
+			'actor-runtime.devFolderProbe',
+			'actor-runtime.runId',
+		]);
 	});
 
 	it('removes both an orphaned run container and an unrelated leftover probe container from one reconcileOrphans call', async () => {
@@ -122,8 +143,28 @@ describe('DockerDriver.reconcileOrphans', () => {
 
 		// Unlike the "unavailable" case above, an empty `runIds` list must not short-circuit the daemon
 		// calls entirely - a probe container that outlived its own removal (`probeDevFolder`) has no run
-		// id at all, so it can only ever be found by actually listing. Two calls now, one per label key.
-		expect(listContainers).toHaveBeenCalledTimes(2);
+		// id at all, so it can only ever be found by actually listing. Three calls now, one per label key.
+		expect(listContainers).toHaveBeenCalledTimes(3);
+	});
+
+	it('sweeps a leftover browser-view sidecar container and its labelled X-socket volume unconditionally, like a probe (actor-driver.md: "Browser view")', async () => {
+		const { docker, removed, removedVolumes } = stubDocker(
+			[
+				{
+					Id: 'viewer-container',
+					Labels: { 'actor-runtime.runId': 'run-old', 'actor-runtime.browserViewer': 'true' },
+				},
+			],
+			[{ Name: 'actor-runtime-x11-run-old', Labels: { 'actor-runtime.browserViewer': 'true' } }],
+		);
+		const driver = new DockerDriver(docker);
+		driver.available = true;
+
+		// `run-old` is not in the orphan list (its record is already terminal) - the sidecar goes anyway.
+		await driver.reconcileOrphans([]);
+
+		expect(removed).toEqual(['viewer-container']);
+		expect(removedVolumes).toEqual(['actor-runtime-x11-run-old']);
 	});
 
 	it('removes a leftover dev-folder probe container even when it matches no orphaned run id', async () => {

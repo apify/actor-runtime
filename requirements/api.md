@@ -182,6 +182,12 @@
     - The console's own debug-mode form (`console.md`) does **not** go through this endpoint - same
       console-local, unauthenticated split as the dev-folder form - but both surfaces accept and reject
       exactly the same inputs with the same outcomes.
+- **`POST /actor-runtime/browser-view/:actorId`** - sets or clears the Actor's browser-view toggle
+  (`actor-driver.md`'s "Browser view" section). Authenticated and owner-scoped like every `/v2` route; no
+  build-first precondition.
+    - **Body**: `{ "enabled": boolean, "interactive"?: boolean }`, `interactive` defaulting to `false`. A call
+      fully replaces the prior state; `{"enabled": false}` clears it. Any other shape is `400 invalid-request`.
+    - **Response**: `{ data: { localBrowserView: { interactive } | null } }` - the read-back; there is no `GET`.
 - **`GET /actor-runtime/events/:runId`** - a websocket upgrade, reachable at exactly this one path on
   the fixed API port (`system.md`). It carries the run's platform events: `systemInfo` once a second
   (`actor-driver.md`), a one-off `aborting`-plus-`persistState` pair under `?gracefully=` (below), and a
