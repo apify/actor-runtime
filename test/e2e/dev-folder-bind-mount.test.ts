@@ -190,6 +190,57 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 	);
 
 	it(
+		'a run started with devFolder=false uses the built image alone and leaves the registration in place, which GET reads back',
+		() => {
+			const env = apifyEnv(isolatedApifyHome);
+
+			// Image built from the pristine source (`ORIGINAL_MARKER`); the host folder then gets the edited
+			// compile, so the two are distinguishable by which marker a run prints.
+			writeFileSync(mainTs, originalMainTs);
+			const push = JSON.parse(apify(['push', '--json', '--force'], { cwd: actorDir, env })) as PushResult;
+			expect(push.build.status).toBe('SUCCEEDED');
+			const actorId = push.actor.id;
+			registerDevFolder(actorId, actorDir, env);
+			writeFileSync(mainTs, originalMainTs.replace(ORIGINAL_MARKER, EDITED_MARKER));
+			execFileSync('npm', ['run', 'build'], { cwd: actorDir, stdio: 'inherit' });
+
+			const readBack = JSON.parse(
+				apify(['api', 'GET', `/actor-runtime/dev-folder/${actorId}`], { cwd: REPO_ROOT, env }),
+			) as DevFolderApiResult;
+			expect(readBack.data.localDevFolder).toBe(actorDir);
+
+			// The opted-out run prints the image's own marker, never the host folder's, and says why.
+			const optedOut = JSON.parse(
+				apify(
+					[
+						'api',
+						'POST',
+						`actors/${actorId}/runs`,
+						'--params',
+						JSON.stringify({ devFolder: 'false', waitForFinish: 180 }),
+						'--body',
+						JSON.stringify({ maxPages: 1 }),
+					],
+					{ cwd: REPO_ROOT, env },
+				),
+			) as ApiEnvelope<{ id: string; status: string }>;
+			expect(optedOut.data.status).toBe('SUCCEEDED');
+			const optedOutLog = apifyAllOutput(['runs', 'log', optedOut.data.id], { cwd: REPO_ROOT, env });
+			expect(optedOutLog).toContain(`Skipping the registered local dev folder ${actorDir}`);
+			expect(optedOutLog).toContain(ORIGINAL_MARKER);
+			expect(optedOutLog).not.toContain(EDITED_MARKER);
+
+			// The registration survived: the very next plain run mounts the host folder again.
+			const call = JSON.parse(
+				apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], { cwd: actorDir, env }),
+			) as CallResult;
+			expect(call.run.status).toBe('SUCCEEDED');
+			expect(apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env })).toContain(EDITED_MARKER);
+		},
+		5 * 60 * 1000,
+	);
+
+	it(
 		'registers the host folder, then a local recompile (no push/build) is what the next run sees, with node_modules preserved',
 		async () => {
 			const env = apifyEnv(isolatedApifyHome);
