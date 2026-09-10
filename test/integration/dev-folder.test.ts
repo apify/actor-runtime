@@ -116,6 +116,63 @@ function postViaV2Alias(baseUrl: string, actorId: string, body: string, token?: 
 	});
 }
 
+function get(baseUrl: string, actorId: string, token?: string) {
+	return axios.get(`${baseUrl}/actor-runtime/dev-folder/${actorId}`, {
+		headers: token ? { Authorization: `Bearer ${token}` } : {},
+		validateStatus: () => true,
+	});
+}
+
+describe('GET /actor-runtime/dev-folder/:actorId (read-back without a write)', () => {
+	let server: TestServerHandle;
+
+	afterEach(async () => {
+		await server.close();
+	});
+
+	it('401s with no auth token', async () => {
+		server = await startTestServer(devFolderDriver({ ok: true }));
+		expect((await get(server.baseUrl, 'whatever-id')).status).toBe(401);
+	});
+
+	it("404s for an actor id that doesn't exist", async () => {
+		server = await startTestServer(devFolderDriver({ ok: true }));
+		expect((await get(server.baseUrl, 'totally-made-up-id', server.token)).status).toBe(404);
+	});
+
+	it('reports null for an actor with nothing registered, without ever calling the probe', async () => {
+		const driver = devFolderDriver({ ok: true });
+		server = await startTestServer(driver);
+		const actor = await server.client.actors().create({ name: 'devfolder-get-empty-actor' });
+
+		const res = await get(server.baseUrl, actor.id, server.token);
+		expect(res.status).toBe(200);
+		expect(res.data).toEqual({ data: { localDevFolder: null } });
+		expect(driver.probeDevFolderCalls).toEqual([]);
+	});
+
+	it('reads back exactly what POST registered, by id and by plain name, and null again after a clear', async () => {
+		server = await startTestServer(devFolderDriver({ ok: true }));
+		const actor = await server.client.actors().create({ name: 'devfolder-get-actor' });
+
+		await post(server.baseUrl, actor.id, JSON.stringify('/abs/dev/src'), server.token);
+		expect((await get(server.baseUrl, actor.id, server.token)).data).toEqual({
+			data: { localDevFolder: '/abs/dev/src' },
+		});
+		expect((await get(server.baseUrl, 'devfolder-get-actor', server.token)).data).toEqual({
+			data: { localDevFolder: '/abs/dev/src' },
+		});
+		// Reachable through the `/v2/actor-runtime` alias too, like `POST`.
+		const viaAlias = await axios.get(`${server.baseUrl}/v2/actor-runtime/dev-folder/${actor.id}`, {
+			headers: { Authorization: `Bearer ${server.token}` },
+		});
+		expect(viaAlias.data).toEqual({ data: { localDevFolder: '/abs/dev/src' } });
+
+		await post(server.baseUrl, actor.id, JSON.stringify(''), server.token);
+		expect((await get(server.baseUrl, actor.id, server.token)).data).toEqual({ data: { localDevFolder: null } });
+	});
+});
+
 describe('POST /actor-runtime/dev-folder/:actorId', () => {
 	let server: TestServerHandle;
 

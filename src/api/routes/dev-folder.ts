@@ -1,5 +1,5 @@
 /**
- * `POST /actor-runtime/dev-folder/:actorId` - deliberately outside the emulated `/v2` surface
+ * `GET`/`POST /actor-runtime/dev-folder/:actorId` - deliberately outside the emulated `/v2` surface
  * (`api.md`'s `/actor-runtime/*` namespace). `server.ts` creates one shared sub-router (with its own
  * `auth()`, registered once there - not by this module) for the whole `/actor-runtime/*` namespace,
  * calls this and `mountApiFallback` on it, and mounts that same router instance at both
@@ -56,6 +56,18 @@ function toApiError(result: Exclude<SetDevFolderResult, { kind: 'ok' }>): ApiErr
  * `auth()`, registered by the caller, not here), calls this on it, and mounts the result at
  * `/actor-runtime` itself (owning the path prefix the same way it owns `/v2`). */
 export function mountDevFolder(router: Router, deps: ApiServerDeps): void {
+	// Read-back without a write: what `apify call` asks before a run, to warn that the run will use the
+	// registered folder instead of the built image alone.
+	router.get(
+		'/dev-folder/:actorId',
+		h(async (req, res) => {
+			const user = requireUser(req);
+			const actor = await resolveOwnedActor(user.id, req.params.actorId as string, user.username);
+			if (!actor) throw recordNotFound();
+			sendData(res, devFolderStatus(actor));
+		}),
+	);
+
 	router.post(
 		'/dev-folder/:actorId',
 		h(async (req, res) => {
@@ -73,8 +85,8 @@ export function mountDevFolder(router: Router, deps: ApiServerDeps): void {
 			const result = await setDevFolder(deps.driver, actor, raw);
 			if (result.kind !== 'ok') throw toApiError(result);
 
-			// The response body doubles as the read-back - there is deliberately no separate `GET` for
-			// this yet - with the same field the console detail page shows.
+			// The response body doubles as a read-back - the same shape `GET` above returns and the console
+			// detail page shows.
 			sendData(res, devFolderStatus(result.actor));
 		}),
 	);

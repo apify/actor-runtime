@@ -119,7 +119,7 @@ export interface DevFolderStatus {
 }
 
 /**
- * The one value both the API's registration response and the console detail page show. Deliberately
+ * The one value the API's `GET`, its registration response, and the console detail page all show. Deliberately
  * just the registered folder, nothing about any build: whether a mount actually applies is a per-run
  * question - it depends on which build that particular run resolves, which this Actor-level status has
  * no way to know in advance - so it never claims a mount "will apply" for a build a given run might not

@@ -132,7 +132,7 @@
     - **No build-first precondition** - registration works for an Actor that has never been built at all.
     - **Request body**: a JSON string - the absolute path to set, or `""` to clear.
     - **Response**: on success, `{ data: { localDevFolder } }` - the same value the console detail page
-      shows (`console.md`), doubling as the read-back this design has no separate `GET` for.
+      shows (`console.md`) and `GET` (below) returns.
     - **Error responses**, by rejection reason:
         - `400` `invalid-request` - the body isn't a JSON string, or the string isn't a valid absolute
           path.
@@ -144,6 +144,11 @@
 - The console's own dev-folder form (`console.md`) does **not** go through this endpoint - it posts to a
   console-local, unauthenticated route on the console's own port - but the two surfaces accept and
   reject exactly the same inputs with the same outcomes.
+- **`GET /actor-runtime/dev-folder/:actorId`** - reads the registration without changing it: the same
+  `{ data: { localDevFolder } }` envelope `POST` returns, `localDevFolder` being `null` when nothing is
+  registered. Authenticated and ownership-scoped like `POST` (`401` without a token, `404` for an Actor
+  the caller does not own). `apify call` asks this before starting a run against this runtime so it can
+  warn the developer that the run will use the registered folder rather than the built image alone.
 - **`POST /v2/actors/:actorId/runs?devFolder=false`** - a per-run opt-out of the registered dev folder,
   this runtime's own extension of the otherwise spec-shaped run-start route (the only `/actor-runtime`
   feature that lives on a `/v2` path, because it has to travel with the run-start request itself).
