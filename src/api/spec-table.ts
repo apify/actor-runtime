@@ -112,9 +112,8 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	pathTemplate('DELETE', 'v2/key-value-stores/:storeId', true),
 	pathTemplate('GET', 'v2/key-value-stores/:storeId/keys', true),
 	// Real platform path, not implemented here: `GET .../records` (no `:recordKey`) downloads every
-	// record as a zip archive (apify-core's `records.ts` GET handler, mounted at
-	// `API_V2_SERVER_ROUTES.KEY_VALUE_STORES.RECORDS`) - unrelated to `GET .../records/:recordKey`
-	// (single-record read) just below, which this runtime does implement.
+	// record as a zip archive - unrelated to `GET .../records/:recordKey` (single-record read) just
+	// below, which this runtime does implement.
 	pathTemplate('GET', 'v2/key-value-stores/:storeId/records', false),
 	pathTemplate('GET', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('HEAD', 'v2/key-value-stores/:storeId/records/:recordKey', true),

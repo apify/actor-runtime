@@ -443,8 +443,8 @@ describe('actors / versions / builds / runs (via real apify-client)', () => {
 
 		// Before the fix this DELETE unconditionally removed the record, with no remaining path to stop
 		// the in-flight `docker build` (its only cancellation route, `POST .../abort`, needs the record
-		// to still resolve). apify-core rejects the same request with 400/`deleting-unfinished-build`
-		// (`src/packages/errors/src/errors/api.ts:217-218`) rather than deleting-then-orphaning.
+		// to still resolve). The public API rejects the same request with 400/`deleting-unfinished-build`
+		// rather than deleting-then-orphaning.
 		await expect(server.client.build(runningBuildId).delete()).rejects.toMatchObject({
 			statusCode: 400,
 			type: 'deleting-unfinished-build',
@@ -476,9 +476,8 @@ describe('actors / versions / builds / runs (via real apify-client)', () => {
 
 		// Before the fix this DELETE unconditionally removed the record, permanently leaking the run's
 		// Docker container (its only stop path, `POST .../abort`, needs the record to still resolve, and
-		// startup reconciliation only ever looks at *existing* run records). apify-core rejects the same
-		// request with 400/`cannot-remove-running-run` (`src/packages/errors/src/errors/runs.ts:10-15`)
-		// rather than deleting-then-orphaning.
+		// startup reconciliation only ever looks at *existing* run records). The public API rejects the
+		// same request with 400/`cannot-remove-running-run` rather than deleting-then-orphaning.
 		await expect(server.client.run(runningRunId).delete()).rejects.toMatchObject({
 			statusCode: 400,
 			type: 'cannot-remove-running-run',

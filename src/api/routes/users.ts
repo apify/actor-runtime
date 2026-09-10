@@ -24,11 +24,11 @@ function selfDto(user: UserRecord) {
 
 /**
  * Minimal DTO for a *different* user than the caller, resolved by id (real or fabricated). Mirrors the
- * real platform's `GET /users/:userId` for a non-owner: apify-core's handler
- * (`api/src/routes/users/user.ts`) only ever returns a public-profile subset to a caller who isn't that
- * user themselves - `getProfileOfUser()` (`username` + a profile object), never the id/email/proxy
- * fields it reserves for the owner. This POC has no profile object to expose, so the closest useful
- * analogue is `id` + `username` only - never `token`/`proxy`, which stay exclusive to `selfDto`.
+ * real platform's `GET /users/:userId` for a non-owner: the public API only ever returns a
+ * public-profile subset (`username` + a profile object) to a caller who isn't that user themselves,
+ * never the email/proxy fields it reserves for the owner. This POC has no profile object to expose, so
+ * the closest useful analogue is `id` + `username` only - never `token`/`proxy`, which stay exclusive
+ * to `selfDto`.
  */
 function publicDto(user: UserRecord) {
 	return { id: user.id, username: user.username };

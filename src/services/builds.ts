@@ -11,12 +11,9 @@ import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
 
 /**
  * The runtime does not expose a per-build `timeoutSecs` option (there is no `POST .../builds` query
- * param for it, matching apify-core: builds time out against a fixed platform limit
- * (`ACTOR_LIMITS.BUILD_TIMEOUT_SECS`, applied uniformly to both jobTypes by
- * `killActJob`/`finishDeadJobs` in `actor_jobs/job_controller.server.ts` and
- * `actor_job_controller_daemon.ts`), not a per-run one. This mirrors that: one fixed internal default,
- * not user-configurable. The exact real-platform value was not available to verify in this sandbox
- * (`ACTOR_LIMITS` is not vendored here), so this is a reasonable placeholder, not a matched constant.
+ * param for it, matching the public API: builds time out against a fixed platform-wide limit, not a
+ * per-build one). This mirrors that: one fixed internal default, not user-configurable. The value is a
+ * reasonable placeholder for this runtime, not a matched platform constant.
  */
 const DEFAULT_BUILD_TIMEOUT_SECS = 1800;
 

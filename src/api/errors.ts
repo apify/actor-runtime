@@ -23,9 +23,8 @@ export function invalidRequest(message: string): ApiError {
 
 /**
  * Matches the real Apify platform exactly: `DELETE /v2/actor-runs/:runId` on a non-terminal run is
- * rejected rather than aborted-then-deleted (`apify-core`'s `errors.runs.cannotRemoveRunningRun()`,
- * `src/packages/errors/src/errors/runs.ts:10-15` - `newMeteorishError('cannot-remove-running-run', ...,
- * 400)`), so this runtime does the same instead of silently leaking the run's container.
+ * rejected rather than aborted-then-deleted (the public API answers 400 `cannot-remove-running-run`),
+ * so this runtime does the same instead of silently leaking the run's container.
  */
 export function cannotRemoveRunningRun(): ApiError {
 	return new ApiError(
@@ -35,17 +34,15 @@ export function cannotRemoveRunningRun(): ApiError {
 	);
 }
 
-/** Matches the real platform's rejection of reboot/migrate on a finished run (`apify-core`'s
- * `errors.actor.jobAlreadyFinished()`). */
+/** Matches the real platform's rejection of reboot/migrate on a finished run (the public API answers
+ * 403 `job-finished`). */
 export function jobAlreadyFinished(): ApiError {
 	return new ApiError(403, 'job-finished', 'Actor job is already finished.');
 }
 
 /**
  * Matches the real Apify platform exactly: `DELETE /v2/actor-builds/:buildId` on a non-terminal build
- * is rejected rather than aborted-then-deleted (`apify-core`'s `errors.api.deletingUnfinishedBuild()`,
- * `src/packages/errors/src/errors/api.ts:217-218` - `newMeteorishError('deleting-unfinished-build', ...,
- * 400)`).
+ * is rejected rather than aborted-then-deleted (the public API answers 400 `deleting-unfinished-build`).
  */
 export function deletingUnfinishedBuild(): ApiError {
 	return new ApiError(400, 'deleting-unfinished-build', 'Deleting unfinished build while running is not allowed');

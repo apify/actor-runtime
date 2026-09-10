@@ -70,7 +70,7 @@ describe('key-value-stores API (via real apify-client)', () => {
 		expect(await store.getRecord('k')).toBeUndefined();
 	});
 
-	it('deleting a missing record key on an existing store stays a 204 no-op (matches apify-core: S3 NotFound is swallowed)', async () => {
+	it('deleting a missing record key on an existing store stays a 204 no-op (matches the public API: record delete is idempotent)', async () => {
 		const { id } = await server.client.keyValueStores().getOrCreate();
 		const store = server.client.keyValueStore(id);
 		await expect(store.deleteRecord('never-existed')).resolves.toBeUndefined();

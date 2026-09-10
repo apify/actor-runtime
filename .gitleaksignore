@@ -1,0 +1,3 @@
+# gitleaks fingerprints (commit:file:rule:line) of known false positives - dummy placeholder
+# values in tests, never real credentials. Add a line only after verifying the value is fake.
+3a36f475feb336e7c0430446f113a43d42d10423:tests/unit/test_multi_user.py:generic-api-key:393
