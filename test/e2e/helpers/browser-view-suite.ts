@@ -127,6 +127,9 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 
 	describe(`per-Actor browser view: live mirror of the ${sample.label} Playwright sample Actor (requires Docker)`, () => {
 		let isolatedApifyHome: string;
+		/** Set by the first case and reused by the second: a repeated `apify push` of an unchanged Actor is
+		 * refused by the CLI ("already exists ... newer changes than your local copy"). */
+		let pushedActorId: string;
 
 		beforeAll(
 			async () => {
@@ -162,6 +165,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				const push = JSON.parse(pushOutput) as PushResult;
 				expect(push.build.status).toBe('SUCCEEDED');
 				const actorId = push.actor.id;
+				pushedActorId = actorId;
 
 				const toggle = apify(
 					['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": true}'],
@@ -231,7 +235,8 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 			() => {
 				const env = apifyEnv(isolatedApifyHome);
 				const actorDir = join(REPO_ROOT, sample.dir);
-				const actorId = (JSON.parse(apify(['push', '--json'], { cwd: actorDir, env })) as PushResult).actor.id;
+				expect(pushedActorId).toBeDefined();
+				const actorId = pushedActorId;
 				apify(['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": false}'], {
 					cwd: REPO_ROOT,
 					env,
