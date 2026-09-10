@@ -11,7 +11,7 @@
  */
 import type { ActorRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
-import type { Driver } from '../driver/types.js';
+import type { DevFolderMount, Driver } from '../driver/types.js';
 
 /** Upper bound on a candidate path's length - generous enough that no genuine host path would ever hit
  * it, just a guard against pathological input. */
@@ -136,10 +136,11 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
  * un-rebuilt TypeScript Actor would otherwise fail with a confusing "cannot find module dist/main.js"
  * instead of running stale code. Red and bold on a terminal (`apify call` streams the log verbatim).
  */
-export function liveDevFolderWarningLines(localDevFolder: string): string[] {
+export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): string[] {
 	const red = (line: string) => `\x1b[1;31m${line}\x1b[0m`;
 	return [
-		`Live dev folder: ${localDevFolder}`,
+		`Live dev folder: ${localDevFolder} (mounted over the image's working directory ${imageWorkingDirectory}; ` +
+			'node_modules preserved via a per-run volume)',
 		red('!! Running in `Live dev folder mode`: this run uses the local source files above, mounted over the'),
 		red('!! built Docker image. TS-based Actors require local compilation (e.g. `npm run build`) before the run.'),
 		red('!! To run purely from the built Docker image, use `apify call --no-dev-folder`.'),

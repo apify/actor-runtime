@@ -1049,10 +1049,6 @@ export class DockerDriver implements Driver {
 		let preservedEntrypoint: PreservedEntrypoint | undefined;
 		if (ctx.devMount) {
 			await this.assertDevFolderStillPresent(ctx.devMount.localDevFolder);
-			onLog(
-				`Mounting local dev folder ${ctx.devMount.localDevFolder} over the image's working directory ` +
-					`${ctx.devMount.imageWorkingDirectory} (node_modules preserved via a per-run volume).\n`,
-			);
 			preservedEntrypoint = await this.preserveHiddenEntrypoint(ctx.imageId, ctx.devMount, onLog);
 		}
 

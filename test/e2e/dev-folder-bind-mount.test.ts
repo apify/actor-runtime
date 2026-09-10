@@ -47,7 +47,7 @@ const CONTAINER_NAME = 'actor-runtime-e2e-devfolder';
 const IMAGE_TAG = 'actor-runtime:e2e-devfolder';
 // `sample_actor_ts/Dockerfile` sets no `WORKDIR` of its own, so it inherits the base image's - the
 // `apify/actor-node` image's own Dockerfile sets `WORKDIR /usr/src/app`. Asserted independently below
-// via the run's own mount log line, not only assumed here - if the base image ever moves its
+// via the run's own runtime section, not only assumed here - if the base image ever moves its
 // `WORKDIR`, that assertion (not the mount itself) is what will fail first and explain why.
 const EXPECTED_IMAGE_WORKING_DIR = '/usr/src/app';
 const ORIGINAL_MARKER = 'Crawl finished.';
@@ -305,8 +305,8 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(log).toContain(EDITED_MARKER);
 			expect(log).not.toContain(`${ORIGINAL_MARKER}\n`);
 
-			// An explicit mount line at the top of the run's log, naming both the host path and the
-			// container path being mounted.
+			// The runtime section at the top of the run's log names both the host path and the container
+			// path being mounted.
 			expect(log).toContain(actorDir);
 			expect(log).toContain(EXPECTED_IMAGE_WORKING_DIR);
 		},
@@ -350,8 +350,8 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 
 			const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
-			// No mount line at all - the observability line only appears for a run that actually has one.
-			expect(log).not.toContain('Mounting local dev folder');
+			// No runtime section at all - it only appears for a run that actually mounts something.
+			expect(log).not.toContain('Local Actor runtime');
 		},
 		5 * 60 * 1000,
 	);
