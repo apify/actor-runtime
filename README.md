@@ -43,12 +43,12 @@ the single local user, with no error either way - see `requirements/cli.md`'s Us
 
 ## Running with Podman instead of Docker
 
-The runtime talks to the container engine only through its Docker-compatible API socket, and Podman
-serves that same API. Everything works the same on Docker and Podman, rootful or rootless; the only
-difference is which socket you mount.
+Podman serves the same API the runtime uses, so everything works the same on Docker and Podman (3.4 or
+newer), rootful or rootless. Serve Podman's API socket and mount it where the runtime expects the Docker
+one:
 
 ```bash
-sudo systemctl enable --now podman.socket   # one-time: serve Podman's API socket
+sudo systemctl enable --now podman.socket   # one-time
 
 podman build -t actor-runtime .
 mkdir -p data
@@ -58,46 +58,17 @@ sudo podman run --rm -p 3333:3333 -p 3000:3000 \
   actor-runtime
 ```
 
-Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
-(`systemctl --user enable --now podman.socket`); mount that path and drop the `sudo`. Rootless Docker
-works the same way with its `$XDG_RUNTIME_DIR/docker.sock`. The socket can also be mounted at any other
-path together with `-e DOCKER_HOST=unix:///that/path`.
-
-```bash
-mkdir -p data
-podman run --rm -p 3333:3333 -p 3000:3000 \
-  -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
-  -v "$(pwd)/data:/data" \
-  actor-runtime
-```
+Rootless: enable the socket with `systemctl --user enable --now podman.socket`, mount
+`$XDG_RUNTIME_DIR/podman/podman.sock` instead, and drop `sudo`. Rootless Docker works the same way with
+its own socket.
 
 Good to know:
 
-- Podman 3.4 (Ubuntu 22.04's stock package) and newer work. On Podman 4 and newer, Actors run on the
-  runtime's own `apify-local` network; on Podman 3.x they run on the engine's default network instead
-  (its user-defined networks are unreliable: Ubuntu 22.04's CNI plugins reject the config Podman writes),
-  and the runtime says so at startup. Whenever the runtime's own container is not on `apify-local`
-  (Podman 3.x, or rootless Podman, which refuses to attach it), Actors reach the API through the published
-  port 3333, so keep `-p 3333:3333` published on all interfaces. Optionally, on Podman 4 and newer, create
-  the network first and add `--network apify-local` to `podman run` for the direct route.
-- Podman does not create a missing host directory for a bind mount (Docker does), hence the
-  `mkdir -p data` before `podman run`. `apify runtime start` creates its data directory itself.
-- Actors run on the engine whose socket you mount, so a dev folder registered for the bind-mount dev
-  loop below is a path on the machine that engine runs on (inside the VM for `podman machine`), and
-  under a rootless engine it must be readable by that user.
-- A short image name in an Actor's `FROM` line (`apify/actor-node:20`, `python:3.11`) means Docker Hub,
-  as on the platform. The runtime qualifies it to `docker.io/...` before building, so Podman resolves it
-  without any `unqualified-search-registries` entry in `registries.conf`. The build log shows the
-  substitution.
-- A rootless engine can only enforce the per-run limits whose cgroup controllers are delegated to your
-  user: on cgroups v1 none are, and Ubuntu 22.04 delegates `memory` and `pids` but not `cpu`. The runtime
-  asks Podman which controllers it has, leaves out the limits it cannot apply, and says so at startup;
-  runs still start. (To get CPU limits under rootless Podman on Ubuntu 22.04, delegate the controller:
-  `sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload`, then log out and in.)
-- If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
-  stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
-- `podman images` lists the images the runtime builds as `actor-runtime/<actor>:<buildId>` under the
-  registry prefix Podman adds itself (`docker.io/` or `localhost/`, depending on the version).
+- Create the `data` directory before starting; Podman does not create a missing mount source.
+- Keep port 3333 published: on some setups Actors reach the runtime through it.
+- A dev folder registered for the dev loop below is a path on the machine Podman runs on (inside the VM
+  for `podman machine`), readable by the user Podman runs as.
+- Per-run limits a rootless engine cannot enforce are skipped; the runtime says so at startup.
 
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
