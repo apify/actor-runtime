@@ -217,9 +217,9 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		expect(stub.calls).toEqual([]);
 	});
 
-	it('tears the volume and container down again when the sidecar fails to start, then rethrows', async () => {
+	it('tears the volume and container down again when the sidecar fails to start (on the Actor network and on the default one), then rethrows the first failure', async () => {
 		const stub = stubDockerForViewer({ imagePresent: true });
-		stub.container.start.mockRejectedValueOnce(new Error('daemon said no'));
+		stub.container.start.mockRejectedValue(new Error('daemon said no'));
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
 
@@ -234,6 +234,29 @@ describe('DockerDriver.startBrowserViewer / stopBrowserViewer', () => {
 		stub.calls.length = 0;
 		await driver.stopBrowserViewer('run-6');
 		expect(stub.calls).toEqual([]);
+	});
+
+	it('when the sidecar cannot start on apify-local but does on the default network, keeps that sidecar, warns once, and puts every later sidecar straight on the default network', async () => {
+		const stub = stubDockerForViewer({ imagePresent: true });
+		stub.container.start.mockRejectedValueOnce(new Error('CNI network "apify-local" not found'));
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		const handle = await driver.startBrowserViewer({ runId: 'run-cni', interactive: false });
+
+		expect(stub.createContainer).toHaveBeenCalledTimes(2);
+		expect(stub.createContainer.mock.calls[0]![0].HostConfig?.NetworkMode).toBe('apify-local');
+		expect(stub.createContainer.mock.calls[1]![0].HostConfig?.NetworkMode).toBeUndefined();
+		expect(handle).toEqual({ vncHost: '172.18.0.9', vncPort: 5900, x11SocketVolume: 'actor-runtime-x11-run-cni' });
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(String(warn.mock.calls[0]![0])).toContain('CNI network "apify-local" not found');
+
+		await driver.startBrowserViewer({ runId: 'run-cni-2', interactive: false });
+		expect(stub.createContainer).toHaveBeenCalledTimes(3);
+		expect(stub.createContainer.mock.calls[2]![0].HostConfig?.NetworkMode).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
 	});
 
 	it('stopBrowserViewer force-removes the sidecar container and then the volume; a second call is a no-op', async () => {

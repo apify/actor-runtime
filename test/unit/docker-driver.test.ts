@@ -1,10 +1,13 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Docker from 'dockerode';
 import * as tar from 'tar-stream';
 
-import { DockerDriver } from '../../src/driver/docker-driver.js';
+import { DockerDriver, hostAddressSeenFromContainers } from '../../src/driver/docker-driver.js';
 import { stubDockerForRun } from './helpers/docker-stubs.js';
 
 /**
@@ -1330,6 +1333,8 @@ function stubDockerForNetwork(
 }
 
 const SELF_FULL_ID = 'abc123def456789000000000000000000000000000000000000000000000000000';
+/** A hosts file with no engine-provided host entry - the Docker Engine case, where `host-gateway` is the route. */
+const NO_HOSTS_FILE = '/nonexistent/hosts';
 
 function attachedNetwork() {
 	return {
@@ -1364,7 +1369,7 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		vi.stubEnv('HOSTNAME', '');
 		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
 		const stub = stubDockerForNetwork(network);
-		const driver = new DockerDriver(stub.docker);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await driver.init();
@@ -1380,7 +1385,7 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		vi.stubEnv('HOSTNAME', 'abc123def456');
 		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
 		const stub = stubDockerForNetwork(network);
-		const driver = new DockerDriver(stub.docker);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
 
 		await driver.init();
 
@@ -1398,7 +1403,7 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 			network,
 			selfOnNetwork({ Aliases: ['abc123def456', 'apify-api'], IPAddress: '10.89.0.2' }),
 		);
-		const driver = new DockerDriver(stub.docker);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await driver.init();
@@ -1417,7 +1422,7 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 			network,
 			selfOnNetwork({ Aliases: ['abc123def456'], IPAddress: '10.89.0.2' }),
 		);
-		const driver = new DockerDriver(stub.docker);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await driver.init();
@@ -1434,7 +1439,7 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		const stub = stubDockerForNetwork(network, async () => {
 			throw new Error('inspect failed');
 		});
-		const driver = new DockerDriver(stub.docker);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await driver.init();
@@ -1457,7 +1462,7 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 			}),
 		};
 		const stub = stubDockerForNetwork(network);
-		const driver = new DockerDriver(stub.docker);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await driver.init();
@@ -1469,5 +1474,111 @@ describe('DockerDriver - how Actor containers reach the API (network alias, or t
 		expect(message).toContain('--network apify-local');
 		expect(await extraHostsOfOneRun(stub, driver)).toEqual(['apify-api:host-gateway']);
 		warn.mockRestore();
+	});
+
+	it('off the network, routes Actors to the host at the address the engine itself gave this container (host.containers.internal), not host-gateway - Podman before 4.1 rejects the keyword', async () => {
+		vi.stubEnv('HOSTNAME', '');
+		const hostsFile = path.join(await mkdtemp(path.join(os.tmpdir(), 'hosts-')), 'hosts');
+		await writeFile(
+			hostsFile,
+			'127.0.0.1 localhost\n10.88.0.1\thost.containers.internal host.docker.internal\n10.88.0.7\tabc123 name\n',
+		);
+		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
+		const stub = stubDockerForNetwork(network);
+		const driver = new DockerDriver(stub.docker, { hostsFile });
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await driver.init();
+
+		expect(await extraHostsOfOneRun(stub, driver)).toEqual(['apify-api:10.88.0.1']);
+		vi.restoreAllMocks();
+	});
+
+	it('when a run container cannot start on apify-local, recreates it once on the default network with the host route, warns once, and keeps every later run off the network', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
+		const stub = stubDockerForNetwork(network);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await driver.init();
+		stub.container.start.mockRejectedValueOnce(
+			new Error('error configuring network namespace for container x: CNI network "apify-local" not found'),
+		);
+		const logged: string[] = [];
+
+		const outcomePromise = driver.startRun(
+			{ runId: 'run-cni', imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			(chunk) => logged.push(chunk),
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		expect(stub.createContainer).toHaveBeenCalledTimes(2);
+		const [first, second] = stub.createContainer.mock.calls.map((call) => call[0].HostConfig!);
+		expect(first!.NetworkMode).toBe('apify-local');
+		expect(first!.ExtraHosts).toBeUndefined();
+		expect(second!.NetworkMode).toBeUndefined();
+		expect(second!.ExtraHosts).toEqual(['apify-api:host-gateway']);
+		expect(stub.container.remove).toHaveBeenCalledWith({ v: true, force: true });
+		expect(logged.join('')).toContain("retrying on the engine's default network");
+		const networkWarnings = () =>
+			warn.mock.calls.filter((call) => String(call[0]).includes('CNI network "apify-local" not found'));
+		expect(networkWarnings()).toHaveLength(1);
+
+		await driver.startRun(
+			{ runId: 'run-cni-2', imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			() => {},
+		);
+		expect(stub.createContainer).toHaveBeenCalledTimes(3);
+		expect(stub.createContainer.mock.calls[2]![0].HostConfig?.NetworkMode).toBeUndefined();
+		expect(networkWarnings()).toHaveLength(1);
+		warn.mockRestore();
+	});
+
+	it('when the retry on the default network fails as well, the original failure is what propagates and the network is not written off', async () => {
+		vi.stubEnv('HOSTNAME', 'abc123def456');
+		const network = { inspect: vi.fn(async () => ({ Containers: {} })), connect: vi.fn(async () => undefined) };
+		const stub = stubDockerForNetwork(network);
+		const driver = new DockerDriver(stub.docker, { hostsFile: NO_HOSTS_FILE });
+		await driver.init();
+		stub.container.start.mockRejectedValue(new Error('daemon said no'));
+
+		await expect(
+			driver.startRun(
+				{ runId: 'run-x', imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+				() => {},
+			),
+		).rejects.toThrow('daemon said no');
+		expect(stub.createContainer).toHaveBeenCalledTimes(2);
+
+		stub.container.start.mockReset();
+		stub.container.start.mockResolvedValue(undefined);
+		const outcomePromise = driver.startRun(
+			{ runId: 'run-y', imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+		expect(stub.createContainer.mock.calls[2]![0].HostConfig?.NetworkMode).toBe('apify-local');
+	});
+});
+
+describe('hostAddressSeenFromContainers', () => {
+	it('returns the address of the engine-provided host entry, ignoring comments and other lines, and host-gateway when there is none', async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), 'hosts-'));
+		const podman = path.join(dir, 'podman');
+		await writeFile(
+			podman,
+			'# comment\n127.0.0.1 localhost\n192.0.2.2\thost.containers.internal host.docker.internal # engine\n',
+		);
+		const docker = path.join(dir, 'docker');
+		await writeFile(docker, '127.0.0.1\tlocalhost\n172.17.0.2\tb276929e2817\n');
+		await expect(hostAddressSeenFromContainers(podman)).resolves.toBe('192.0.2.2');
+		await expect(hostAddressSeenFromContainers(docker)).resolves.toBe('host-gateway');
+		await expect(hostAddressSeenFromContainers(NO_HOSTS_FILE)).resolves.toBe('host-gateway');
 	});
 });

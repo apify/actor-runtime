@@ -52,8 +52,7 @@ sudo systemctl enable --now podman.socket   # one-time: serve Podman's API socke
 
 podman build -t actor-runtime .
 mkdir -p data
-sudo podman network exists apify-local || sudo podman network create apify-local
-sudo podman run --rm --network apify-local -p 3333:3333 -p 3000:3000 \
+sudo podman run --rm -p 3333:3333 -p 3000:3000 \
   -v /run/podman/podman.sock:/var/run/docker.sock \
   -v "$(pwd)/data:/data" \
   actor-runtime
@@ -66,8 +65,7 @@ path together with `-e DOCKER_HOST=unix:///that/path`.
 
 ```bash
 mkdir -p data
-podman network exists apify-local || podman network create apify-local
-podman run --rm --network apify-local -p 3333:3333 -p 3000:3000 \
+podman run --rm -p 3333:3333 -p 3000:3000 \
   -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
   -v "$(pwd)/data:/data" \
   actor-runtime
@@ -75,15 +73,13 @@ podman run --rm --network apify-local -p 3333:3333 -p 3000:3000 \
 
 Good to know:
 
-- Podman 4 or newer is what the runtime is tested with. Ubuntu 22.04's stock Podman 3.4 writes network
-  configs its own CNI plugins reject (`plugin firewall does not support config version "1.0.0"`), which
-  breaks every user-defined network including `apify-local`; either install a current Podman or change
-  `"cniVersion": "1.0.0"` to `"0.4.0"` in `~/.config/cni/net.d/apify-local.conflist` (rootful:
-  `/etc/cni/net.d/`) after creating the network.
-- `--network apify-local` starts the runtime on the network Actors run on, which is the direct route
-  between them. Without it the runtime joins that network by itself, which rootless Podman refuses; it
-  then falls back to reaching the API through the published port 3333, so keep `-p 3333:3333` published
-  on all interfaces in that case.
+- Podman 3.4 (Ubuntu 22.04's stock package) and newer work. Actors normally run on the runtime's own
+  `apify-local` network; when the engine cannot start containers there - Podman 3.4 writes network configs
+  its own CNI plugins reject (`plugin firewall does not support config version "1.0.0"`) - the runtime
+  says so once and runs Actors on the engine's default network instead. Whenever the runtime's own
+  container is not on `apify-local` (rootless Podman refuses to attach it), Actors reach the API through
+  the published port 3333, so keep `-p 3333:3333` published on all interfaces. Optionally, on Podman 4 and
+  newer, create the network first and add `--network apify-local` to `podman run` for the direct route.
 - Podman does not create a missing host directory for a bind mount (Docker does), hence the
   `mkdir -p data` before `podman run`. `apify runtime start` creates its data directory itself.
 - Actors run on the engine whose socket you mount, so a dev folder registered for the bind-mount dev

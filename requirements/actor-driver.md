@@ -152,6 +152,9 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   container ended up on that network - joined by itself, or started there without the alias - and even
   when it cannot join it at all (for example under rootless Podman, or when the runtime runs outside a
   container). The runtime says so at startup, naming the cause.
+- When the engine cannot start containers on `apify-local` at all (Podman 3.4's CNI setup), Actors run
+  on the engine's default network instead, still reaching `http://apify-api:3333`; the runtime says so
+  once, naming the cause, and no run fails for that reason.
 - A run the engine refuses to start (for example a network it cannot set up) fails with the engine's
   reason in both the run's status message and its log.
 

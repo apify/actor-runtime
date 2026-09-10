@@ -68,6 +68,37 @@ import {
 } from './types.js';
 
 const NETWORK_NAME = 'apify-local';
+
+/** The names an engine gives the host in every container's hosts file: Podman (3.3+) the first, Docker
+ * Desktop the second (Docker Engine adds neither). */
+const ENGINE_HOST_NAMES = ['host.containers.internal', 'host.docker.internal'];
+
+/**
+ * The address Actor containers can reach the host at, read from this process's own hosts file (this
+ * container got it from the same engine, on the same default network, as every Actor container will).
+ * Falls back to the engine keyword `host-gateway` (Docker 20.10+, Podman 4.1+) when the file has no such
+ * entry - on Docker Engine, or when this process runs outside a container.
+ */
+export async function hostAddressSeenFromContainers(hostsFile: string): Promise<string> {
+	const content = await readFile(hostsFile, 'utf8').catch(() => '');
+	for (const line of content.split('\n')) {
+		const fields = line.split('#')[0]!.trim().split(/\s+/);
+		if (fields.length >= 2 && fields.slice(1).some((name) => ENGINE_HOST_NAMES.includes(name))) return fields[0]!;
+	}
+	return 'host-gateway';
+}
+
+/** A container's address on `network`, else on whatever network it does have. */
+function containerAddress(info: Docker.ContainerInspectInfo, network: string | undefined): string | undefined {
+	const networks = info.NetworkSettings?.Networks ?? {};
+	const preferred = network ? networks[network]?.IPAddress : undefined;
+	return (
+		preferred ||
+		Object.values(networks).find((n) => n.IPAddress)?.IPAddress ||
+		info.NetworkSettings?.IPAddress ||
+		undefined
+	);
+}
 const RUN_LABEL = 'actor-runtime.runId';
 /** Marks a create-only dev-folder-probe container (`probeDevFolder` below) so `reconcileOrphans` can
  * sweep one that outlived its own removal call. */
@@ -437,7 +468,20 @@ export class DockerDriver implements Driver {
 	 * `selfAttachToNetwork`: `apify-api:host-gateway` (the host's published port) when this process is
 	 * off the network; `apify-api:<own address>` when it sits on the network without the alias - a
 	 * container started with `--network apify-local` has no alias unless the user also passed one. */
-	private apiHostEntry: string | undefined = `${CONTAINER_API_ALIAS}:host-gateway`;
+	private apiHostEntry: string | undefined;
+	/** The `ExtraHosts` entry that routes `apify-api` to this API through the host's published port -
+	 * for Actor containers off the `apify-local` network. The address is the one the engine itself hands
+	 * every container for the host (`host.containers.internal` on Podman, `host.docker.internal` on Docker
+	 * Desktop - read from this container's own hosts file in `init`), or the engine keyword `host-gateway`
+	 * when the hosts file has no such entry (Docker Engine). Podman before 4.1 does not know the
+	 * keyword, which is why the hosts file comes first. */
+	private hostRouteEntry = `${CONTAINER_API_ALIAS}:host-gateway`;
+	/** False once a container could not start on the `apify-local` network but did on the engine's
+	 * default one: from then on every Actor container (and browser-view sidecar) goes straight to the
+	 * default network with `hostRouteEntry`. Ubuntu 22.04's Podman 3.4 lands here - its CNI plugins reject
+	 * the network config Podman itself writes, so no user-defined network can start a container. */
+	private actorNetworkUsable = true;
+	private readonly hostsFile: string;
 	private browserViewerImageId: string | undefined;
 	/** Shared by concurrent callers; cleared on failure so a later call retries (like `probeImageBuild`). */
 	private browserViewerImport: Promise<string> | undefined;
@@ -448,8 +492,9 @@ export class DockerDriver implements Driver {
 
 	/** `docker` is injectable (defaults to a real `Docker()` socket client) so tests can pass a stub
 	 * `dockerode`-shaped object - there is no Docker daemon in this sandbox to test against for real. */
-	constructor(docker: Docker = new Docker()) {
+	constructor(docker: Docker = new Docker(), options: { hostsFile?: string } = {}) {
 		this.docker = docker;
+		this.hostsFile = options.hostsFile ?? '/etc/hosts';
 	}
 
 	async init(): Promise<void> {
@@ -465,6 +510,9 @@ export class DockerDriver implements Driver {
 
 		// A `docker.info()` failure must not make an otherwise-reachable daemon look unavailable.
 		await this.captureHostCapacity();
+
+		this.hostRouteEntry = `${CONTAINER_API_ALIAS}:${await hostAddressSeenFromContainers(this.hostsFile)}`;
+		this.apiHostEntry = this.hostRouteEntry;
 
 		try {
 			await this.ensureNetwork();
@@ -533,10 +581,10 @@ export class DockerDriver implements Driver {
 		const selfId = process.env.HOSTNAME;
 		if (!selfId) {
 			this.onActorNetwork = false;
-			this.apiHostEntry = `${CONTAINER_API_ALIAS}:host-gateway`;
+			this.apiHostEntry = this.hostRouteEntry;
 			console.warn(
 				`Not running inside a container (no HOSTNAME): Actor containers will reach this API through ` +
-					`the host's port ${API_PORT} (${CONTAINER_API_ALIAS} -> host-gateway) instead of the ${NETWORK_NAME} ` +
+					`the host's port ${API_PORT} (${this.hostRouteEntry}) instead of the ${NETWORK_NAME} ` +
 					`network alias.`,
 			);
 			return;
@@ -563,11 +611,11 @@ export class DockerDriver implements Driver {
 			// published port (`ExtraHosts: apify-api -> host-gateway`). The usual cause is rootless Podman,
 			// whose default slirp4netns/pasta network mode cannot join a second network at runtime.
 			this.onActorNetwork = false;
-			this.apiHostEntry = `${CONTAINER_API_ALIAS}:host-gateway`;
+			this.apiHostEntry = this.hostRouteEntry;
 			console.warn(
 				`Could not attach the runtime's own container to the ${NETWORK_NAME} network: ${(error as Error).message}. ` +
 					`Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
-					`(${CONTAINER_API_ALIAS} -> host-gateway), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
+					`(${this.hostRouteEntry}), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
 					`To use the network alias anyway, pre-create the network (\`podman network create ${NETWORK_NAME}\`) ` +
 					`and start the runtime container with \`--network ${NETWORK_NAME}\`.`,
 			);
@@ -590,9 +638,36 @@ export class DockerDriver implements Driver {
 		console.warn(
 			`The runtime's own container is on the ${NETWORK_NAME} network but its address there could not be ` +
 				`read; Actor containers will reach this API through the host's published port ${API_PORT} instead ` +
-				`(${CONTAINER_API_ALIAS} -> host-gateway), so keep -p ${API_PORT}:${API_PORT} published on all interfaces.`,
+				`(${this.hostRouteEntry}), so keep -p ${API_PORT}:${API_PORT} published on all interfaces.`,
 		);
-		return `${CONTAINER_API_ALIAS}:host-gateway`;
+		return this.hostRouteEntry;
+	}
+
+	/** The `HostConfig` network fields for an Actor-side container: on the `apify-local` network with the
+	 * alias route, or on the engine's default network with the host route. */
+	private actorNetworkHostConfig(onActorNetwork: boolean): Pick<Docker.HostConfig, 'NetworkMode' | 'ExtraHosts'> {
+		const entry = onActorNetwork ? this.apiHostEntry : this.hostRouteEntry;
+		return {
+			...(onActorNetwork ? { NetworkMode: NETWORK_NAME } : {}),
+			// Only when the alias cannot resolve through the network's own DNS (`apiHostEntry`'s doc
+			// comment). Never added when the alias works: a hosts-file entry would override the DNS alias
+			// and force every Actor through the host.
+			...(entry ? { ExtraHosts: [entry] } : {}),
+		};
+	}
+
+	/** Called the first time a container started on the engine's default network after failing to start
+	 * on `apify-local`: every later one skips the network, and the operator learns why once. */
+	private markActorNetworkUnusable(cause: unknown): void {
+		if (!this.actorNetworkUsable) return;
+		this.actorNetworkUsable = false;
+		console.warn(
+			`Containers cannot start on the ${NETWORK_NAME} network (${(cause as Error).message}). Actor containers ` +
+				`run on the engine's default network instead and reach this API through the host's published port ` +
+				`${API_PORT} (${this.hostRouteEntry}), so keep -p ${API_PORT}:${API_PORT} published on all interfaces. ` +
+				`On Ubuntu 22.04's Podman 3.4 the cause is its CNI plugins rejecting the network config Podman writes ` +
+				`(see README.md, "Running with Podman").`,
+		);
 	}
 
 	async startBuild(ctx: BuildContext, onLog: (chunk: string) => void): Promise<BuildOutcome> {
@@ -774,39 +849,38 @@ export class DockerDriver implements Driver {
 				: []),
 		];
 
-		const container = await this.docker.createContainer({
-			Image: ctx.imageId,
-			Env: env,
-			Labels: { [RUN_LABEL]: ctx.runId },
-			...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
-			HostConfig: {
-				NetworkMode: NETWORK_NAME,
-				// Only when the alias cannot resolve through the network's own DNS (`apiHostEntry`'s doc
-				// comment): either this API's own address on the network, or `host-gateway` - the engine's
-				// keyword for the host's address as seen from the container, on Docker and Podman alike - so
-				// the alias then lands on the host's published API port. Never added when the alias works: a
-				// hosts-file entry would override the DNS alias and force every Actor through the host.
-				...(this.apiHostEntry ? { ExtraHosts: [this.apiHostEntry] } : {}),
-				Memory: ctx.memoryMbytes * 1024 * 1024,
-				// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
-				// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
-				// validated for range only, so an over-capacity request still starts.
-				CpuPeriod: CPU_PERIOD_US,
-				CpuQuota: cpuQuotaFor(ctx.memoryMbytes),
-				AutoRemove: false,
-				...(mounts.length > 0 ? { Mounts: mounts } : {}),
-				// Fixed 127.0.0.1-bound publish - lands on the developer's own host, not wherever the
-				// runtime process itself runs.
-				...(ctx.debug
-					? {
-							PortBindings: {
-								[`${ctx.debug.port}/tcp`]: [{ HostIp: '127.0.0.1', HostPort: String(ctx.debug.port) }],
-							},
-						}
-					: {}),
-			},
-			Tty: false,
-		});
+		const createRunContainer = (onActorNetwork: boolean): Promise<Docker.Container> =>
+			this.docker.createContainer({
+				Image: ctx.imageId,
+				Env: env,
+				Labels: { [RUN_LABEL]: ctx.runId },
+				...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
+				HostConfig: {
+					...this.actorNetworkHostConfig(onActorNetwork),
+					Memory: ctx.memoryMbytes * 1024 * 1024,
+					// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
+					// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
+					// validated for range only, so an over-capacity request still starts.
+					CpuPeriod: CPU_PERIOD_US,
+					CpuQuota: cpuQuotaFor(ctx.memoryMbytes),
+					AutoRemove: false,
+					...(mounts.length > 0 ? { Mounts: mounts } : {}),
+					// Fixed 127.0.0.1-bound publish - lands on the developer's own host, not wherever the
+					// runtime process itself runs.
+					...(ctx.debug
+						? {
+								PortBindings: {
+									[`${ctx.debug.port}/tcp`]: [
+										{ HostIp: '127.0.0.1', HostPort: String(ctx.debug.port) },
+									],
+								},
+							}
+						: {}),
+				},
+				Tty: false,
+			});
+		let onActorNetwork = this.actorNetworkUsable;
+		let container = await createRunContainer(onActorNetwork);
 		this.runContainers.set(ctx.runId, container);
 
 		// Both declared outside the `try` below (so the `finally` can always see them) but only ever
@@ -828,7 +902,26 @@ export class DockerDriver implements Driver {
 				if (ctx.debug && isPortInUseError(error)) {
 					throw new DebugPortInUseError(ctx.debug.port);
 				}
-				throw error;
+				if (!onActorNetwork) throw error;
+				// The engine could not start the container on the Actor network (`actorNetworkUsable`'s doc
+				// comment). One retry on its default network: if that starts, the network is the problem and
+				// is avoided from now on; if not, the original failure is the one to report.
+				onLog(
+					`Cannot start the Actor container on the ${NETWORK_NAME} network (${(error as Error).message}); ` +
+						`retrying on the engine's default network.\n`,
+				);
+				await container.remove({ v: true, force: true }).catch(() => undefined);
+				const retry = await createRunContainer(false);
+				this.runContainers.set(ctx.runId, retry);
+				container = retry;
+				try {
+					if (debugPayload) await retry.putArchive(debugPayload.tar, { path: '/' });
+					await retry.start();
+				} catch {
+					throw error;
+				}
+				onActorNetwork = false;
+				this.markActorNetworkUnusable(error);
 			}
 
 			// Only started when someone is actually listening - an unconditional sampler would issue
@@ -1242,16 +1335,15 @@ export class DockerDriver implements Driver {
 
 		// How the console reaches the sidecar's VNC server. Normally the sidecar joins `apify-local` and is
 		// reached by its address there. When this process runs in a container that could not join that
-		// network (`onActorNetwork`'s doc comment - rootless Podman), the sidecar shares this container's
-		// own network namespace instead, so the console reaches it on localhost; every sidecar then needs
-		// a port of its own in that shared namespace, allocated here where it will be used.
+		// network (`onActorNetwork`'s doc comment - rootless Podman), or the network cannot start containers
+		// at all (`actorNetworkUsable`), the sidecar shares this container's own network namespace instead,
+		// so the console reaches it on localhost; every sidecar then needs a port of its own in that shared
+		// namespace, allocated here where it will be used.
 		const selfContainerId = process.env.HOSTNAME;
-		const sharesRuntimeNetns = !this.onActorNetwork && !!selfContainerId;
-		const vncPort = sharesRuntimeNetns ? await allocateFreePort() : BROWSER_VIEWER_VNC_PORT;
-
-		let container: Docker.Container | undefined;
-		try {
-			container = await this.docker.createContainer({
+		const launch = async (onActorNetwork: boolean): Promise<BrowserViewerHandle> => {
+			const sharesRuntimeNetns = (!this.onActorNetwork || !onActorNetwork) && !!selfContainerId;
+			const vncPort = sharesRuntimeNetns ? await allocateFreePort() : BROWSER_VIEWER_VNC_PORT;
+			const container = await this.docker.createContainer({
 				Image: imageId,
 				name: containerName,
 				Cmd: ['/bin/sh', BROWSER_VIEWER_SCRIPT],
@@ -1261,7 +1353,11 @@ export class DockerDriver implements Driver {
 				],
 				Labels: labels,
 				HostConfig: {
-					NetworkMode: sharesRuntimeNetns ? `container:${selfContainerId}` : NETWORK_NAME,
+					...(sharesRuntimeNetns
+						? { NetworkMode: `container:${selfContainerId}` }
+						: onActorNetwork
+							? { NetworkMode: NETWORK_NAME }
+							: {}),
 					Memory: BROWSER_VIEWER_MEMORY_BYTES,
 					AutoRemove: false,
 					Mounts: [{ Type: 'volume', Source: volumeName, Target: X11_SOCKET_DIR }],
@@ -1269,22 +1365,39 @@ export class DockerDriver implements Driver {
 				Tty: false,
 			});
 			this.browserViewers.set(target.runId, { container, volumeName });
-			await container.start();
-
-			if (sharesRuntimeNetns) {
-				return { vncHost: '127.0.0.1', vncPort, x11SocketVolume: volumeName };
+			try {
+				await container.start();
+				if (sharesRuntimeNetns) {
+					return { vncHost: '127.0.0.1', vncPort, x11SocketVolume: volumeName };
+				}
+				const info = await container.inspect();
+				const address = containerAddress(info, onActorNetwork ? NETWORK_NAME : undefined);
+				return {
+					// The IP also works from a runtime running outside Docker; the name only resolves from inside.
+					vncHost: address || containerName,
+					vncPort,
+					x11SocketVolume: volumeName,
+				};
+			} catch (error) {
+				this.browserViewers.delete(target.runId);
+				await container.remove({ force: true }).catch(() => undefined);
+				throw error;
 			}
-			const info = await container.inspect();
-			const address = info.NetworkSettings?.Networks?.[NETWORK_NAME]?.IPAddress;
-			return {
-				// The IP also works from a runtime running outside Docker; the name only resolves from inside.
-				vncHost: address || containerName,
-				vncPort,
-				x11SocketVolume: volumeName,
-			};
+		};
+
+		try {
+			try {
+				return await launch(this.actorNetworkUsable);
+			} catch (error) {
+				// Same one-shot fallback as `startRun`: a sidecar that cannot start on the Actor network
+				// but does on the engine's default one marks the network unusable for everything after it.
+				if (!this.actorNetworkUsable) throw error;
+				const handle = await launch(false).catch(() => undefined);
+				if (!handle) throw error;
+				this.markActorNetworkUnusable(error);
+				return handle;
+			}
 		} catch (error) {
-			this.browserViewers.delete(target.runId);
-			if (container) await container.remove({ force: true }).catch(() => undefined);
 			await this.removeVolumeWithRetry(volumeName);
 			throw error;
 		}
