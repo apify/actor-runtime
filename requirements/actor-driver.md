@@ -59,6 +59,10 @@
 - **The mount is applied only when both a registered dev folder and a known working directory exist**
   for the run's resolved build; either missing means the run starts exactly as if the feature did not
   exist.
+- **A run's log opens with a clearly marked "Local Actor runtime" section** whenever this runtime applies
+  a local-only setting to it. A mounted dev folder is listed there with a prominent warning: the run uses
+  local source files, compiled Actors need a local build first, and `apify call --no-dev-folder` runs
+  from the image instead. The section is absent when nothing local-only applies.
 - **A single run can opt out** of the mount (`?devFolder=false` on run start, `api.md`) without touching
   the registration. When a mount is skipped this way, the run's log says so.
 - The registration status the console and API report is the registered folder alone - never that a

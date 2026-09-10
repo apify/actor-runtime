@@ -119,7 +119,7 @@ export interface DevFolderStatus {
 }
 
 /**
- * The one value the API's `GET`, its registration response, and the console detail page all show. Deliberately
+ * The one value both the API's registration response and the console detail page show. Deliberately
  * just the registered folder, nothing about any build: whether a mount actually applies is a per-run
  * question - it depends on which build that particular run resolves, which this Actor-level status has
  * no way to know in advance - so it never claims a mount "will apply" for a build a given run might not
@@ -128,4 +128,20 @@ export interface DevFolderStatus {
  */
 export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 	return { localDevFolder: actor.localDevFolder ?? null };
+}
+
+/**
+ * The lines the run log's "Local Actor runtime" section (`services/runs.ts`) shows when the registered
+ * dev folder is mounted. Loud on purpose: the mount also hides the image's compiled output, so an
+ * un-rebuilt TypeScript Actor would otherwise fail with a confusing "cannot find module dist/main.js"
+ * instead of running stale code. Red and bold on a terminal (`apify call` streams the log verbatim).
+ */
+export function liveDevFolderWarningLines(localDevFolder: string): string[] {
+	const red = (line: string) => `\x1b[1;31m${line}\x1b[0m`;
+	return [
+		`Live dev folder: ${localDevFolder}`,
+		red('!! Running in `Live dev folder mode`: this run uses the local source files above, mounted over the'),
+		red('!! built Docker image. TS-based Actors require local compilation (e.g. `npm run build`) before the run.'),
+		red('!! To run purely from the built Docker image, use `apify call --no-dev-folder`.'),
+	];
 }

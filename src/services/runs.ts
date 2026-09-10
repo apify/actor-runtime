@@ -1,4 +1,5 @@
 import { generateId } from '../storage/ids.js';
+import { liveDevFolderWarningLines } from './dev-folder.js';
 import type { ActorRecord, ActorVersionRecord, BuildRecord, JobStatus, RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
@@ -311,6 +312,10 @@ export async function runInBackground(
 				`(started with devFolder=false) - running from the built image alone.\n`,
 		);
 	}
+	// The log opens with a clearly delimited section for this runtime's own, local-only settings, ahead
+	// of the driver's own lines - the developer must not miss that a run uses local files, not the image.
+	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount.localDevFolder) : [];
+	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));
 
 	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
 	// so an abort landing during this (possibly slow) step is still caught by it.
@@ -509,4 +514,13 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 			}),
 		),
 	);
+}
+
+/** A bold, ruled "Local Actor runtime" block - the one place in a run's log for runtime-specific notes. */
+function renderRuntimeLogSection(lines: string[]): string {
+	const bold = (line: string) => `\x1b[1m${line}\x1b[0m`;
+	const title = ' Local Actor runtime ';
+	const width = 100;
+	const head = `${'='.repeat(4)}${title}${'='.repeat(width - 4 - title.length)}`;
+	return `${[bold(head), ...lines, bold('='.repeat(width))].join('\n')}\n`;
 }

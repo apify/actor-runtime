@@ -120,63 +120,6 @@ function postViaV2Alias(baseUrl: string, actorId: string, body: string, token?: 
 	});
 }
 
-function get(baseUrl: string, actorId: string, token?: string) {
-	return axios.get(`${baseUrl}/actor-runtime/dev-folder/${actorId}`, {
-		headers: token ? { Authorization: `Bearer ${token}` } : {},
-		validateStatus: () => true,
-	});
-}
-
-describe('GET /actor-runtime/dev-folder/:actorId (read-back without a write)', () => {
-	let server: TestServerHandle;
-
-	afterEach(async () => {
-		await server.close();
-	});
-
-	it('401s with no auth token', async () => {
-		server = await startTestServer(devFolderDriver({ ok: true }));
-		expect((await get(server.baseUrl, 'whatever-id')).status).toBe(401);
-	});
-
-	it("404s for an actor id that doesn't exist", async () => {
-		server = await startTestServer(devFolderDriver({ ok: true }));
-		expect((await get(server.baseUrl, 'totally-made-up-id', server.token)).status).toBe(404);
-	});
-
-	it('reports null for an actor with nothing registered, without ever calling the probe', async () => {
-		const driver = devFolderDriver({ ok: true });
-		server = await startTestServer(driver);
-		const actor = await server.client.actors().create({ name: 'devfolder-get-empty-actor' });
-
-		const res = await get(server.baseUrl, actor.id, server.token);
-		expect(res.status).toBe(200);
-		expect(res.data).toEqual({ data: { localDevFolder: null } });
-		expect(driver.probeDevFolderCalls).toEqual([]);
-	});
-
-	it('reads back exactly what POST registered, by id and by plain name, and null again after a clear', async () => {
-		server = await startTestServer(devFolderDriver({ ok: true }));
-		const actor = await server.client.actors().create({ name: 'devfolder-get-actor' });
-
-		await post(server.baseUrl, actor.id, JSON.stringify('/abs/dev/src'), server.token);
-		expect((await get(server.baseUrl, actor.id, server.token)).data).toEqual({
-			data: { localDevFolder: '/abs/dev/src' },
-		});
-		expect((await get(server.baseUrl, 'devfolder-get-actor', server.token)).data).toEqual({
-			data: { localDevFolder: '/abs/dev/src' },
-		});
-		// Reachable through the `/v2/actor-runtime` alias too, like `POST`.
-		const viaAlias = await axios.get(`${server.baseUrl}/v2/actor-runtime/dev-folder/${actor.id}`, {
-			headers: { Authorization: `Bearer ${server.token}` },
-		});
-		expect(viaAlias.data).toEqual({ data: { localDevFolder: '/abs/dev/src' } });
-
-		await post(server.baseUrl, actor.id, JSON.stringify(''), server.token);
-		expect((await get(server.baseUrl, actor.id, server.token)).data).toEqual({ data: { localDevFolder: null } });
-	});
-});
-
 describe('POST /actor-runtime/dev-folder/:actorId', () => {
 	let server: TestServerHandle;
 
@@ -889,6 +832,13 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			localDevFolder: '/abs/dev/src',
 			imageWorkingDirectory: '/usr/src/app',
 		});
+		// The log opens with the warning block, naming the folder and the way out.
+		const log = await server.client.log(run.id).get();
+		expect(log).toContain('Local Actor runtime');
+		expect(log).toContain('Live dev folder: /abs/dev/src');
+		expect(log).toContain('Live dev folder mode');
+		expect(log).toContain('apify call --no-dev-folder');
+		expect(log!.indexOf('Local Actor runtime')).toBeLessThan(log!.indexOf('done'));
 	});
 
 	it('an Actor that was never registered gets devMount: undefined on the real run-start service path', async () => {
@@ -900,6 +850,7 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
 		expect(run.status).toBe('SUCCEEDED');
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		expect(await server.client.log(run.id).get()).not.toContain('Local Actor runtime');
 	});
 
 	it('an Actor whose registration was set and then cleared also gets devMount: undefined, not the stale pair', async () => {
@@ -979,10 +930,11 @@ describe('per-run opt-out: POST /v2/actors/:actorId/runs?devFolder=false (servic
 		const run = await startRunRaw(server, actor.id, 'devFolder=false');
 		expect(run.status).toBe('SUCCEEDED');
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
-
-		// The skip is visible in the run's own log, naming the folder that was NOT mounted.
+		// The skip is visible in the run's own log, naming the folder that was NOT mounted - and the
+		// live-folder warning block is absent, since nothing was mounted.
 		const log = await server.client.log(run.id).get();
 		expect(log).toContain('Skipping the registered local dev folder /abs/dev/src for this run');
+		expect(log).not.toContain('Local Actor runtime');
 	});
 
 	it('devFolder=false leaves the registration itself untouched - the next run without the opt-out mounts again', async () => {

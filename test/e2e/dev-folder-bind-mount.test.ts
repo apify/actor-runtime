@@ -190,7 +190,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 	);
 
 	it(
-		'a run started with devFolder=false uses the built image alone and leaves the registration in place, which GET reads back',
+		'a run started with devFolder=false uses the built image alone and leaves the registration in place',
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
 
@@ -208,11 +208,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			registerDevFolder(actorId, actorDir, env);
 			writeFileSync(mainTs, originalMainTs.replace(ORIGINAL_MARKER, EDITED_MARKER));
 			execFileSync('npm', ['run', 'build'], { cwd: actorDir, stdio: 'inherit' });
-
-			const readBack = JSON.parse(
-				apify(['api', 'GET', `/actor-runtime/dev-folder/${actorId}`], { cwd: REPO_ROOT, env }),
-			) as DevFolderApiResult;
-			expect(readBack.data.localDevFolder).toBe(actorDir);
 
 			// The opted-out run prints the image's own marker, never the host folder's, and says why.
 			const optedOut = JSON.parse(
@@ -234,13 +229,20 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(optedOutLog).toContain(`Skipping the registered local dev folder ${actorDir}`);
 			expect(optedOutLog).toContain(ORIGINAL_MARKER);
 			expect(optedOutLog).not.toContain(EDITED_MARKER);
+			expect(optedOutLog).not.toContain('Local Actor runtime');
 
-			// The registration survived: the very next plain run mounts the host folder again.
+			// The registration survived: the very next plain run mounts the host folder again, and its log
+			// opens with the runtime section carrying the live-folder warning.
 			const call = JSON.parse(
 				apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], { cwd: actorDir, env }),
 			) as CallResult;
 			expect(call.run.status).toBe('SUCCEEDED');
-			expect(apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env })).toContain(EDITED_MARKER);
+			const callLog = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
+			expect(callLog).toContain(EDITED_MARKER);
+			expect(callLog).toContain('Local Actor runtime');
+			expect(callLog).toContain(`Live dev folder: ${actorDir}`);
+			expect(callLog).toContain('Live dev folder mode');
+			expect(callLog).toContain('apify call --no-dev-folder');
 		},
 		5 * 60 * 1000,
 	);

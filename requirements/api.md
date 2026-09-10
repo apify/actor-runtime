@@ -132,7 +132,7 @@
     - **No build-first precondition** - registration works for an Actor that has never been built at all.
     - **Request body**: a JSON string - the absolute path to set, or `""` to clear.
     - **Response**: on success, `{ data: { localDevFolder } }` - the same value the console detail page
-      shows (`console.md`) and `GET` (below) returns.
+      shows (`console.md`), doubling as the read-back this design has no separate `GET` for.
     - **Error responses**, by rejection reason:
         - `400` `invalid-request` - the body isn't a JSON string, or the string isn't a valid absolute
           path.
@@ -144,8 +144,6 @@
 - The console's own dev-folder form (`console.md`) does **not** go through this endpoint - it posts to a
   console-local, unauthenticated route on the console's own port - but the two surfaces accept and
   reject exactly the same inputs with the same outcomes.
-- **`GET /actor-runtime/dev-folder/:actorId`** - reads the registration without changing it; same
-  response, authentication and ownership scoping as `POST`.
 - **`POST /v2/actors/:actorId/runs?devFolder=false`** - runs from the built image alone, ignoring the
   registered dev folder for that one run only; the registration itself is unchanged. Any other value, or
   no parameter, means the default behaviour.
