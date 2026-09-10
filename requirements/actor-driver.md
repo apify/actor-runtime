@@ -43,8 +43,7 @@
   surfaces.
 - Registration validates that the submitted value is an absolute POSIX path and that the path exists
   **on the host** and is a directory.
-    - The check must leave no trace on the host (never create anything there), must treat a symlink as
-      what it points to, and must give the same answer on every supported engine.
+    - Validation never creates anything on the host and follows symlinks.
     - Submitting the **empty string clears the registration** and skips validation.
     - Every non-success outcome is classified: unable to verify at all (e.g. Docker unreachable)
       reports "could not verify" - never "does not exist"; a path confirmed missing reports "path
@@ -52,9 +51,8 @@
       else unverifiable reports a generic "could not verify".
 - **Registration has no build-first precondition** - it requires no build of the Actor to exist,
   succeeded or otherwise.
-- An entrypoint the image keeps inside its working directory (Apify's Playwright base images start
-  through an Xvfb script there) stays available to the run even though the mount covers that directory,
-  unless the dev folder provides its own copy; the run log says so.
+- An image that starts through a file inside its working directory still starts under the mount: the
+  dev folder's copy of that file is used when it has one, the image's own copy otherwise.
 - The working directory the mount covers is recorded **per build**, never on the Actor
   (`storage.md`); the mount a run applies always uses the one from _that run's own resolved build_,
   never any other build the Actor happens to have.
@@ -64,9 +62,8 @@
 - The registration status the console and API report is the registered folder alone - never that a
   mount "will apply", since that depends on which build a given run resolves.
 - If the registered folder has since been deleted, moved, or made unreadable, the run must **fail
-  visibly** - never silently mount an empty directory in its place, whatever the engine itself would do
-  with a missing mount source. The failed run's status message names the folder, what is wrong with it,
-  and how to clear the registration.
+  visibly** - never silently mount an empty directory in its place. The status message names the folder,
+  what is wrong with it, and how to clear the registration.
 - The Actor image's own installed dependencies (e.g. `node_modules`) must remain available to the Actor
   despite the mount covering the whole working directory.
 - **Registering or clearing a dev folder never bumps the Actor's `modifiedAt`.**
@@ -148,20 +145,14 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 
 # Networking
 
-- On startup, the runtime ensures a Docker network `apify-local` exists and joins it under the fixed
-  DNS alias `apify-api`. Every Actor container is started on that network, so it can reach the
-  runtime's API at `http://apify-api:3333` regardless of the host's own networking.
-- `http://apify-api:3333` must reach the runtime from every Actor container however the runtime's own
-  container ended up on that network - joined by itself, or started there without the alias - and even
-  when it cannot join it at all (for example under rootless Podman, or when the runtime runs outside a
-  container). The runtime says so at startup, naming the cause.
-- On an engine whose user-defined networks cannot be relied on (Podman 3.x), Actors run on the engine's
-  default network instead, still reaching `http://apify-api:3333`; the runtime says so at startup.
-- Per-run resource limits the engine cannot apply for the user it runs as (a cgroup controller not
-  delegated under rootless Podman) are left out rather than failing the run; the runtime says so at
-  startup.
-- A run the engine refuses to start (for example a network it cannot set up) fails with the engine's
-  reason in both the run's status message and its log.
+- Every Actor container reaches the runtime's API at `http://apify-api:3333`, whatever the host's own
+  networking, whichever supported engine runs the containers, and however the runtime itself was started
+  (as a container or not). The runtime provides the `apify-local` network with the DNS alias `apify-api`
+  for this; when it has to reach the same goal another way, it says so at startup.
+- A per-run resource limit the engine cannot enforce for the current user is left out rather than
+  failing the run; the runtime says so at startup.
+- A run the engine refuses to start fails with the engine's reason in both the run's status message and
+  its log.
 
 # Actor run
 
@@ -189,8 +180,7 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Every event carries all eight fields - `memAvgBytes`, `memCurrentBytes`, `memMaxBytes`, `cpuAvgUsage`,
   `cpuMaxUsage`, `cpuCurrentUsage`, `isCpuOverloaded`, `createdAt` - or is not published at all. A
   measurement that cannot be read completely is skipped, leaving the run's running figures unaffected.
-    - `cpuCurrentUsage` is percent of one CPU core, not of the run's own grant, and means the same
-      thing on every supported engine.
+    - `cpuCurrentUsage` is percent of one CPU core, not of the run's own grant.
     - `memCurrentBytes` and `memAvgBytes` exclude reclaimable page cache, matching what `docker stats`
       reports for the same container.
     - `memMaxBytes` is the run's configured memory limit, constant for its lifetime.

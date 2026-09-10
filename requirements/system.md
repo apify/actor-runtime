@@ -34,8 +34,8 @@
 - Required `docker run` flags: mount the host's Docker-Engine-API socket read-write
   (`-v /var/run/docker.sock:/var/run/docker.sock`) so the runtime can build and run Actor containers,
   and mount a persistent data directory (`-v <host-dir>:/data`, e.g. `-v "$(pwd)/data:/data"`) so
-  storages survive a restart and are easy to inspect from the host; the directory must exist first
-  (Docker creates a missing one, Podman refuses to start). Publish both fixed ports
+  storages survive a restart and are easy to inspect from the host; the directory must exist before the
+  runtime starts. Publish both fixed ports
   (`-p 3333:3333 -p 3000:3000`). The canonical start command is:
 
     ```bash
@@ -47,10 +47,9 @@
       actor-runtime
     ```
 
-- **Docker and Podman (3.4 or newer) are equally supported**, rootful or rootless. Everything the system
-  offers is achievable with either engine and behaves the same on both; the user picks the engine simply
-  by mounting its Docker-compatible API socket into the runtime container, e.g.
-  `-v /run/podman/podman.sock:/var/run/docker.sock` for Podman.
+- **Docker and Podman are equally supported**, rootful or rootless: everything the system offers works
+  the same on either engine. The user picks the engine by mounting its Docker-compatible API socket in
+  place of the Docker one (e.g. `-v /run/podman/podman.sock:/var/run/docker.sock`).
 
 - Optionally set `APIFY_PROXY_PASSWORD` in the runtime's own environment to have it forwarded into
   every Actor container (see `actor-driver.md`).
