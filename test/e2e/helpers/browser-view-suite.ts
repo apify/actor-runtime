@@ -10,7 +10,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import WebSocket from 'ws';
 
 import {
 	buildRuntimeImage,
@@ -20,6 +19,8 @@ import {
 	stopRuntimeContainer,
 	waitForHttpOk,
 } from './docker.js';
+import { CONSOLE_URL, readMirrorGreeting } from './console-view.js';
+import { waitFor } from './wait.js';
 import {
 	apify,
 	apifyEnv,
@@ -34,7 +35,6 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
-const CONSOLE_URL = 'http://localhost:3000';
 
 export interface BrowserViewSample {
 	/** Directory under the repository root. */
@@ -75,55 +75,6 @@ function getRun(runId: string, env: NodeJS.ProcessEnv): RunApi {
 /** Non-streaming log fetch (see `debug-mode.test.ts`'s `currentLog` for why not `apify runs log`). */
 function currentLog(runId: string, env: NodeJS.ProcessEnv): string {
 	return apify(['api', 'GET', `actor-runs/${runId}/log`], { cwd: REPO_ROOT, env });
-}
-
-async function waitFor<T>(
-	check: () => T | undefined | Promise<T | undefined>,
-	timeoutMs: number,
-	description: string,
-): Promise<T> {
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		let result: T | undefined;
-		try {
-			result = await check();
-		} catch {
-			result = undefined;
-		}
-		if (result !== undefined) return result;
-		if (Date.now() >= deadline) throw new Error(`Timed out waiting for: ${description}`);
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-}
-
-/**
- * Opens the console's viewer websocket for the run and resolves with the first bytes the mirror sends: an
- * RFB server's `ProtocolVersion` greeting (`RFB 003.008\n`), which x11vnc sends the moment a client
- * connects - proof that the bridge reached a live VNC server mirroring the run's display, before any
- * handshake. The console bridge itself keeps re-dialing the sidecar until the Actor's Xvfb is up, so one
- * connection attempt is enough; the timeout here just bounds that wait.
- */
-function readMirrorGreeting(runId: string, timeoutMs: number): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const ws = new WebSocket(`${CONSOLE_URL.replace('http', 'ws')}/runs/${runId}/browser/ws`);
-		const timer = setTimeout(() => {
-			ws.terminate();
-			reject(new Error('Timed out waiting for the RFB greeting over the viewer websocket'));
-		}, timeoutMs);
-		ws.once('message', (data) => {
-			clearTimeout(timer);
-			ws.close();
-			resolve(Buffer.from(data as Buffer).toString('latin1'));
-		});
-		ws.once('close', (code, reason) => {
-			clearTimeout(timer);
-			reject(new Error(`Viewer websocket closed before any data: ${code} ${reason.toString()}`));
-		});
-		ws.once('error', (error) => {
-			clearTimeout(timer);
-			reject(error);
-		});
-	});
 }
 
 /** One e2e file per sample (`browser-view-ts.test.ts`, `browser-view-py.test.ts`), so CI runs them as separate

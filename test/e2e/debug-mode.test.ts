@@ -29,6 +29,7 @@ import {
 	stopRuntimeContainer,
 	waitForHttpOk,
 } from './helpers/docker.js';
+import { waitFor } from './helpers/wait.js';
 import {
 	apify,
 	apifyEnv,
@@ -77,33 +78,6 @@ function currentLog(runId: string, env: NodeJS.ProcessEnv): string {
 	return apify(['api', 'GET', `actor-runs/${runId}/log`], { cwd: REPO_ROOT, env });
 }
 
-/**
- * Polls `check` until it returns a defined value or `timeoutMs` elapses. `check` may be sync or async -
- * either way its result is `await`ed before being tested, so an async check (e.g. `nodeInspectorAnswers`,
- * `canConnectTcp`) is genuinely retried on each poll rather than resolving this function on its very
- * first call with whatever that one probe happened to return. A check that throws (a transient CLI/HTTP
- * hiccup) is treated the same as one that returns `undefined` - retried, not propagated - so a single
- * flaky poll can't fail the whole wait before its deadline.
- */
-async function waitFor<T>(
-	check: () => T | undefined | Promise<T | undefined>,
-	timeoutMs: number,
-	description: string,
-): Promise<T> {
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		let result: T | undefined;
-		try {
-			result = await check();
-		} catch {
-			result = undefined;
-		}
-		if (result !== undefined) return result;
-		if (Date.now() >= deadline) throw new Error(`Timed out waiting for: ${description}`);
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-}
-
 /** A bare TCP connect to `127.0.0.1:port` - succeeds the moment something is listening, with no protocol
  * handshake at all. Used for the Python case: debugpy's own listen socket accepts a raw TCP connection
  * before any DAP handshake happens. This only proves the port is reachable and something is listening,
@@ -139,10 +113,11 @@ async function nodeInspectorAnswers(port: number): Promise<boolean> {
 }
 
 /**
- * `waitFor` itself, in isolation - no Docker, no `apify` CLI. Pins that an async `check` is genuinely
- * `await`ed and retried on every poll, not just called once and compared against its own pending Promise
- * (which is never `=== undefined`) - the one property this helper exists to guarantee, in a file whose
- * real assertions all require Docker to even run.
+ * `helpers/wait.ts`'s `waitFor` itself, in isolation - no Docker, no `apify` CLI. Pins that an async
+ * `check` is genuinely `await`ed and retried on every poll, not just called once and compared against its
+ * own pending Promise (which is never `=== undefined`) - the one property that helper exists to
+ * guarantee, in a file whose real assertions all require Docker to even run. It lives here, with the
+ * first test to depend on it, rather than in a file of its own.
  */
 describe('waitFor (self-check, no Docker required)', () => {
 	it('retries a sync check across multiple polls until it returns a defined value', async () => {

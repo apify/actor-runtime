@@ -55,6 +55,9 @@ Local Actor runtime is an Actor development tool for developing, running, and de
   `http://localhost:3000/runs/<runId>/browser` - a live view of the display the Actor's browser draws on. The
   browser must run headful to show anything (Apify's templates default to headless, which shows as a black
   display); see `sample_actor_playwright` and `sample_actor_playwright_py`. Clear with `--body '{"enabled": false}'`.
+- The dev folder, debug mode and browser view are independent per-Actor toggles that compose: a single run can
+  have all three on (mounted local source, paused for a debugger, display mirrored), and its log names each of
+  them. Turn on whichever you need, in any order, then `apify call` as usual.
 - To test how an Actor handles platform migrations: while a run is `RUNNING`, call
   `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
   detail page. The run gets the platform migration experience: a `migrating` event, its container

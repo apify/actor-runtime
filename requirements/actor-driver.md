@@ -52,7 +52,10 @@
 - **Registration has no build-first precondition** - it requires no build of the Actor to exist,
   succeeded or otherwise.
 - An image that starts through a file inside its working directory still starts under the mount: the
-  dev folder's copy of that file is used when it has one, the image's own copy otherwise.
+  dev folder's copy of that file is used when it has one, the image's own copy otherwise. This holds
+  however the image spells that file - a working-directory-relative command (`./xvfb-entrypoint.sh`) and
+  an absolute path pointing into the working directory (`/home/myuser/xvfb-entrypoint.sh`) are equally
+  hidden by the mount, and Apify's own Playwright base images ship one of each.
 - The working directory the mount covers is recorded **per build**, never on the Actor
   (`storage.md`); the mount a run applies always uses the one from _that run's own resolved build_,
   never any other build the Actor happens to have.

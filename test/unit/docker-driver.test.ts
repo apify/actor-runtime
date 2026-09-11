@@ -1039,7 +1039,9 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		stub.endLogStream();
 		await outcomePromise;
 
-		expect(hasEntry).toHaveBeenCalledWith('/host/src', './xvfb-entrypoint.sh');
+		// The path RELATIVE to the mount target, resolved from the token - the dev folder is what it is
+		// looked up in, so the lookup can't be the token as the image happened to spell it.
+		expect(hasEntry).toHaveBeenCalledWith('/host/src', 'xvfb-entrypoint.sh');
 		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/usr/src/app/xvfb-entrypoint.sh' });
 		// Two containers: the throwaway one the file is read from, then the run's own.
 		expect(stub.createContainer).toHaveBeenCalledTimes(2);
@@ -1056,20 +1058,87 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		expect(logged.join('')).toContain('starts through ./xvfb-entrypoint.sh in its working directory');
 	});
 
-	it('the dev folder providing the file itself, an absolute entrypoint, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
-		for (const [config, devFolderHasIt] of [
-			[{ Entrypoint: ['./xvfb-entrypoint.sh'], WorkingDir: '/usr/src/app' }, true],
-			[{ Entrypoint: ['/usr/local/bin/xvfb-run', 'node', 'main.js'], WorkingDir: '/usr/src/app' }, false],
-			[{ Cmd: ['npm', 'start'], WorkingDir: '/usr/src/app' }, false],
-		] as Array<[Record<string, unknown>, boolean]>) {
+	// `apify/actor-node-playwright-chrome:24-1.61.1` - the image `sample_actor_playwright` builds on - spells
+	// its entrypoint `/home/myuser/xvfb-entrypoint.sh` with `WorkingDir` `/home/myuser`: absolute, and
+	// squarely inside the mount target. Treating "absolute" as "the mount cannot reach it" left that image
+	// starting through a file the bind mount had just hidden, so its runs died with "executable file not
+	// found" the moment a dev folder was registered.
+	it('an ABSOLUTE entrypoint that points inside the working directory is hidden by the mount just like a relative one, and is preserved the same way', async () => {
+		const stub = stubDockerForRun();
+		stub.imageInspect.mockResolvedValue({
+			Config: {
+				Entrypoint: ['/home/myuser/xvfb-entrypoint.sh'],
+				Cmd: ['node', 'dist/main.js'],
+				WorkingDir: '/home/myuser',
+			},
+		});
+		stub.container.getArchive.mockResolvedValue(scriptArchive('xvfb-entrypoint.sh', '#!/bin/sh\nexec "$@"\n'));
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		allowDevMountRecheck(driver);
+		const hasEntry = vi.spyOn(driver, 'devFolderHasEntry').mockResolvedValue(false);
+
+		const outcomePromise = driver.startRun(
+			{ ...devMountRun, devMount: { localDevFolder: '/host/src', imageWorkingDirectory: '/home/myuser' } },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		expect(hasEntry).toHaveBeenCalledWith('/host/src', 'xvfb-entrypoint.sh');
+		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/home/myuser/xvfb-entrypoint.sh' });
+		const runOptions = stub.createContainer.mock.calls[1]![0];
+		expect(runOptions.Entrypoint).toEqual(['/apify-runtime-entrypoint/xvfb-entrypoint.sh']);
+		expect(runOptions.Cmd).toEqual(['node', 'dist/main.js']);
+	});
+
+	it('the dev folder providing the file itself, an entrypoint outside the working directory, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
+		// `workingDirectory` is what the RUN mounts over (`devMount.imageWorkingDirectory`), which is what
+		// the decision is made against - the image's own `WorkingDir` is carried along only so each case
+		// reads like the image it stands for.
+		for (const { config, workingDirectory, devFolderHasIt } of [
+			{
+				config: { Entrypoint: ['./xvfb-entrypoint.sh'] },
+				workingDirectory: '/usr/src/app',
+				devFolderHasIt: true,
+			},
+			// Hidden by the mount, but the dev folder carries its own copy - the image's is not needed.
+			{
+				config: { Entrypoint: ['/home/myuser/xvfb-entrypoint.sh'] },
+				workingDirectory: '/home/myuser',
+				devFolderHasIt: true,
+			},
+			{
+				config: { Entrypoint: ['/usr/local/bin/xvfb-run', 'node', 'main.js'] },
+				workingDirectory: '/usr/src/app',
+				devFolderHasIt: false,
+			},
+			// A sibling directory whose name merely starts with the working directory's - a prefix match on
+			// the raw strings would wrongly call this hidden.
+			{
+				config: { Entrypoint: ['/usr/src/app-tools/xvfb-run'] },
+				workingDirectory: '/usr/src/app',
+				devFolderHasIt: false,
+			},
+			{ config: { Cmd: ['npm', 'start'] }, workingDirectory: '/usr/src/app', devFolderHasIt: false },
+		]) {
 			const stub = stubDockerForRun();
-			stub.imageInspect.mockResolvedValue({ Config: config });
+			stub.imageInspect.mockResolvedValue({ Config: { ...config, WorkingDir: workingDirectory } });
 			const driver = new DockerDriver(stub.docker);
 			driver.available = true;
 			allowDevMountRecheck(driver);
 			vi.spyOn(driver, 'devFolderHasEntry').mockResolvedValue(devFolderHasIt);
 
-			const outcomePromise = driver.startRun(devMountRun, () => {});
+			const outcomePromise = driver.startRun(
+				{
+					...devMountRun,
+					devMount: { localDevFolder: '/host/src', imageWorkingDirectory: workingDirectory },
+				},
+				() => {},
+			);
 			await new Promise((resolve) => setImmediate(resolve));
 			await new Promise((resolve) => setImmediate(resolve));
 			stub.triggerContainerExit(0);

@@ -30,7 +30,9 @@ jobs:
         # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
         # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
         runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
-        timeout-minutes: 30
+        # `all-modes` gets a wider budget than the rest: it is the only file that pushes a Playwright
+        # Actor AND installs and compiles that Actor's sources on the runner before it can run anything.
+        timeout-minutes: ${{ matrix.file == 'all-modes' && 45 || 30 }}
         strategy:
             fail-fast: false
             # One job per e2e file and container engine. Each file starts its own runtime container on
@@ -49,6 +51,7 @@ jobs:
                     - dev-folder-bind-mount
                     - browser-view-ts
                     - browser-view-py
+                    - all-modes
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v4
@@ -83,4 +86,50 @@ jobs:
                   cli=${{ matrix.engine == 'docker' && 'docker' || 'podman' }}
                   for c in $($cli ps -aq --filter name=actor-runtime-e2e); do
                     $cli logs --tail 300 "$c" || true
+                  done
+
+    e2e-macos:
+        name: e2e actor-dev-loop (apify-cli + docker on macOS)
+        # `system.md` lists macOS as a supported host; until now nothing verified it, so every macOS
+        # regression had to be found by hand. This leg runs the mandated dev-loop e2e - push, build, call,
+        # input-dependent item count - against a real engine on a real macOS host.
+        runs-on: macos-15
+        # A macOS runner has no engine preinstalled, so this job pays for a Linux VM boot on top of
+        # everything the Linux legs do, and does it on Apple silicon.
+        timeout-minutes: 90
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            # Colima is how a Mac gets a Docker-Engine-API daemon without Docker Desktop's licensing: a
+            # Lima-managed Linux VM plus the stock `docker` CLI, which `colima start` also points at it by
+            # creating and selecting a `colima` docker context.
+            #
+            # DOCKER_HOST is deliberately NOT set. The suite mounts the host engine's socket into the
+            # runtime container (`helpers/docker.ts`), and a `-v` source is resolved by the daemon - i.e.
+            # inside the VM, where the socket is at the default `/var/run/docker.sock`. Pointing the suite
+            # at Colima's host-side forwarding socket (`~/.colima/.../docker.sock`) would mount that path
+            # as seen from *inside* the VM, which is not a socket the daemon can be reached through.
+            - name: Start a container engine (Colima)
+              run: |
+                  brew install colima docker
+                  colima start --cpu 3 --memory 8 --disk 30 --vm-type=vz --mount-type=virtiofs
+                  docker version
+                  docker info --format '{{.OperatingSystem}} / {{.Architecture}}'
+            # Only the dev-loop file. GitHub's macOS runners are Apple silicon, and
+            # `apify/actor-node-playwright-chrome` publishes no arm64 image - so `browser-view-*` and
+            # `all-modes` cannot run here at all, while `debug-mode` and `dev-folder-bind-mount` would add
+            # macOS-specific host-path and port-forwarding questions on top of the core flow this leg is
+            # meant to protect. `apify/actor-node:24`, `apify/actor-python:3.13` and `python:3.11-slim`
+            # (the images this file needs) are all multi-arch, so it runs natively, unemulated.
+            - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
+            - name: Dump runtime container logs on failure
+              if: failure()
+              run: |
+                  for c in $(docker ps -aq --filter name=actor-runtime-e2e); do
+                    docker logs --tail 300 "$c" || true
                   done

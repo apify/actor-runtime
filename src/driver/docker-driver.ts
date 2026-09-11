@@ -219,11 +219,30 @@ function devNodeModulesVolumeName(runId: string): string {
 	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
 }
 
-/** A command token the engine resolves against the working directory rather than `PATH`: `./x.sh`,
- * `bin/x` - relative, with a slash. A bare `x.sh` goes through `PATH`, an absolute path is unaffected
- * by what is mounted over the working directory. */
-function isWorkingDirectoryRelative(token: string): boolean {
-	return !token.startsWith('/') && token.includes('/');
+/**
+ * Where a command token's file sits inside the image when the dev-folder bind mount over the working
+ * directory would hide it, or `undefined` when the mount cannot hide it at all: a bare name the engine
+ * resolves through `PATH` (`docker-entrypoint.sh` - `apify/actor-node`), or a path pointing outside the
+ * working directory (`/usr/local/bin/xvfb-run`, `../x.sh`).
+ *
+ * Two shapes ARE hidden, and Apify's own Playwright base images ship one each: a working-directory-
+ * relative token (`./xvfb-entrypoint.sh` - `apify/actor-python-playwright`), and an ABSOLUTE path that
+ * points into the working directory (`/home/myuser/xvfb-entrypoint.sh`, with `WorkingDir`
+ * `/home/myuser` - `apify/actor-node-playwright-chrome`). The second is exactly as hidden as the first -
+ * only how the image spells it differs - so both are resolved here and compared against the mount
+ * target, rather than absolute paths being assumed unreachable by the mount.
+ */
+function entryHiddenByDevMount(
+	token: string,
+	imageWorkingDirectory: string,
+): { inImage: string; relative: string } | undefined {
+	// No path component at all: `PATH` decides, never the working directory.
+	if (!token.startsWith('/') && !token.includes('/')) return undefined;
+	const inImage = path.posix.resolve(imageWorkingDirectory, token);
+	const relative = path.posix.relative(imageWorkingDirectory, inImage);
+	// The working directory itself, or anything outside it - neither is a file the mount hides.
+	if (relative === '' || relative === '..' || relative.startsWith('../')) return undefined;
+	return { inImage, relative };
 }
 
 function readStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
@@ -1257,11 +1276,13 @@ export class DockerDriver implements Driver {
 
 	/**
 	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when that names a file
-	 * inside the working directory - Apify's Playwright base images start through `./xvfb-entrypoint.sh`
-	 * there - the bind mount hides it unless the dev folder happens to carry the same file, and the engine
-	 * refuses to start ("executable file not found"). Unless the dev folder provides it, the file is
-	 * taken from the image and the run starts through that copy, at a path no mount covers. Anything
-	 * `PATH`-resolved or absolute is left alone: the mount cannot hide it.
+	 * inside the working directory - Apify's Playwright base images start through an `xvfb-entrypoint.sh`
+	 * there, written relative in the Python one and absolute in the Node one - the bind mount hides it
+	 * unless the dev folder happens to carry the same file, and the engine refuses to start ("executable
+	 * file not found"). Unless the dev folder provides it, the file is taken from the image and the run
+	 * starts through that copy, at a path no mount covers. What the mount can and cannot hide is
+	 * `entryHiddenByDevMount`'s call, not a spelling rule: only a `PATH`-resolved bare name, or a path
+	 * outside the working directory, is left alone.
 	 */
 	private async preserveHiddenEntrypoint(
 		imageId: string,
@@ -1274,10 +1295,11 @@ export class DockerDriver implements Driver {
 		const field: PreservedEntrypoint['field'] = entrypoint.length > 0 ? 'Entrypoint' : 'Cmd';
 		const command = field === 'Entrypoint' ? entrypoint : (info.Config?.Cmd ?? []);
 		const first = command[0];
-		if (!first || !isWorkingDirectoryRelative(first)) return undefined;
-		if (await this.devFolderHasEntry(devMount.localDevFolder, first)) return undefined;
+		const hidden = first ? entryHiddenByDevMount(first, devMount.imageWorkingDirectory) : undefined;
+		if (!hidden) return undefined;
+		if (await this.devFolderHasEntry(devMount.localDevFolder, hidden.relative)) return undefined;
 
-		const inImage = path.posix.resolve(devMount.imageWorkingDirectory, first);
+		const inImage = hidden.inImage;
 		const archive = await this.extractFromImage(imageId, inImage);
 		const tarball = await repackUnderDirectory(archive, PRESERVED_ENTRYPOINT_DIR);
 		onLog(
