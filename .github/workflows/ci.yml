@@ -30,7 +30,8 @@ jobs:
         # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
         # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
         runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
-        timeout-minutes: 30
+        # `all-modes` also installs and compiles the Actor's sources on the runner, hence the wider budget.
+        timeout-minutes: ${{ matrix.file == 'all-modes' && 45 || 30 }}
         strategy:
             fail-fast: false
             # One job per e2e file and container engine. Each file starts its own runtime container on
@@ -50,6 +51,7 @@ jobs:
                     - nonstandard-actor
                     - browser-view-ts
                     - browser-view-py
+                    - all-modes
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v4
@@ -84,4 +86,28 @@ jobs:
                   cli=${{ matrix.engine == 'docker' && 'docker' || 'podman' }}
                   for c in $($cli ps -aq --filter name=actor-runtime-e2e); do
                     $cli logs --tail 300 "$c" || true
+                  done
+
+    e2e-arm64:
+        name: e2e actor-dev-loop (apify-cli + docker on arm64)
+        # The only arm64 coverage in CI: `release.yml` builds multi-arch but is dispatch-only, so an
+        # arm64 break would otherwise surface at release time. Native, so nothing here is emulated.
+        runs-on: ubuntu-24.04-arm
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            # Only this file: both Playwright base images are amd64-only, so the browser-based cases
+            # cannot run here at all.
+            - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
+            - name: Dump runtime container logs on failure
+              if: failure()
+              run: |
+                  for c in $(docker ps -aq --filter name=actor-runtime-e2e); do
+                    docker logs --tail 300 "$c" || true
                   done
