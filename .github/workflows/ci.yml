@@ -120,7 +120,12 @@ jobs:
                   brew install colima docker docker-buildx qemu
                   mkdir -p ~/.docker/cli-plugins
                   ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" ~/.docker/cli-plugins/docker-buildx
-                  colima start --cpu 3 --memory 8 --disk 20
+                  # The VM sometimes boots without cloud-init ever signalling completion, leaving
+                  # `colima start` waiting on `/run/lima-boot-done` until it gives up. One clean retry.
+                  colima start --cpu 3 --memory 8 --disk 20 || {
+                      colima delete --force || true
+                      colima start --cpu 3 --memory 8 --disk 20
+                  }
                   docker version
                   docker buildx version
                   docker info --format '{{.OperatingSystem}} / {{.Architecture}}'
