@@ -21,9 +21,8 @@ RUN pip download --no-deps --only-binary=:all: \
 	&& python3 -m zipfile -e "/tmp/wheel/debugpy-${DEBUGPY_VERSION}-py2.py3-none-any.whl" "/payload/root/${PAYLOAD_DIR}" \
 	&& rm -rf /tmp/wheel
 COPY docker/sitecustomize.py /payload/root/${PAYLOAD_DIR}/sitecustomize.py
-# World-writable (sticky, like /tmp): the payload is extracted into the Actor container as root, but
-# Apify's base images commonly run the Actor as a non-root user, who has to be able to create
-# `sitecustomize.py`'s start-marker file here.
+# World-writable (sticky, like /tmp): extracted into the Actor container as root, but the Actor itself
+# commonly runs as a non-root user, who must be able to create `sitecustomize.py`'s start-marker here.
 RUN chmod 1777 "/payload/root/${PAYLOAD_DIR}"
 # Read back from the extracted package rather than duplicating DEBUGPY_VERSION as a separate constant.
 RUN python3 -c "\

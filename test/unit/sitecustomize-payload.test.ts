@@ -1,18 +1,14 @@
 /**
- * Guards in `docker/sitecustomize.py` - the file injected into a Python debug run's container
- * (`actor-driver.md`'s "Debug mode" section). Run against a real `python3` with a *stub* `debugpy` that
- * imitates the one behavior that matters here: `debugpy.listen()` spawns debugpy's adapter as a child
- * Python process, started from inside the payload directory and inheriting the whole environment -
- * PYTHONPATH included, so the child imports `sitecustomize.py` again.
+ * Guards in `docker/sitecustomize.py`, the file injected into a Python debug run's container
+ * (`actor-driver.md`'s "Debug mode"). Run against a real `python3` with a stub `debugpy` that imitates
+ * the one behavior that matters: `listen()` spawns debugpy's adapter as a child Python, started from
+ * inside the payload directory and inheriting PYTHONPATH, so it imports `sitecustomize.py` again.
+ * Unguarded, that child starts debugpy too - endlessly, with the port never bound and the Actor never
+ * running. The marker file alone did not cover it: a non-root Actor user cannot create the marker in the
+ * root-owned payload directory, and the "try anyway" fallback then let every adapter start its own.
  *
- * Without a guard that child calls `listen()` too, spawning an adapter of its own, endlessly: the port
- * is never bound and the Actor's own code never runs. The start-marker file alone did not cover it -
- * Apify's base images commonly run the Actor as a non-root user, who cannot create the marker in the
- * root-owned payload directory, and the "could not create the marker, try anyway" fallback then let
- * every adapter start its own debugpy.
- *
- * No Docker here (`test.md`'s test layers): a temp directory plays the payload directory, and the
- * unwritable case is produced by dropping to an unprivileged uid when the suite itself runs as root.
+ * No Docker (`test.md`'s test layers): a temp directory plays the payload directory, and the unwritable
+ * case drops to an unprivileged uid when the suite itself runs as root.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -44,7 +40,7 @@ def _record(line):
 def listen(address):
     _record('listen {0}:{1}'.format(address[0], address[1]))
     # What the real debugpy does: a child Python whose argv[0] is inside the payload directory, with
-    # this process's environment (PYTHONPATH included) inherited wholesale.
+    # this process's environment inherited wholesale.
     subprocess.run([sys.executable, os.path.join(_HERE, 'adapter'), '--for-server'], check=True)
 
 
@@ -58,7 +54,7 @@ with open(os.environ['DEBUGPY_STUB_CALLS'], 'a') as handle:
     handle.write('adapter-ran\\n')
 `;
 
-let workDir: string;
+let workDir = '';
 
 interface PythonRun {
 	stdout: string;
@@ -67,7 +63,7 @@ interface PythonRun {
 	calls: string[];
 }
 
-/** Lays out a payload directory (`sitecustomize.py` + the stub `debugpy`) plus the Actor's own script. */
+/** A payload directory (`sitecustomize.py` + the stub `debugpy`) plus the Actor's own script. */
 function makePayload(): { payloadDir: string; actorScript: string; callsFile: string } {
 	workDir = mkdtempSync(join(tmpdir(), 'sitecustomize-test-'));
 	const payloadDir = join(workDir, 'payload');
@@ -79,12 +75,11 @@ function makePayload(): { payloadDir: string; actorScript: string; callsFile: st
 	writeFileSync(actorScript, "print('ACTOR CODE RAN')\n");
 	const callsFile = join(workDir, 'calls.txt');
 	writeFileSync(callsFile, '');
-	// Readable, traversable and (for the calls file) writable by whoever the Python below runs as -
-	// `nobody` when this suite runs as root.
+	// Readable by whoever the Python below runs as - `nobody` when this suite runs as root.
 	execFileSync('chmod', ['-R', 'a+rX', workDir]);
 	chmodSync(workDir, 0o755);
 	chmodSync(callsFile, 0o666);
-	// Writable by default, so the start-marker guard works; the unwritable case below locks it down.
+	// Writable by default; the unwritable case below locks it down.
 	chmodSync(payloadDir, 0o777);
 	return { payloadDir, actorScript, callsFile };
 }
@@ -93,7 +88,7 @@ function runPython(args: string[], payloadDir: string, callsFile: string, env: N
 	const result = spawnSync('python3', args, {
 		encoding: 'utf8',
 		timeout: 20_000,
-		// A fresh environment, not this process's: only what a debug run's container actually carries.
+		// A fresh environment: only what a debug run's container actually carries.
 		env: {
 			PATH: process.env.PATH ?? '/usr/bin:/bin',
 			PYTHONPATH: payloadDir,
@@ -119,7 +114,11 @@ describe('docker/sitecustomize.py: exactly one process in the container starts d
 	});
 
 	afterEach(() => {
-		if (workDir) rmSync(workDir, { recursive: true, force: true });
+		if (!workDir) return;
+		// The unwritable case leaves a directory its own owner cannot delete out of.
+		execFileSync('chmod', ['-R', 'u+rwX', workDir]);
+		rmSync(workDir, { recursive: true, force: true });
+		workDir = '';
 	});
 
 	it('starts debugpy once in the Actor process, and the adapter it spawns does not start another', () => {
@@ -135,13 +134,13 @@ describe('docker/sitecustomize.py: exactly one process in the container starts d
 
 	it('still starts debugpy exactly once when the start-marker cannot be created (non-root Actor image)', () => {
 		const { payloadDir, actorScript, callsFile } = makePayload();
-		// A root-owned, non-writable payload directory is what an Apify base image running the Actor as
-		// `myuser` sees - the marker guard is unavailable and the env-var guard is all that is left.
+		// What an image running the Actor as `myuser` sees: the marker guard is gone, the env flag is all
+		// that is left.
 		chmodSync(payloadDir, 0o555);
 
 		const run = runPython([actorScript], payloadDir, callsFile);
 
-		// Fails loudly rather than vacuously passing if the directory turned out to be writable after all.
+		// Fails loudly rather than passing vacuously if the directory turned out to be writable.
 		expect(run.stderr).toContain('could not create the debugpy start-marker');
 		expect(run.stderr).toContain(`debugpy is listening on 0.0.0.0:${PORT}`);
 		expect(run.stdout).toContain('ACTOR CODE RAN');
@@ -149,8 +148,7 @@ describe('docker/sitecustomize.py: exactly one process in the container starts d
 	});
 
 	it('is shipped in a payload directory a non-root Actor user can write the marker into', () => {
-		// The payload is extracted into the Actor container as root; Apify's base images commonly run the
-		// Actor as `myuser`, who still has to be able to create the start-marker beside this file.
+		// Extracted as root; a non-root Actor user still has to be able to create the marker beside it.
 		const dockerfile = readFileSync(join(REPO_ROOT, 'Dockerfile'), 'utf8');
 		expect(dockerfile).toMatch(/chmod 1777 "\/payload\/root\/\$\{PAYLOAD_DIR\}"/);
 	});
