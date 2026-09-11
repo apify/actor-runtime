@@ -12,6 +12,7 @@
 import type { ActorRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import type { DevFolderMount, Driver } from '../driver/types.js';
+import type { RuntimeLogLine } from '../runtime-log.js';
 
 /** Upper bound on a candidate path's length - generous enough that no genuine host path would ever hit
  * it, just a guard against pathological input. */
@@ -130,14 +131,25 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 	return { localDevFolder: actor.localDevFolder ?? null };
 }
 
-/** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails confusingly. */
-export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): string[] {
-	const red = (line: string) => `\x1b[1;31m${line}\x1b[0m`;
+/** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails
+ * confusingly. Emphasis (bold), not a color of its own: the color of a runtime line always means "the
+ * runtime wrote this", never a severity (`runtime-log.ts`), so these lines shout through the `!!`
+ * markers and bold instead. `services/runs.ts` renders them into the run's log. */
+export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): RuntimeLogLine[] {
 	return [
-		`Live dev folder: ${localDevFolder} (mounted over the image's working directory ${imageWorkingDirectory}; ` +
-			'node_modules preserved via a per-run volume)',
-		red('!! Running in `Live dev folder mode`: this run uses the local source files above, mounted over the'),
-		red('!! built Docker image. TS-based Actors require local compilation (e.g. `npm run build`) before the run.'),
-		red('!! To run purely from the built Docker image, use `apify call --no-dev-folder`.'),
+		{
+			text:
+				`Live dev folder: ${localDevFolder} (mounted over the image's working directory ${imageWorkingDirectory}; ` +
+				'node_modules preserved via a per-run volume)',
+		},
+		{
+			text: '!! Running in `Live dev folder mode`: this run uses the local source files above, mounted over the',
+			emphasis: true,
+		},
+		{
+			text: '!! built Docker image. TS-based Actors require local compilation (e.g. `npm run build`) before the run.',
+			emphasis: true,
+		},
+		{ text: '!! To run purely from the built Docker image, use `apify call --no-dev-folder`.', emphasis: true },
 	];
 }

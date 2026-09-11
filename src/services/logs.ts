@@ -4,6 +4,7 @@
  */
 import { getRegistries } from '../storage/registries.js';
 import { KeyedMutex } from '../storage/mutex.js';
+import { formatRuntimeLog } from '../runtime-log.js';
 
 interface LiveLog {
 	buffer: string[];
@@ -64,6 +65,16 @@ export function appendLog(id: string, chunk: string): void {
 	const stamped = stampLines(state, chunk);
 	state.buffer.push(stamped);
 	for (const subscriber of state.subscribers) subscriber(stamped);
+}
+
+/**
+ * `appendLog` for a message the runtime itself writes into a build/run log (not Actor output):
+ * prefixed and colored by `runtime-log.ts` so a reader can tell the two voices apart at a glance.
+ * Every runtime-authored message goes through here (or, in the driver, through `formatRuntimeLog`
+ * before its `onLog` callback) - Actor output is passed to `appendLog` untouched.
+ */
+export function appendRuntimeLog(id: string, text: string): void {
+	appendLog(id, formatRuntimeLog(text));
 }
 
 /** Returns an unsubscribe function. */

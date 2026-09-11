@@ -5,6 +5,15 @@
 - A build is produced by building a docker image from the Actor source that was pushed to the system.
 - Build and run output is persisted as the job's log and fanned out live to any open
   `GET /v2/logs/:id?stream=true` response.
+- **A log always says which lines are the runtime's own.** Everything the runtime writes into a build
+  or run log itself - dev-folder notices, the debug-mode attach line, the browser-view URL, the
+  migration/reboot markers, over-capacity warnings, Dockerfile resolution, and every pre-container
+  failure - carries an `[actor-runtime]` prefix and is rendered in blue (bold blue for emphasized
+  lines), one color for the runtime regardless of the message's severity. Output produced by the Actor
+  itself (and by `docker build`) is passed through byte for byte, colors included. The prefix is
+  textual, so the distinction survives a log read with its ANSI codes stripped; the per-line ISO
+  timestamp of the platform log format (`api.md`) stays outside the coloring, at the very start of the
+  line.
 - **Status state machine**: `READY -> RUNNING -> SUCCEEDED | FAILED | TIMED-OUT | ABORTED`, with
   `RUNNING -> ABORTING -> ABORTED` while a stop is in flight (`ABORTING`/`ABORTED` are also reachable
   directly from `READY` - an abort issued before the build/run ever started).
