@@ -123,6 +123,11 @@ jobs:
             # it in. No `--vm-type`/`--mount-type` is passed: Colima's Intel defaults (qemu + sshfs) are
             # the combination that works on this runner, and `virtiofs` is a `vz`-only mount type anyway.
             #
+            # `docker-buildx` is equally required: the `docker` formula is the CLI alone, and without the
+            # buildx plugin symlinked where the CLI looks for it, `docker build` silently falls back to the
+            # legacy builder - which does not understand `$BUILDPLATFORM` and fails our own Dockerfile on
+            # its first line ("invalid OS component"). Linux runners get BuildKit by default.
+            #
             # Sizes are bounded by the runner: `macos-15-intel` is 4 cores / 14 GB RAM / 14 GB SSD, so the
             # VM takes 3 of those cores and 8 GB and leaves the rest to macOS itself. The disk is sparse -
             # the number is a ceiling, not an allocation.
@@ -134,9 +139,12 @@ jobs:
             # as seen from *inside* the VM, which is not a socket the daemon can be reached through.
             - name: Start a container engine (Colima)
               run: |
-                  brew install colima docker qemu
+                  brew install colima docker docker-buildx qemu
+                  mkdir -p ~/.docker/cli-plugins
+                  ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" ~/.docker/cli-plugins/docker-buildx
                   colima start --cpu 3 --memory 8 --disk 20
                   docker version
+                  docker buildx version
                   docker info --format '{{.OperatingSystem}} / {{.Architecture}}'
             # The VM's own boot/hostagent logs, which `colima start` only ever points at by path.
             - name: Dump Colima VM logs on failure
