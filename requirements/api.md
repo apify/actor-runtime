@@ -131,147 +131,25 @@
 
 # Actor runtime API
 
-- `/actor-runtime/*` is the API controlling functions specific to the local Actor runtime: developer
-  conveniences (live dev folder, debug mode, browser view, migration emulation, upstream API fallback,
-  the per-run events channel) that the real Apify platform API has no counterpart for.
-- **The namespace has its own OpenAPI specification**, committed at `src/api/openapi/actor-runtime.json`.
-  That document is the normative contract for every endpoint in it - paths, methods, request bodies,
-  response payloads, per-rejection error `type`s, and worked examples. This file does not repeat it:
-  the sections below state only what OpenAPI cannot express (behaviour over time, cross-surface
-  consistency, and the guarantees the fallback and migration features rest on).
-- **The runtime serves that specification from itself**, so a client can enumerate what a given
-  runtime supports rather than hard-coding a list:
-    - **`GET /actor-runtime`** - the document in the usual `{data}` envelope, so it reads through
-      apify-client-js and therefore through `apify api GET /actor-runtime` (`cli.md`).
-    - **`GET /actor-runtime/openapi.json`** - the same document unenveloped, for OpenAPI tooling
-      pointed straight at the URL.
-    - Both are **unauthenticated**, unlike every other endpoint in the namespace: the document is
-      static, identical for every caller and carries no user data, so a client can identify a local
-      Actor runtime and enumerate its capabilities before it holds a token.
-    - The document's `info.version` is the runtime's own version.
-- Every endpoint in the namespace is served at both `/actor-runtime/*` (canonical) and
-  `/v2/actor-runtime/*` (the same routes, reachable a second way purely because `apify api` builds
-  every URL against a base that already ends in `/v2`). Neither mount is part of the emulated Apify
-  API, and neither is ever relayed upstream (see "Upstream fallback" below).
-- Every endpoint except the two specification endpoints above and the events websocket (below) is
-  **authenticated** the same way as every `/v2` route and **scoped to the caller's own** Actors/runs,
-  and none has a **build-first precondition** - a toggle can be set for an Actor that has never been built at all. The endpoints
-  that set a per-Actor toggle (dev folder, debug mode, browser view) have no separate `GET`: each
-  response body doubles as the read-back, and each call fully replaces the prior state rather than
-  merging into it.
-- **Anything under `/actor-runtime/*` that the specification does not describe is answered from the
-  specification**, never from the emulated platform surface:
-    - an undescribed path answers `404` `not-found`, with a message pointing at `GET /actor-runtime`;
-    - a described path addressed with an undescribed method answers `405` `method-not-allowed` with an
-      `Allow` header naming the methods it does have;
-    - a plain HTTP request to the events websocket path answers `426` `upgrade-required`.
-- The console's own dev-folder, debug-mode and browser-view forms (`console.md`) do **not** go through
-  these endpoints - they post to console-local, unauthenticated routes on the console's own port - but
-  the two surfaces accept and reject exactly the same inputs with the same outcomes.
-- **`POST /v2/actors/:actorId/runs?devFolder=false`** - runs from the built image alone, ignoring the
-  registered dev folder for that one run only; the registration itself is unchanged. Any other value,
-  or no parameter, means the default behaviour. A runtime-only query parameter on an otherwise
-  faithful platform endpoint, so it lives on the platform surface rather than in this namespace; the
-  specification lists it under `x-actor-runtime-platform-extensions` so a client enumerating the
-  document still sees it.
-- **The events websocket** (`GET /actor-runtime/events/:runId`) carries the run's platform events:
-  `systemInfo` once a second (`actor-driver.md`), a one-off `aborting`-plus-`persistState` pair under
-  `?gracefully=` (below), and a one-off `migrating` frame when a migration is triggered ("Migration
-  emulation" below). It is reachable at exactly this one path on the fixed API port (`system.md`).
-    - The endpoint has no authentication. The run id in the path is the only thing it scopes on, and a
-      connection only ever receives that run's own frames; one run never sees another's.
-    - An unknown or already-terminal run id gets a completed upgrade followed immediately by a `1008`
-      close with a reason, never a non-101 HTTP status - the Python SDK treats a refused first connection
-      as fatal to the Actor.
-    - A connection to a live run stays open until the run ends, when the server closes it with `1000`. It
-      is never dropped while healthy, except that a graceful runtime shutdown terminates every open
-      connection along with the rest of the server. A migration/reboot restart is not the run ending: the
-      restarted container reconnects to the same path.
-    - The _periodic_ `persistState` is never sent over this channel; both SDKs generate it themselves.
-      The server sends `persistState` exactly once per graceful abort, alongside `aborting` (matching the
-      platform), and never alongside `migrating` (the SDKs synthesize that one).
-
-## Graceful abort (`?gracefully=`)
-
-- `POST /v2/actor-runs/:runId/abort` accepts an optional `?gracefully=` boolean.
-- Omitted or `false`: the run aborts immediately.
-- `true` on a running run: the record moves to `ABORTING` at once, an `aborting` frame plus a
-  `persistState {"isMigrating": false}` frame (in that order, matching the platform) are published on
-  the run's events channel, and the container is stopped 30 seconds later. The request stays open until
-  then.
-- `true` on a run with no container (still `READY`, or already terminal): behaves as if omitted.
-- A second abort arriving during an open window: another `?gracefully=true` joins that window and neither
-  restarts it nor stops the container early; a non-graceful one escalates and stops the container at once.
-
-## Migration emulation (`POST /actor-runtime/migrate/:runId`) and reboot
-
-A platform migration is not a run status: the run stays `RUNNING` while its container is killed and a
-new one starts for the same run - same run id, env vars, and default storages, in-memory state gone.
-This runtime emulates that observable experience on demand:
-
-- **`POST /actor-runtime/migrate/:runId`** (also at `/v2/actor-runtime/migrate/:runId`) - authenticated
-  like the rest of this namespace, scoped to the caller's own runs. The console's run detail view
-  exposes the same trigger as a Migrate button (`console.md`).
-    - Publishes a `migrating` frame (empty payload) on the run's events channel immediately, stops the
-      container 5 seconds later (the platform promises only "a few seconds"), then restarts the same
-      run. Status stays `RUNNING`; `startedAt`, `finishedAt`, `exitCode`, the default storage ids, and
-      the container env are unchanged. `stats.migrationCount` increments once per performed stop.
-    - Responds immediately with the run object (same shape as `abort`/`reboot`). A second call during
-      the open window joins it: same response, no second frame or window.
-    - The timeout budget is per run, not per container: a restarted container gets only the remaining
-      `timeoutSecs`.
-    - An abort (graceful or hard) landing during the window or restart wins: the run ends `ABORTED`,
-      never restarted.
-- **`POST /v2/actor-runs/:runId/reboot`** - the real platform endpoint the SDKs call from their default
-  `migrating` handler. Stops and restarts the run's container immediately (no warning frame), cancels an
-  open migration window, and increments `stats.rebootCount`. A finished run is `403` `job-finished`; a
-  non-terminal run with no container (`READY`, `ABORTING`) gets the count bump but no restart.
-- The run object's `stats` carries `migrationCount`, `rebootCount`, `restartCount`, and `resurrectCount`
-  (the latter two always `0` here), initialized to `0` at run creation like the platform.
-- The run's log is cumulative across restarts, with a one-line marker between the incarnations' output.
-
-## Upstream fallback (opt-in, off by default, all HTTP methods)
-
-- Two independent booleans, `fallbackUnimplementedEnabled` and `fallbackNotFoundEnabled`, gate whether
-  a request this runtime cannot satisfy locally is instead relayed to the real Apify platform. Both
-  default to `false`, and a restart always brings both back to `false`, regardless of how they were
-  last set. Either can be on without the other; all four combinations are valid.
-- **`GET`/`POST /actor-runtime/api-fallback`** read and change that state; the request and response
-  shapes are in the specification. `POST` is a partial update - a field the body doesn't mention keeps
-  its current value - and is the only way to change the state: `upstreamBaseUrl` is reported on every
-  response for visibility but is read-only (it is the platform this runtime would relay to,
-  `https://api.apify.com` by default, or the value of `APIFY_UPSTREAM_API_BASE_URL`). A rejected body
-  changes nothing, not even the fields that would have passed on their own.
-- **Which local outcome each toggle covers** (exhaustive - every other error response is never
-  eligible, under any toggle combination):
-    - `fallbackUnimplementedEnabled` covers a request the runtime does not serve at all: a local `404`
-      or `501` response (see "501 vs 404" above). From the caller's point of view both mean "nothing
-      local answers this", so one toggle covers both.
-    - `fallbackNotFoundEnabled` covers a request that reaches a route this runtime does serve, but
-      whose specific record id doesn't exist locally (`record-not-found`, see "Response envelopes"
-      above).
-    - Every other error type - `invalid-request`, `user-not-authenticated`,
-      `cannot-remove-running-run`, `deleting-unfinished-build`, any `dev-folder-*` type,
-      `internal-error` - is never relayed, regardless of either toggle's state.
-- **All HTTP methods are eligible for both toggles, writes included**: a `POST`/`PUT`/`DELETE` that
-  would otherwise 404/501 locally is relayed exactly like a `GET` when its toggle is on - and, if the
-  platform accepts it, becomes a real write against the caller's real account. This is a deliberate
-  consequence of opting in, not an oversight. An eligible request reaches the platform at most once, so
-  a relayed write is never duplicated.
-- **A successful relay** returns the platform's response status and body to the caller unchanged,
-  marked with two response headers: `x-actor-runtime-fallback: <upstreamBaseUrl>` naming which platform
-  served it, and `x-actor-runtime-fallback-trigger: unimplemented` or `record-not-found` naming which
-  toggle let it through. Only a final `2xx` status counts as successful.
-- **Fail-closed guarantee**: anything else - a non-`2xx` response, a timeout, or the platform being
-  unreachable - reproduces the exact response the caller would have gotten with both toggles off: the
-  original local error, unchanged, with neither marker header present. The platform's own status or
-  body is never surfaced to the caller.
-- **Only the caller's own presented token is ever forwarded.** A relayed request's `Authorization`
-  header is always the exact bearer token the caller themselves sent on that request - never a
-  different or runtime-internal credential, and never sent at all for a request this runtime didn't
-  authenticate. Enabling either toggle therefore means the caller's own Apify token reaches the
-  configured `upstreamBaseUrl` on every eligible request; this is the risk being opted into.
-- **Never enriches a call that already succeeds locally**: a collection/list endpoint (e.g.
-  `GET /v2/datasets`) that already returns `200` from local data never consults either toggle and never
-  gains platform objects. Fallback only ever resolves an otherwise-failing request; it does not make a
-  local listing "complete".
+- `/actor-runtime/*` is the local-runtime-only API: the developer conveniences the Apify platform has no
+  counterpart for - live dev folder, debug mode, browser view, migration emulation, upstream API
+  fallback, and the per-run events channel.
+- **`src/api/openapi/actor-runtime.json` is the specification for all of it**, and it is normative:
+  every path, method, request body, response payload, error type and behaviour is stated there and
+  deliberately not restated here. It also carries, under `x-actor-runtime-platform-notes`, what this
+  runtime adds to a few otherwise faithful platform endpoints - `?devFolder=false` on run start,
+  `?gracefully=` on abort, and reboot.
+- The runtime serves that document at `GET /actor-runtime` (`{data}`-enveloped, so `apify api` reads it)
+  and at `GET /actor-runtime/openapi.json` (bare, for OpenAPI tooling). Both are unauthenticated, so a
+  client can enumerate a runtime before it holds a token (`cli.md`).
+- Every endpoint in the namespace is served at both `/actor-runtime/*` and `/v2/actor-runtime/*` - the
+  same routes, the second mount existing only because `apify api` builds every URL against a base that
+  already ends in `/v2`. Neither mount is part of the emulated Apify API, and nothing under either is
+  ever relayed upstream.
+- A request under `/actor-runtime/*` that the document does not describe is answered from the document,
+  never from the emulated platform surface: `404` `not-found` for an undescribed path (the message names
+  `GET /actor-runtime`), `405` `method-not-allowed` with an `Allow` header for an undescribed method on a
+  described path, and `426` `upgrade-required` for a plain HTTP request to the events websocket path.
+- The console's own dev-folder, debug-mode and browser-view forms (`console.md`) do not go through these
+  endpoints - they post to console-local, unauthenticated routes on the console's own port - but the two
+  surfaces accept and reject exactly the same inputs with the same outcomes.

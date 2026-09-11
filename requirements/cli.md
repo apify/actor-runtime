@@ -84,7 +84,7 @@
   `apify-cli` fetches its actor-templates manifest from the internet. Every later
   push/call/log-stream/storage-access, and every build of an already-pulled base image, needs no
   outbound network access (see `system.md`'s offline-after-first-build note) - unless the opt-in
-  upstream API fallback is enabled (`api.md`, "Upstream fallback"), in which case an eligible local
+  upstream API fallback is enabled (`api.md`, and the `api-fallback` operation in the runtime API specification it references), in which case an eligible local
   miss makes one outbound request to the configured upstream instead of failing offline.
 - The bundled sample Actors crawl the live web (`https://crawlee.dev/` by default), so an `apify call`
   that runs one of them needs outbound network access from the Actor container even though the

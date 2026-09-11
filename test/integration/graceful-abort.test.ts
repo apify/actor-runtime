@@ -1,5 +1,5 @@
 /**
- * `?gracefully=` abort contract (`requirements/api.md`'s "Graceful abort" section,
+ * `?gracefully=` abort contract (the abort entry in `src/api/openapi/actor-runtime.json`'s `x-actor-runtime-platform-notes`,
  * `GRACEFUL_ABORT_WINDOW_MS = 30000`): the `aborting` frame published before the fixed wait,
  * `driver.abortRun` withheld until the window elapses, the omitted/`false` path staying byte-identical to
  * an immediate abort, best-effort behavior with nobody connected, the READY-state and already-terminal
@@ -146,7 +146,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 		await server.close();
 	});
 
-	describe('graceful abort (?gracefully= contract per requirements/api.md "Graceful abort" section, GRACEFUL_ABORT_WINDOW_MS = 30000)', () => {
+	describe('graceful abort (?gracefully= contract per the platform notes in the runtime API specification, GRACEFUL_ABORT_WINDOW_MS = 30000)', () => {
 		afterEach(() => {
 			vi.useRealTimers();
 		});
@@ -219,7 +219,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 
 			const abortPromise = abortRun(driver, record, true);
 
-			// requirements/api.md's "Graceful abort" section: ABORTING lands immediately - observable well
+			// The specification's abort platform note: ABORTING lands immediately - observable well
 			// before the 30s window elapses - and the aborting frame is published before the wait, not
 			// after it. Waiting for the wait's own `setTimeout` to actually be scheduled is what proves both
 			// already happened, since both come strictly before it in `abortRun`'s own code.
@@ -432,7 +432,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 			// every other graceful-abort test in the "graceful abort" section above.
 			const abortPromise = server.client.run(started.id).abort({ gracefully: true });
 
-			// requirements/api.md's "Graceful abort" section: ABORTING lands immediately - observable over
+			// The specification's abort platform note: ABORTING lands immediately - observable over
 			// the same real HTTP client, well before the HTTP response itself resolves. Polled in real time
 			// (not via `waitForPendingTimer`):
 			// `apify-client`'s own request pipeline can register an incidental `setTimeout` of its own before
@@ -466,7 +466,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 			unsubscribe();
 		});
 
-		it('POST .../abort with no gracefully parameter, over the same real HTTP round trip, still returns immediately with no wait (matches requirements/api.md\'s "omitted, or false" graceful-abort behavior end to end, not just at the service layer)', async () => {
+		it('POST .../abort with no gracefully parameter, over the same real HTTP round trip, still returns immediately with no wait (matches the specification\'s "omitted or false" graceful-abort behavior end to end, not just at the service layer)', async () => {
 			const driver = deferredRunDriver();
 			server = await startTestServer(driver);
 			const actor = await seedActor(server, 'immediate-http-actor');

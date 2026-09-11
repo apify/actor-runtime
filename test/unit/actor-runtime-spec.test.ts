@@ -90,6 +90,22 @@ describe('the Actor runtime OpenAPI document', () => {
 		}
 	});
 
+	it('lists the platform endpoints this runtime extends, so nothing local is left undescribed', () => {
+		const notes = (ACTOR_RUNTIME_OPENAPI as unknown as Record<string, unknown>)[
+			'x-actor-runtime-platform-notes'
+		] as Array<Record<string, string>>;
+
+		expect(notes.map((note) => `${note.method} ${note.path}`)).toEqual([
+			'POST /v2/actors/{actorId}/runs',
+			'POST /v2/actor-runs/{runId}/abort',
+			'POST /v2/actor-runs/{runId}/reboot',
+		]);
+		for (const note of notes) {
+			expect(note.summary).toBeTruthy();
+			expect(note.description).toBeTruthy();
+		}
+	});
+
 	it('marks the events endpoint as the one websocket transport', () => {
 		const websocketPaths = ACTOR_RUNTIME_OPERATIONS.filter((operation) => operation.transport === 'websocket').map(
 			(operation) => operation.path,
