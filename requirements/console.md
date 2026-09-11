@@ -42,7 +42,7 @@
   This field is local-only and never appears in the emulated `/v2` run object (`api.md`).
 - A run with browser view (`actor-driver.md`) gets one extra row on its detail view: `browser view` - a
   link to its viewer page (below). Absent for other runs; never in the emulated `/v2` run object.
-- Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself. The runtime's own log lines (`actor-driver.md`) keep their blue there too, so the same runtime/Actor distinction reads the same in the console and in a terminal.
+- Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself.
 - The console accepts the real Apify Console's URL shapes (as printed by stock apify-cli, e.g. `/actors/:actorId/runs/:runId`, `/storage/datasets/:id`) via redirects to its own pages.
 
 ## Local dev-folder registration form (Actor detail view)

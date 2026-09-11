@@ -335,7 +335,7 @@ describe('per-Actor debug mode: pause, published port, and abort while paused (r
 				30_000,
 				'sitecustomize.py\'s own "listening" line to appear in the run log',
 			);
-			expect(sitecustomizeLog).toContain('[actor-runtime debug] debugpy is listening on 0.0.0.0:5678');
+			expect(sitecustomizeLog).toContain('[actor-runtime] debugpy is listening on 0.0.0.0:5678');
 			// No user code has run yet - not even the Actor's own first log line.
 			expect(sitecustomizeLog).not.toContain('Resources granted');
 			expect(sitecustomizeLog).not.toContain('Crawling up to');

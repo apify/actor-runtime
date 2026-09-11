@@ -856,11 +856,13 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		const runtimeLines = lines.filter((line) => line.includes(RUNTIME_LOG_PREFIX));
 		expect(runtimeLines.length).toBe(lines.length - 1);
 		for (const line of runtimeLines) {
-			// Timestamp first, then the color, then the prefix: the platform's log format (api.md) stays
-			// intact - a client's log redirection still sees the stamp at the very start of the line.
-			// eslint-disable-next-line no-control-regex
-			expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \x1b\[(?:34|1;34)m\[actor-runtime\] /);
-			expect(line.endsWith('\x1b[0m')).toBe(true);
+			// Timestamp first, then the colored marker, then the message: the platform's log format
+			// (api.md) stays intact - a client's log redirection still sees the stamp at the very start
+			// of the line, and the coloring covers the marker only.
+			expect(line).toMatch(
+				// eslint-disable-next-line no-control-regex
+				/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \x1b\[(?:34|1;34)m\[actor-runtime\]\x1b\[0m /,
+			);
 		}
 
 		const actorLine = lines.find((line) => line.endsWith('done'))!;
