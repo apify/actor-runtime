@@ -134,7 +134,10 @@ container start, not by any run already in progress. `node_modules` inside the c
 from the built image - a per-run volume preserves it underneath the bind mount - so a new dependency
 in `package.json` still needs a real `apify push`/build; only source edits skip it. An entrypoint script
 the image keeps in its working directory (Apify's Playwright images start through an Xvfb wrapper there)
-stays available too, unless your folder carries its own copy. Clear the
+stays available too, unless your folder carries its own copy. The mount lands on whatever working
+directory your own image has - it is read from the built image, never assumed - so an image that sets
+none at all (no `WORKDIR`, or `/`) leaves nothing to mount over: such a run starts normally and says in
+its log why the folder you registered was not mounted, rather than ignoring it silently. Clear the
 registration with an empty body (`--body '""'`) to go back to running purely from the built image, or
 skip it for a single run with `apify call --no-dev-folder` (the raw form is
 `POST /v2/actors/<actorId>/runs?devFolder=false`, which the run's log then records). Full
@@ -233,6 +236,11 @@ pnpm test          # unit + integration (no Docker needed)
 pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker, or Podman with CONTAINER_CLI=podman; the browser-view case pulls the ~2 GB Playwright base image)
 pnpm run dev       # run the server directly against ./data with tsx
 ```
+
+The bundled `sample_actor_*` folders are the Actors the e2e suite drives. `sample_actor_nonstandard` is
+the deliberately odd one - a stock `python:3.11-slim` base image with no Apify SDK, a Dockerfile in
+neither default location, its own non-root user, a custom entry point and a working directory of its
+own - and exists to keep the runtime honest about Actors it did not shape (`sample_actor_nonstandard/README.md`).
 
 `pnpm run dev` sets `ACTOR_RUNTIME_DATA_DIR=./data` inline in the script (`DEFAULT_DATA_DIR` otherwise
 falls back to the container path `/data` - see `src/config.ts`); this only works as written on a

@@ -24,7 +24,7 @@
   `CONTAINER_CLI` and `DOCKER_HOST`. CI runs every e2e file, browser view included, against Docker and
   against both the oldest and the newest supported Podman.
 - The sample Actors crawl a live site (`https://crawlee.dev/` by default), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
-- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls the two Playwright samples' base images itself.
+- CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls the two Playwright samples' base images itself, and the non-standard-Actor e2e test pre-pulls its own two (`python:3.11-slim`, `busybox`) instead of the sample Actors' - it builds against neither.
 
 ## Actor full dev loop
 
@@ -34,6 +34,27 @@ Test case must verify full Actor development flow:
 - Push and build Actor in local actor runtime `apify push`
 - Run each sample Actor in the local actor runtime with `apify call --input '{"maxPages":N}'` for at least two different values of `N`, waiting for each run to finish
 - Assert via `apify datasets info <default dataset id>` that the default dataset's `itemCount` tracks `N` - the assertion is input-dependent, not just "some items exist"
+
+## Non-standard Actors
+
+Actors that do not look like those created from an Apify template must work exactly like the ones that
+do. Covered with a sample Actor (`sample_actor_nonstandard`) that combines every difference at once - an
+unusual base image (a stock `python:3.11-slim`, with no Apify SDK installed at all: the Actor drives the
+runtime's API over plain HTTP from the standard library), a Dockerfile in neither default location
+(found only through `.actor/actor.json`'s `dockerfile` field), a working directory that is not
+`/usr/src/app`, the image's own non-root user, and a custom entry point (`ENTRYPOINT` naming a shell
+script inside the working directory, with the Actor's command line in `CMD`):
+
+- Push, build, and call it with at least two different inputs; assert the default dataset's `itemCount`
+  tracks the input, the build log names the Dockerfile it resolved, and the run log shows the custom
+  entry point running, in the image's own working directory, as the image's own user
+- Assert the dev-folder bind mount lands on that image's own working directory, with the custom entry
+  point started from the dev folder's copy when it has one and from the image's own copy when it does not
+- With an image that has no working directory at all, assert the run is unaffected and that a dev folder
+  registered for it is reported as unmountable in the run's log rather than silently ignored
+- Assert debug mode classifies such an image from the image itself (its command names a shell script,
+  not an interpreter), pauses the run, and publishes the port, with the injected payload working under
+  the image's own non-root user
 
 ## Browser view
 

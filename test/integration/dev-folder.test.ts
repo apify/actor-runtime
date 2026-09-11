@@ -911,6 +911,38 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		});
 	});
 
+	it('an Actor with a registered folder whose resolved build has NO working directory gets devMount: undefined, and the run says why rather than ignoring the registration silently', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-no-working-directory-actor' });
+		// A build whose image recorded no working directory at all - what a non-standard image that sets
+		// no `WORKDIR` (or sets it to `/`) produces (`docker-driver.ts: inspectWorkingDirectory`).
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		expect(run.status).toBe('SUCCEEDED');
+		// The container still starts exactly as if the feature did not exist...
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		const log = await server.client.log(run.id).get();
+		// ...but the outcome is not silent.
+		expect(log).toContain('Not mounting the registered local dev folder /abs/dev/src for this run');
+		expect(log).toContain('has no working directory of its own');
+		expect(log).not.toContain('Live dev folder mode');
+	});
+
+	it('an unregistered Actor whose build has no working directory says nothing about dev folders at all', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-no-working-directory-unregistered' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		expect(await server.client.log(run.id).get()).not.toContain('Not mounting the registered local dev folder');
+	});
+
 	it("a run against a non-latest tag mounts at that tag's OWN build working directory, not latest's", async () => {
 		const capturing = devMountCapturingDriver();
 		server = await startTestServer(capturing.driver);
@@ -993,6 +1025,21 @@ describe('per-run opt-out: POST /v2/actors/:actorId/runs?devFolder=false (servic
 			imageWorkingDirectory: '/usr/src/app',
 		});
 		expect(await server.client.log(run.id).get()).not.toContain('Skipping the registered local dev folder');
+	});
+
+	it('devFolder=false on an Actor whose build has no working directory says nothing either - that run was never going to mount anything', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-optout-no-working-directory' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await startRunRaw(server, actor.id, 'devFolder=false');
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		const log = await server.client.log(run.id).get();
+		expect(log).not.toContain('Not mounting the registered local dev folder');
+		expect(log).not.toContain('Skipping the registered local dev folder');
 	});
 
 	it('devFolder=false on an Actor with nothing registered is a plain run - no mount, and no "skipping" line either', async () => {

@@ -1,5 +1,5 @@
 import { generateId } from '../storage/ids.js';
-import { liveDevFolderWarningLines } from './dev-folder.js';
+import { liveDevFolderWarningLines, unknownWorkingDirectoryLine } from './dev-folder.js';
 import type { ActorRecord, ActorVersionRecord, BuildRecord, JobStatus, RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
@@ -305,6 +305,13 @@ export async function runInBackground(
 			`Skipping the registered local dev folder ${devMountApplicable.localDevFolder} for this run ` +
 				`(started with devFolder=false) - running from the built image alone.`,
 		);
+	}
+	// A registered folder the run cannot mount because this run's own build has no working directory to
+	// mount it over (a non-standard image that sets no `WORKDIR`, or sets it to `/`). The container still
+	// starts exactly as if the feature did not exist - only the silence is fixed. Not reported when the
+	// run opted out anyway (`devFolder=false`): that run was never going to mount anything.
+	if (actor.localDevFolder && !build.imageWorkingDirectory && options.devFolder !== false) {
+		appendRuntimeLog(record.id, unknownWorkingDirectoryLine(actor.localDevFolder));
 	}
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
 	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));

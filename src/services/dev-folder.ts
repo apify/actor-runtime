@@ -131,6 +131,23 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 	return { localDevFolder: actor.localDevFolder ?? null };
 }
 
+/**
+ * The line a run prints when the Actor HAS a registered dev folder but this run's own resolved build
+ * recorded no working directory for its image - the `imageWorkingDirectory` half of the both-or-neither
+ * pair (`actor-driver.md`'s "Bind mount volumes with Actor source code"). The container still starts
+ * exactly as if the feature did not exist; this line exists so that outcome is never silent, which is
+ * what a non-standard image (one that sets no `WORKDIR` at all, or sets it to `/`) would otherwise
+ * produce: a registration that reads back fine and a run that quietly ignores it.
+ */
+export function unknownWorkingDirectoryLine(localDevFolder: string): string {
+	return (
+		`Not mounting the registered local dev folder ${localDevFolder} for this run: the image of the build ` +
+		`this run resolved has no working directory of its own (its Dockerfile sets no WORKDIR, or sets it to ` +
+		`/), and a mount needs one. Give the Actor's Dockerfile a WORKDIR and rebuild to use the live dev ` +
+		`folder, or clear the registration with an empty-string body to stop seeing this line.`
+	);
+}
+
 /** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails
  * confusingly. Loud through `!!` and bold, not a color of its own (`runtime-log.ts`). */
 export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): RuntimeLogLine[] {

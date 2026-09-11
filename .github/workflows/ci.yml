@@ -47,6 +47,7 @@ jobs:
                     - actor-dev-loop
                     - debug-mode
                     - dev-folder-bind-mount
+                    - nonstandard-actor
                     - browser-view-ts
                     - browser-view-py
         steps:
