@@ -1,8 +1,5 @@
-/**
- * Polls `check` until it returns a defined value or `timeoutMs` elapses. An async `check` is `await`ed,
- * so it is genuinely retried on each poll; one that throws is retried too, not propagated.
- * `debug-mode.test.ts` carries the Docker-free self-check pinning both properties.
- */
+/** Polls `check` until it returns a defined value or `timeoutMs` elapses. An async `check` is `await`ed,
+ * so it is genuinely retried; one that throws is retried too. Self-checked in `debug-mode.test.ts`. */
 export async function waitFor<T>(
 	check: () => T | undefined | Promise<T | undefined>,
 	timeoutMs: number,

@@ -1039,7 +1039,6 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		stub.endLogStream();
 		await outcomePromise;
 
-		// Relative to the mount target, resolved from the token - not the token as the image spelled it.
 		expect(hasEntry).toHaveBeenCalledWith('/host/src', 'xvfb-entrypoint.sh');
 		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/usr/src/app/xvfb-entrypoint.sh' });
 		// Two containers: the throwaway one the file is read from, then the run's own.
@@ -1057,9 +1056,8 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		expect(logged.join('')).toContain('starts through ./xvfb-entrypoint.sh in its working directory');
 	});
 
-	// `apify/actor-node-playwright-chrome` spells its entrypoint `/home/myuser/xvfb-entrypoint.sh` with
-	// `WorkingDir` `/home/myuser` - absolute, and squarely inside the mount target. Treating "absolute" as
-	// "out of the mount's reach" left its runs dying with "executable file not found".
+	// `apify/actor-node-playwright-chrome` spells this one absolute, inside the mount target; treating
+	// "absolute" as "out of the mount's reach" left its runs dying with "executable file not found".
 	it('an ABSOLUTE entrypoint that points inside the working directory is hidden by the mount just like a relative one, and is preserved the same way', async () => {
 		const stub = stubDockerForRun();
 		stub.imageInspect.mockResolvedValue({
@@ -1093,14 +1091,13 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 	});
 
 	it('the dev folder providing the file itself, an entrypoint outside the working directory, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
-		// `workingDirectory` is what the run mounts over, which is what the decision is made against.
 		for (const { config, workingDirectory, devFolderHasIt } of [
 			{
 				config: { Entrypoint: ['./xvfb-entrypoint.sh'] },
 				workingDirectory: '/usr/src/app',
 				devFolderHasIt: true,
 			},
-			// Hidden by the mount, but the dev folder carries its own copy - the image's is not needed.
+			// Hidden, but the dev folder carries its own copy.
 			{
 				config: { Entrypoint: ['/home/myuser/xvfb-entrypoint.sh'] },
 				workingDirectory: '/home/myuser',
@@ -1111,8 +1108,8 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 				workingDirectory: '/usr/src/app',
 				devFolderHasIt: false,
 			},
-			// A sibling directory whose name merely starts with the working directory's - a prefix match on
-			// the raw strings would wrongly call this hidden.
+			// A sibling whose name merely starts with the working directory's - a raw prefix match would
+			// wrongly call this hidden.
 			{
 				config: { Entrypoint: ['/usr/src/app-tools/xvfb-run'] },
 				workingDirectory: '/usr/src/app',

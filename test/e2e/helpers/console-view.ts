@@ -1,14 +1,9 @@
 import WebSocket from 'ws';
 
-/** The console's own base URL, as `startRuntimeContainer` publishes it. */
 export const CONSOLE_URL = 'http://localhost:3000';
 
-/**
- * Resolves with the first bytes the viewer websocket delivers: x11vnc's `ProtocolVersion` greeting
- * (`RFB 003.008\n`), proof that the bridge reached a live VNC server mirroring the run's display. The
- * bridge re-dials the sidecar itself until the Actor's Xvfb is up, so the timeout only bounds that wait.
- * `requirements/test.md`'s documented browser-view exception to the CLI-only rule.
- */
+/** Resolves with x11vnc's `ProtocolVersion` greeting - proof the bridge reached a live VNC server
+ * mirroring the run's display. `test.md`'s documented exception to the CLI-only rule. */
 export function readMirrorGreeting(runId: string, timeoutMs: number): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const ws = new WebSocket(`${CONSOLE_URL.replace('http', 'ws')}/runs/${runId}/browser/ws`);

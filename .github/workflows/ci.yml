@@ -30,8 +30,7 @@ jobs:
         # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
         # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
         runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
-        # `all-modes` gets a wider budget than the rest: it is the only file that pushes a Playwright
-        # Actor AND installs and compiles that Actor's sources on the runner before it can run anything.
+        # `all-modes` also installs and compiles the Actor's sources on the runner, hence the wider budget.
         timeout-minutes: ${{ matrix.file == 'all-modes' && 45 || 30 }}
         strategy:
             fail-fast: false
@@ -90,20 +89,13 @@ jobs:
 
     e2e-macos:
         name: e2e actor-dev-loop (apify-cli + docker on macOS)
-        # `system.md` lists macOS as a supported host; until now nothing verified it, so every macOS
-        # regression had to be found by hand. This leg runs the mandated dev-loop e2e - push, build, call,
-        # input-dependent item count - against a real engine on a real macOS host.
+        # `system.md` lists macOS as a supported host, and nothing verified it until now.
         #
-        # The INTEL runner, deliberately - do not "modernize" this to `macos-15`/`macos-latest`. A
-        # container engine on macOS means a Linux VM, and GitHub's Apple silicon runners are themselves
-        # VMs on which Apple's Virtualization.framework is unavailable, so `colima start` there dies with
-        # `VZErrorDomain Code=2 "Virtualization is not available on this hardware."` before any container
-        # exists. GitHub documents the same ("Nested-virtualization is not supported due to the limitation
-        # of Apple's Virtualization Framework"). `macos-15-intel` is a standard-tier runner too, with more
-        # RAM and cores, and Colima's own CI runs there.
+        # The INTEL runner, deliberately - do not "modernize" this to `macos-15`/`macos-latest`. An engine
+        # on macOS needs a Linux VM, and Apple silicon runners have no virtualization available at all:
+        # `colima start` there dies with `VZErrorDomain Code=2` before any container exists.
         runs-on: macos-15-intel
-        # A macOS runner has no engine preinstalled, so this job pays for a Linux VM boot on top of
-        # everything the Linux legs do, and runs the suite against a QEMU-hosted daemon.
+        # No engine is preinstalled, so this job also pays for a VM boot and runs against a QEMU daemon.
         timeout-minutes: 90
         steps:
             - uses: actions/checkout@v4
@@ -113,30 +105,16 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # Colima is how a Mac gets a Docker-Engine-API daemon without Docker Desktop's licensing: a
-            # Lima-managed Linux VM plus the stock `docker` CLI, which `colima start` also points at it by
-            # creating and selecting a `colima` docker context.
+            # Both extra formulae are load-bearing. `qemu` is Colima's VM driver on Intel and the source
+            # of the `qemu-img` it shells out to for disks; nothing else pulls it in since Lima dropped the
+            # dependency. `docker-buildx` is needed because the `docker` formula is the CLI alone, and
+            # without the plugin `docker build` falls back to the legacy builder, which cannot expand
+            # `$BUILDPLATFORM` and fails our Dockerfile's first line.
             #
-            # `qemu` is a real dependency here, not a convenience: it is both Colima's VM driver on Intel
-            # (Hypervisor.framework-accelerated) and the source of the `qemu-img` Colima shells out to for
-            # its disks - and since Lima dropped its own qemu dependency, no formula installed above pulls
-            # it in. No `--vm-type`/`--mount-type` is passed: Colima's Intel defaults (qemu + sshfs) are
-            # the combination that works on this runner, and `virtiofs` is a `vz`-only mount type anyway.
-            #
-            # `docker-buildx` is equally required: the `docker` formula is the CLI alone, and without the
-            # buildx plugin symlinked where the CLI looks for it, `docker build` silently falls back to the
-            # legacy builder - which does not understand `$BUILDPLATFORM` and fails our own Dockerfile on
-            # its first line ("invalid OS component"). Linux runners get BuildKit by default.
-            #
-            # Sizes are bounded by the runner: `macos-15-intel` is 4 cores / 14 GB RAM / 14 GB SSD, so the
-            # VM takes 3 of those cores and 8 GB and leaves the rest to macOS itself. The disk is sparse -
-            # the number is a ceiling, not an allocation.
-            #
-            # DOCKER_HOST is deliberately NOT set. The suite mounts the host engine's socket into the
-            # runtime container (`helpers/docker.ts`), and a `-v` source is resolved by the daemon - i.e.
-            # inside the VM, where the socket is at the default `/var/run/docker.sock`. Pointing the suite
-            # at Colima's host-side forwarding socket (`~/.colima/.../docker.sock`) would mount that path
-            # as seen from *inside* the VM, which is not a socket the daemon can be reached through.
+            # DOCKER_HOST is deliberately NOT set: the suite mounts the engine socket into the runtime
+            # container, and a `-v` source is resolved by the daemon - inside the VM, where the socket is
+            # at the default `/var/run/docker.sock`. Colima's host-side forwarding socket is not reachable
+            # from in there.
             - name: Start a container engine (Colima)
               run: |
                   brew install colima docker docker-buildx qemu
@@ -146,7 +124,7 @@ jobs:
                   docker version
                   docker buildx version
                   docker info --format '{{.OperatingSystem}} / {{.Architecture}}'
-            # The VM's own boot/hostagent logs, which `colima start` only ever points at by path.
+            # The VM's boot/hostagent logs, which `colima start` only points at by path.
             - name: Dump Colima VM logs on failure
               if: failure()
               run: |
@@ -158,11 +136,8 @@ jobs:
                       tail -100 "$log"
                     fi
                   done
-            # Only the dev-loop file - a budget choice, not a technical limit: macOS runner minutes bill at
-            # a multiple of Linux ones and a QEMU-hosted daemon is slower than the Linux legs' native one,
-            # so this leg protects the core flow (`test.md`'s mandated "Actor full dev loop") and leaves
-            # the rest to the Linux matrix. Widening it is now possible if that trade ever changes: on
-            # x86_64 every sample's base image resolves, the Playwright ones included.
+            # Only the dev-loop file - a budget choice, not a technical limit: macOS minutes bill at a
+            # multiple of Linux ones, so this leg protects the core flow and leaves the rest to Linux.
             - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
             - name: Dump runtime container logs on failure
               if: failure()

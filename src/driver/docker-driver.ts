@@ -219,19 +219,9 @@ function devNodeModulesVolumeName(runId: string): string {
 	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
 }
 
-/**
- * Where a command token's file sits inside the image when the dev-folder bind mount over the working
- * directory would hide it, or `undefined` when the mount cannot hide it at all: a bare name the engine
- * resolves through `PATH` (`docker-entrypoint.sh` - `apify/actor-node`), or a path pointing outside the
- * working directory (`/usr/local/bin/xvfb-run`, `../x.sh`).
- *
- * Two shapes ARE hidden, and Apify's own Playwright base images ship one each: a working-directory-
- * relative token (`./xvfb-entrypoint.sh` - `apify/actor-python-playwright`), and an ABSOLUTE path that
- * points into the working directory (`/home/myuser/xvfb-entrypoint.sh`, with `WorkingDir`
- * `/home/myuser` - `apify/actor-node-playwright-chrome`). The second is exactly as hidden as the first -
- * only how the image spells it differs - so both are resolved here and compared against the mount
- * target, rather than absolute paths being assumed unreachable by the mount.
- */
+/** Where a command token's file sits inside the image when the dev-folder mount would hide it, or
+ * `undefined` when it cannot. Resolved, not matched on spelling: Apify's Playwright base images write the
+ * same hidden entrypoint relative (`./xvfb-entrypoint.sh`) and absolute (`/home/myuser/...`). */
 function entryHiddenByDevMount(
 	token: string,
 	imageWorkingDirectory: string,
@@ -240,7 +230,6 @@ function entryHiddenByDevMount(
 	if (!token.startsWith('/') && !token.includes('/')) return undefined;
 	const inImage = path.posix.resolve(imageWorkingDirectory, token);
 	const relative = path.posix.relative(imageWorkingDirectory, inImage);
-	// The working directory itself, or anything outside it - neither is a file the mount hides.
 	if (relative === '' || relative === '..' || relative.startsWith('../')) return undefined;
 	return { inImage, relative };
 }
@@ -1275,14 +1264,9 @@ export class DockerDriver implements Driver {
 	}
 
 	/**
-	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when that names a file
-	 * inside the working directory - Apify's Playwright base images start through an `xvfb-entrypoint.sh`
-	 * there, written relative in the Python one and absolute in the Node one - the bind mount hides it
-	 * unless the dev folder happens to carry the same file, and the engine refuses to start ("executable
-	 * file not found"). Unless the dev folder provides it, the file is taken from the image and the run
-	 * starts through that copy, at a path no mount covers. What the mount can and cannot hide is
-	 * `entryHiddenByDevMount`'s call, not a spelling rule: only a `PATH`-resolved bare name, or a path
-	 * outside the working directory, is left alone.
+	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when the mount hides that
+	 * file the engine refuses to start ("executable file not found"). Unless the dev folder carries its
+	 * own copy, the image's is extracted and the run starts through it, at a path no mount covers.
 	 */
 	private async preserveHiddenEntrypoint(
 		imageId: string,

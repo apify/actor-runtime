@@ -53,14 +53,9 @@ interface RunApi {
 	statusMessage?: string;
 }
 
-/**
- * The runtime derives a run's CPU from its memory at the platform's ratio (`resources.ts`: 4096 MB per
- * core) and applies it as a hard CFS quota, so this number is really a CPU grant. 4096 MB - one core -
- * left a headful Chrome sharing a single core with Xvfb and Node, and intermittently missed Crawlee's
- * 60-second navigation budget: every request then exhausted its retries, and the run ended SUCCEEDED
- * with an empty dataset, or ran long enough to blow this suite's own finish timeout. Two cores fit
- * comfortably on a 4-core runner alongside the viewer sidecar and the runtime itself.
- */
+/** Really a CPU grant: the runtime derives cores from memory (`resources.ts`: 4096 MB each) as a hard
+ * quota. One core left a headful Chrome missing Crawlee's navigation budget, which failed runs as an
+ * empty dataset or a crawl too slow to finish in time. */
 const RUN_MEMORY_MBYTES = 8192;
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
@@ -174,8 +169,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
 				expect(client.status).toBe(200);
 
-				// Mirroring changed nothing about the crawl itself: the run finishes and the item count tracks
-				// input. Both assertions print the run's own log when they fail - see `withRunLogOnFailure`.
+				// Mirroring changed nothing about the crawl itself: the item count still tracks input.
 				await withRunLogOnFailure(
 					run.id,
 					() => currentLog(run.id, env),

@@ -1,14 +1,8 @@
 /**
  * `requirements/test.md`'s "All advanced modes at once": one run with debug mode, a live dev folder and
- * browser view all on. Each works alone in its own e2e file; this one proves they compose.
- *
- * `sample_actor_playwright` is the only sample that can carry all three - headful for the view, `CMD
- * ["node", ...]` for debug mode. Its base image also starts through an absolute
- * `/home/myuser/xvfb-entrypoint.sh` inside the mounted working directory, which no other case covers.
- *
- * Carries both of `test.md`'s CLI-only exceptions at once (the debug port, the viewer websocket), and
- * starts the run via `apify api`, never `apify call` - a paused run would block the CLI indefinitely.
- * Works on a throwaway copy of the sample, never the committed one: it edits and compiles the source.
+ * browser view all on. `sample_actor_playwright` is the only sample that can carry all three - headful
+ * for the view, `CMD ["node", ...]` for debug mode. Started via `apify api`, never `apify call`, which a
+ * paused run would block indefinitely; carries both of `test.md`'s CLI-only exceptions at once.
  */
 import { execFileSync } from 'node:child_process';
 import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -47,7 +41,7 @@ const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'sample_actor_playwright');
 const CONTAINER_NAME = 'actor-runtime-e2e-all-modes';
 const IMAGE_TAG = 'actor-runtime:e2e-all-modes';
 
-/** The base image's `WorkingDir`, which the dev folder is mounted over - asserted below, not just assumed. */
+/** The base image's `WorkingDir`, which the dev folder is mounted over. */
 const EXPECTED_IMAGE_WORKING_DIR = '/home/myuser';
 /** What `language: "auto"` resolves to for this image. */
 const DEBUG_PORT = 9229;
@@ -57,8 +51,8 @@ const DEBUG_PORT = 9229;
 const RUN_MEMORY_MBYTES = 8192;
 const MAX_REQUESTS_PER_CRAWL = 4;
 
-/** Edited in the dev folder after the push: the run printing the edited form is what proves the mount,
- * not the built image, supplied the code. */
+/** Edited in the dev folder after the push: printing the edited form proves the mount, not the image,
+ * supplied the code. */
 const ORIGINAL_MARKER = 'page(s) with a headful Chrome,';
 const EDITED_MARKER = 'page(s) with a headful Chrome (all-modes-dev-folder-marker),';
 
@@ -69,7 +63,7 @@ interface RunApi {
 }
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
-	// Generous: debug mode does not extend the run timeout for the time spent attaching.
+	// Debug mode does not extend the run timeout for the time spent attaching, hence the generous one.
 	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 900 });
 	const output = apify(
 		['api', 'POST', `actors/${actorId}/runs`, '--params', params, '--body', JSON.stringify(input)],
@@ -93,7 +87,6 @@ interface InspectorTarget {
 	webSocketDebuggerUrl?: string;
 }
 
-/** `--inspect-brk` serves this the moment it listens, before any client attaches. */
 async function nodeInspectorTargets(port: number): Promise<InspectorTarget[] | undefined> {
 	try {
 		const res = await fetch(`http://127.0.0.1:${port}/json/list`);
@@ -105,12 +98,8 @@ async function nodeInspectorTargets(port: number): Promise<InspectorTarget[] | u
 	}
 }
 
-/**
- * The end of an IDE's attach handshake: tell the paused process to run. Without it the run would only
- * ever time out, so this doubles as the proof that a debug pause is releasable with all three modes on.
- * Dialed at `127.0.0.1`, not the target's own `webSocketDebuggerUrl` (Node advertises the `0.0.0.0` it
- * bound inside the container); only the target id is taken from it.
- */
+/** The end of an IDE's attach handshake: tell the paused process to run. Dialed at `127.0.0.1`, not the
+ * target's advertised `webSocketDebuggerUrl` (Node reports the `0.0.0.0` it bound inside the container). */
 function resumePausedNodeProcess(port: number, targetId: string, timeoutMs = 30_000): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const ws = new WebSocket(`ws://127.0.0.1:${port}/${targetId}`);
@@ -118,7 +107,7 @@ function resumePausedNodeProcess(port: number, targetId: string, timeoutMs = 30_
 			ws.terminate();
 			reject(new Error('Timed out waiting for the inspector to acknowledge Runtime.runIfWaitingForDebugger'));
 		}, timeoutMs);
-		// Guarded: `settle` closes the socket, and that close must not report itself as a premature one.
+		// `settle` closes the socket; that close must not then report itself as a premature one.
 		let settled = false;
 		const settle = (error?: Error) => {
 			if (settled) return;
@@ -162,19 +151,17 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			isolatedApifyHome = createIsolatedApifyHome();
 			loginApifyCli(REPO_ROOT, isolatedApifyHome);
 
-			// The throwaway copy this suite edits and compiles into; both excluded dirs are regenerated below.
+			// A throwaway copy - this suite edits and compiles the source.
 			actorDir = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-all-modes-actor-'));
 			const excluded = [join(SAMPLE_ACTOR_DIR, 'node_modules'), join(SAMPLE_ACTOR_DIR, 'dist')];
 			cpSync(SAMPLE_ACTOR_DIR, actorDir, {
 				recursive: true,
 				filter: (src) => !excluded.some((dir) => src === dir || src.startsWith(`${dir}/`)),
 			});
-			// `mkdtemp` makes it 0700. Alone among the samples' base images, this one runs as a non-root
-			// `myuser`, which otherwise could not read the folder mounted over its working directory.
+			// `mkdtemp` makes it 0700, which this image's non-root `myuser` could not read under the mount.
 			chmodSync(actorDir, 0o777);
 
-			// Pushed BEFORE the edit below, so the image carries the pristine source and the edited marker in
-			// the run's log is attributable to the mount alone.
+			// Pushed before the edit below, so the edited marker in the run's log is the mount's doing alone.
 			const push = JSON.parse(
 				apify(['push', '--json'], { cwd: actorDir, env: apifyEnv(isolatedApifyHome) }),
 			) as PushResult;
@@ -183,12 +170,11 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			}
 			actorId = push.actor.id;
 
-			// `--ignore-scripts` skips the sample's `postinstall` browser download - the run's browsers come
-			// from the image, and nothing here needs them on the host.
+			// `--ignore-scripts` skips the sample's browser download; the run's browsers come from the image.
 			execFileSync('npm', ['install', '--ignore-scripts'], { cwd: actorDir, stdio: 'inherit' });
 
-			// The edit + recompile the run must pick up with no push/build in between - the dev folder's whole
-			// point. Here rather than in the test body so a `retry` does not try to edit it twice.
+			// The edit + recompile the run must pick up with no push/build in between. Here, not in the test
+			// body, so a `retry` does not edit it twice.
 			const mainTs = join(actorDir, 'src', 'main.ts');
 			const originalMainTs = readFileSync(mainTs, 'utf8');
 			if (!originalMainTs.includes(ORIGINAL_MARKER)) {
@@ -203,9 +189,8 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 	afterAll(() => {
 		stopRuntimeContainer(CONTAINER_NAME);
 		if (isolatedApifyHome) removeIsolatedApifyHome(isolatedApifyHome);
-		// Best-effort, like `stopRuntimeContainer`'s cleanup. This folder is the container's `HOME`, so
-		// Chrome leaves dot-directories owned by the image's non-root `myuser` - never the uid running this
-		// suite, on either engine - and the removal hits EACCES. Not worth failing an otherwise green suite.
+		// Best-effort: this folder is the container's `HOME`, so Chrome leaves dot-directories owned by the
+		// image's non-root `myuser`, which this suite's own uid cannot unlink.
 		if (actorDir) {
 			try {
 				rmSync(actorDir, { recursive: true, force: true });
@@ -220,7 +205,6 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 		async () => {
 			const env = apifyEnv(isolatedApifyHome);
 
-			// Three persistent per-Actor toggles, each through its own documented endpoint.
 			const devFolder = apify(
 				['api', 'POST', `/actor-runtime/dev-folder/${actorId}`, '--body', JSON.stringify(actorDir)],
 				{ cwd: REPO_ROOT, env },
@@ -239,8 +223,7 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 
 			const run = startRun(actorId, { maxRequestsPerCrawl: MAX_REQUESTS_PER_CRAWL }, env);
 
-			// All three announce themselves in the same log, and the debug line lands last - so waiting on it
-			// waits on all of them.
+			// The debug line lands last of the three, so waiting on it waits on all of them.
 			const pausedLog = await waitFor(
 				() => {
 					const text = currentLog(run.id, env);
@@ -255,13 +238,12 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			expect(pausedLog).toContain(`${CONSOLE_URL}/runs/${run.id}/browser`);
 			expect(pausedLog).toContain(`0.0.0.0:${DEBUG_PORT}`);
 			expect(pausedLog).toContain(`127.0.0.1:${DEBUG_PORT}`);
-			// The mount hides the image's `xvfb-entrypoint.sh`; the driver preserves it, or nothing would start.
+			// The mount hides the image's entrypoint; the driver preserves it, or nothing would start.
 			expect(pausedLog).toContain(`starts through ${EXPECTED_IMAGE_WORKING_DIR}/xvfb-entrypoint.sh`);
-			// The pause is real: no user code has run, not even the Actor's own first log line.
+			// The pause is real: no user code has run.
 			expect(pausedLog).not.toContain('Crawling up to');
 			expect(getRun(run.id, env).status).toBe('RUNNING');
 
-			// The real inspector protocol, on a container that already carries the mount and the sidecar.
 			const targets = await waitFor(
 				() => nodeInspectorTargets(DEBUG_PORT),
 				60_000,
@@ -269,7 +251,7 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			);
 			await resumePausedNodeProcess(DEBUG_PORT, targets[0]!.id);
 
-			// Released, the Actor runs the dev folder's compiled source rather than the image's own `dist/`.
+			// Released, the Actor runs the dev folder's compiled source, not the image's own `dist/`.
 			const runningLog = await waitFor(
 				() => {
 					const text = currentLog(run.id, env);
@@ -280,13 +262,11 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			);
 			expect(runningLog).toContain(EDITED_MARKER);
 
-			// The mirror, while that same run crawls. Chrome in a fresh container is slow to appear, hence the
-			// generous bound.
+			// The mirror, while that same run crawls. Chrome in a fresh container is slow to appear.
 			const greeting = await readMirrorGreeting(run.id, 3 * 60 * 1000);
 			expect(greeting.startsWith('RFB 003.')).toBe(true);
 
-			// None of the three changed the crawl itself: the run finishes and the item count still tracks the
-			// input. Both print the run's own log when they fail - see `withRunLogOnFailure`.
+			// None of the three changed the crawl itself: the item count still tracks the input.
 			await withRunLogOnFailure(
 				run.id,
 				() => currentLog(run.id, env),
@@ -320,12 +300,12 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			expect(finalLog).toContain(EDITED_MARKER);
 			expect(finalLog).not.toContain(ORIGINAL_MARKER);
 
-			// Once the run is over its mirror is gone, exactly as for a browser-view-only run.
+			// Once the run is over its mirror is gone.
 			const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
 			expect(await endedPage.text()).toContain('This run has ended');
 			await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 		},
-		// One retry: the sample crawls a real site, whose navigations occasionally time out on CI runners.
+		// One retry: the sample crawls a real site.
 		{ timeout: 20 * 60 * 1000, retry: 1 },
 	);
 });

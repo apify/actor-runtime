@@ -1,11 +1,5 @@
-/**
- * Prints the run's own log when `assertions` fails, then rethrows unchanged.
- *
- * A crawl that ends with no items, or one that never finishes, is indistinguishable from the assertion
- * alone: `expected +0 to be 4` says nothing about whether the pages were fetched and the items lost, or
- * never fetched at all. The run's log separates those - Crawlee logs a line per page it processes, and
- * its navigation failures and retries too - so a CI failure carries the crawl's side of the story.
- */
+/** Prints the run's own log when `assertions` fails, then rethrows. `expected +0 to be 4` alone cannot
+ * say whether the pages were fetched and the items lost, or never fetched; the crawl's log can. */
 export async function withRunLogOnFailure<T>(
 	runId: string,
 	getLog: () => string,
