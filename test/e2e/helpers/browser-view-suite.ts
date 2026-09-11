@@ -20,6 +20,7 @@ import {
 	waitForHttpOk,
 } from './docker.js';
 import { CONSOLE_URL, readMirrorGreeting } from './console-view.js';
+import { withRunLogOnFailure } from './run-log.js';
 import { waitFor } from './wait.js';
 import {
 	apify,
@@ -52,8 +53,15 @@ interface RunApi {
 	statusMessage?: string;
 }
 
-/** The default 1024 MB grants 0.25 core, on which a headful browser is too slow for a tight e2e budget. */
-const RUN_MEMORY_MBYTES = 4096;
+/**
+ * The runtime derives a run's CPU from its memory at the platform's ratio (`resources.ts`: 4096 MB per
+ * core) and applies it as a hard CFS quota, so this number is really a CPU grant. 4096 MB - one core -
+ * left a headful Chrome sharing a single core with Xvfb and Node, and intermittently missed Crawlee's
+ * 60-second navigation budget: every request then exhausted its retries, and the run ended SUCCEEDED
+ * with an empty dataset, or ran long enough to blow this suite's own finish timeout. Two cores fit
+ * comfortably on a 4-core runner alongside the viewer sidecar and the runtime itself.
+ */
+const RUN_MEMORY_MBYTES = 8192;
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
 	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 600 });
@@ -166,25 +174,35 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
 				expect(client.status).toBe(200);
 
-				// Mirroring changed nothing about the crawl itself: the run finishes and the item count tracks input.
-				const finished = await waitFor(
-					() => {
-						const current = getRun(run.id, env);
-						return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
-							? current
-							: undefined;
+				// Mirroring changed nothing about the crawl itself: the run finishes and the item count tracks
+				// input. Both assertions print the run's own log when they fail - see `withRunLogOnFailure`.
+				await withRunLogOnFailure(
+					run.id,
+					() => currentLog(run.id, env),
+					async () => {
+						const finished = await waitFor(
+							() => {
+								const current = getRun(run.id, env);
+								return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
+									? current
+									: undefined;
+							},
+							8 * 60 * 1000,
+							'the browser-view run to finish',
+						);
+						expect(finished.status).toBe('SUCCEEDED');
+						const runDetail = JSON.parse(
+							apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
+						) as ApiEnvelope<{ defaultDatasetId: string }>;
+						const info = JSON.parse(
+							apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], {
+								cwd: actorDir,
+								env,
+							}),
+						) as DatasetInfoResult;
+						expect(info.itemCount).toBe(4);
 					},
-					8 * 60 * 1000,
-					'the browser-view run to finish',
 				);
-				expect(finished.status).toBe('SUCCEEDED');
-				const runDetail = JSON.parse(
-					apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
-				) as ApiEnvelope<{ defaultDatasetId: string }>;
-				const info = JSON.parse(
-					apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], { cwd: actorDir, env }),
-				) as DatasetInfoResult;
-				expect(info.itemCount).toBe(4);
 
 				// Once the run is over its mirror is gone: the viewer page says so, and the websocket is refused.
 				const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);

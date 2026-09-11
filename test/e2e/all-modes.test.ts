@@ -28,6 +28,7 @@ import {
 	waitForHttpOk,
 } from './helpers/docker.js';
 import { CONSOLE_URL, readMirrorGreeting } from './helpers/console-view.js';
+import { withRunLogOnFailure } from './helpers/run-log.js';
 import { waitFor } from './helpers/wait.js';
 import {
 	apify,
@@ -50,8 +51,10 @@ const IMAGE_TAG = 'actor-runtime:e2e-all-modes';
 const EXPECTED_IMAGE_WORKING_DIR = '/home/myuser';
 /** What `language: "auto"` resolves to for this image. */
 const DEBUG_PORT = 9229;
-/** The default 1024 MB grants 0.25 core - too slow for a headful browser on an e2e budget. */
-const RUN_MEMORY_MBYTES = 4096;
+/** Really a CPU grant: the runtime derives cores from memory at 4096 MB each (`resources.ts`) and applies
+ * a hard CFS quota. One core left a headful Chrome missing Crawlee's navigation budget - see the same
+ * constant in `helpers/browser-view-suite.ts`. */
+const RUN_MEMORY_MBYTES = 8192;
 const MAX_REQUESTS_PER_CRAWL = 4;
 
 /** Edited in the dev folder after the push: the run printing the edited form is what proves the mount,
@@ -282,26 +285,36 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			const greeting = await readMirrorGreeting(run.id, 3 * 60 * 1000);
 			expect(greeting.startsWith('RFB 003.')).toBe(true);
 
-			const finished = await waitFor(
-				() => {
-					const current = getRun(run.id, env);
-					return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
-						? current
-						: undefined;
-				},
-				8 * 60 * 1000,
-				'the all-modes run to finish',
-			);
-			expect(finished.status).toBe('SUCCEEDED');
+			// None of the three changed the crawl itself: the run finishes and the item count still tracks the
+			// input. Both print the run's own log when they fail - see `withRunLogOnFailure`.
+			await withRunLogOnFailure(
+				run.id,
+				() => currentLog(run.id, env),
+				async () => {
+					const finished = await waitFor(
+						() => {
+							const current = getRun(run.id, env);
+							return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
+								? current
+								: undefined;
+						},
+						8 * 60 * 1000,
+						'the all-modes run to finish',
+					);
+					expect(finished.status).toBe('SUCCEEDED');
 
-			// None of the three changed the crawl itself: the item count still tracks the input.
-			const runDetail = JSON.parse(
-				apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
-			) as ApiEnvelope<{ defaultDatasetId: string }>;
-			const info = JSON.parse(
-				apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], { cwd: actorDir, env }),
-			) as DatasetInfoResult;
-			expect(info.itemCount).toBe(MAX_REQUESTS_PER_CRAWL);
+					const runDetail = JSON.parse(
+						apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
+					) as ApiEnvelope<{ defaultDatasetId: string }>;
+					const info = JSON.parse(
+						apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], {
+							cwd: actorDir,
+							env,
+						}),
+					) as DatasetInfoResult;
+					expect(info.itemCount).toBe(MAX_REQUESTS_PER_CRAWL);
+				},
+			);
 
 			const finalLog = currentLog(run.id, env);
 			expect(finalLog).toContain(EDITED_MARKER);
