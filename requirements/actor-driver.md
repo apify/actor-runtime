@@ -5,6 +5,8 @@
 - A build is produced by building a docker image from the Actor source that was pushed to the system.
 - Build and run output is persisted as the job's log and fanned out live to any open
   `GET /v2/logs/:id?stream=true` response.
+- Every log line originating in the runtime itself (not in the Actor) opens with a blue
+  `[actor-runtime]` prefix, so the two are distinguishable at a glance.
 - **Status state machine**: `READY -> RUNNING -> SUCCEEDED | FAILED | TIMED-OUT | ABORTED`, with
   `RUNNING -> ABORTING -> ABORTED` while a stop is in flight (`ABORTING`/`ABORTED` are also reachable
   directly from `READY` - an abort issued before the build/run ever started).
@@ -52,10 +54,7 @@
 - **Registration has no build-first precondition** - it requires no build of the Actor to exist,
   succeeded or otherwise.
 - An image that starts through a file inside its working directory still starts under the mount: the
-  dev folder's copy of that file is used when it has one, the image's own copy otherwise. This holds
-  however the image spells that file - a working-directory-relative command (`./xvfb-entrypoint.sh`) and
-  an absolute path pointing into the working directory (`/home/myuser/xvfb-entrypoint.sh`) are equally
-  hidden by the mount, and Apify's own Playwright base images ship one of each.
+  dev folder's copy of that file is used when it has one, the image's own copy otherwise.
 - The working directory the mount covers is recorded **per build**, never on the Actor
   (`storage.md`); the mount a run applies always uses the one from _that run's own resolved build_,
   never any other build the Actor happens to have.

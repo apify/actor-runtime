@@ -219,9 +219,9 @@ function devNodeModulesVolumeName(runId: string): string {
 	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
 }
 
-/** Where a command token's file sits inside the image when the dev-folder mount would hide it, or
- * `undefined` when it cannot. Resolved, not matched on spelling: Apify's Playwright base images write the
- * same hidden entrypoint relative (`./xvfb-entrypoint.sh`) and absolute (`/home/myuser/...`). */
+/** Where a hidden command token's file sits in the image, or `undefined` if the mount cannot hide it.
+ * Resolved rather than matched on spelling: Apify's Playwright images write the same entrypoint both
+ * relative (`./xvfb-entrypoint.sh`) and absolute (`/home/myuser/...`). */
 function entryHiddenByDevMount(
 	token: string,
 	imageWorkingDirectory: string,

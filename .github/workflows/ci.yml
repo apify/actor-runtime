@@ -89,10 +89,8 @@ jobs:
 
     e2e-arm64:
         name: e2e actor-dev-loop (apify-cli + docker on arm64)
-        # Nothing else in CI touches arm64: `release.yml` publishes a multi-arch manifest but is
-        # dispatch-only, so a Dockerfile change that breaks arm64 would only surface at release time.
-        # This runner is native arm64, so the suite's own `docker build` and every container it starts are
-        # the real thing, not emulation.
+        # The only arm64 coverage in CI: `release.yml` builds multi-arch but is dispatch-only, so an
+        # arm64 break would otherwise surface at release time. Native, so nothing here is emulated.
         runs-on: ubuntu-24.04-arm
         timeout-minutes: 30
         steps:
@@ -103,8 +101,8 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # Only the dev-loop file: both Playwright base images are amd64-only, so `browser-view-*` and
-            # `all-modes` cannot run here at all. Everything this file needs is multi-arch.
+            # Only this file: both Playwright base images are amd64-only, so the browser-based cases
+            # cannot run here at all.
             - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
             - name: Dump runtime container logs on failure
               if: failure()

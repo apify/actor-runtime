@@ -37,12 +37,8 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 
-/**
- * Apify's own demo store, not the samples' default `crawlee.dev`. That default is a Docusaurus site whose
- * same-hostname links exist only after client-side hydration, so the crawl had to wait for `load` - every
- * subresource - and regularly blew Playwright's 60s navigation budget from CI, failing the run with an
- * empty dataset or one too slow to finish. This target is server-rendered and far lighter.
- */
+/** Server-rendered, unlike the samples' default `crawlee.dev`, whose links appear only after client-side
+ * hydration - so the crawl had to wait for `load` and kept blowing the 60s navigation budget. */
 export const CRAWL_START_URL = 'https://demo-webstore.apify.org/';
 
 export interface BrowserViewSample {
@@ -65,7 +61,7 @@ interface RunApi {
 const RUN_MEMORY_MBYTES = 4096;
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
-	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 900 });
+	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 600 });
 	const output = apify(
 		['api', 'POST', `actors/${actorId}/runs`, '--params', params, '--body', JSON.stringify(input)],
 		{
@@ -175,7 +171,6 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
 				expect(client.status).toBe(200);
 
-				// Mirroring changed nothing about the crawl itself: the item count still tracks input.
 				await withRunLogOnFailure(
 					run.id,
 					() => currentLog(run.id, env),
@@ -187,7 +182,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 									? current
 									: undefined;
 							},
-							12 * 60 * 1000,
+							8 * 60 * 1000,
 							'the browser-view run to finish',
 						);
 						expect(finished.status).toBe('SUCCEEDED');
