@@ -87,6 +87,32 @@ jobs:
                     $cli logs --tail 300 "$c" || true
                   done
 
+    e2e-arm64:
+        name: e2e actor-dev-loop (apify-cli + docker on arm64)
+        # Nothing else in CI touches arm64: `release.yml` publishes a multi-arch manifest but is
+        # dispatch-only, so a Dockerfile change that breaks arm64 would only surface at release time.
+        # This runner is native arm64, so the suite's own `docker build` and every container it starts are
+        # the real thing, not emulation.
+        runs-on: ubuntu-24.04-arm
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v4
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            # Only the dev-loop file: both Playwright base images are amd64-only, so `browser-view-*` and
+            # `all-modes` cannot run here at all. Everything this file needs is multi-arch.
+            - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
+            - name: Dump runtime container logs on failure
+              if: failure()
+              run: |
+                  for c in $(docker ps -aq --filter name=actor-runtime-e2e); do
+                    docker logs --tail 300 "$c" || true
+                  done
+
     e2e-macos:
         name: e2e actor-dev-loop (apify-cli + docker on macOS)
         # `system.md` lists macOS as a supported host, and nothing verified it until now.
