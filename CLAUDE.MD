@@ -1,77 +1,34 @@
-# Using local Actor runtime
+# Using the local Actor runtime
 
-This file provides guidance to programming agents when using the local Actor runtime.
-Local Actor runtime is an Actor development tool for developing, running, and debugging Actors. It emulates subset of the real Apify API and Apify console to allow actor development locally without the need to do costly rebuilds on Apify platform.
+**The usage instructions for this runtime live in [`skills/actor-runtime/SKILL.md`](./skills/actor-runtime/SKILL.md)** -
+an Agent Skill, so that it travels with the runtime itself rather than only with this checkout. That
+file is the single source of truth for driving the runtime; do not duplicate it here.
 
-# Set up
+It ships inside the runtime image and is reachable three ways, in the order an agent should try them:
 
-- Build the docker image `docker build -t actor-runtime .`
-- Run the container `docker run --rm -p 3333:3333 -p 3000:3000 -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
-    - `-v "$(pwd)/data:/data"` shared volumes `data` is used to store internal actor runtime data. When exposed it can be directly inspected to determine internal state and storage backend (It is not recommended to manually edit those files. Any edit should be done through http API call).
-- Podman (3.4 or newer) works the same way - mount Podman's Docker-compatible API socket where the runtime expects the Docker one:
-  `sudo systemctl enable --now podman.socket && podman build -t actor-runtime . && mkdir -p data && sudo podman run --rm -p 3333:3333 -p 3000:3000 -v /run/podman/podman.sock:/var/run/docker.sock -v "$(pwd)/data:/data" actor-runtime`
-  (rootless: mount `$XDG_RUNTIME_DIR/podman/podman.sock` instead and drop `sudo`). Unlike Docker, Podman does not create a missing `data` directory for the mount, hence the `mkdir -p`. See README.md's "Running with Podman" section for the details.
+- `apify runtime skill --install` - installs it into the agent's skills directory, so it loads on
+  demand in this and later sessions. Prefer this.
+- `apify runtime skill` - prints it, for reading right now.
+- `GET http://localhost:3333/actor-runtime/skill` - the raw file from a running runtime
+  (`?format=json` for `{ name, description, content }`). Unauthenticated.
 
-## Work through CLI
+## Working on the runtime itself
 
-- The actor runtime is best used through `apify cli`: https://docs.apify.com/cli/docs
-- Use the cli according to the skill: https://docs.apify.com/cli/docs/agent-skill#install-the-skill
-- To use local Actor runtime set environment variable for the Apify CLI:
-    - `APIFY_CLIENT_BASE_URL=http://localhost:3333`
-    - `APIFY_CONSOLE_URL=http://localhost:3000`
-    - `APIFY_PROXY_PASSWORD` (optional if Apify proxy is desired)
-- To redirect Apify CLI back to the original Apify services unset the environment variables:
-    - `APIFY_CLIENT_BASE_URL`
-    - `APIFY_CONSOLE_URL`
-- Use `apify cli api ...` to send API calls and inspect the Actors, builds, runs, storages and other objects.
-- To simulate multiple users use custom token and in additional authorization header. For example: `apify cli api v2/datasets -H '{"authorization": "Bearer TOKEN"}'`
-- You can use already authenticated CLI or call `apify login --token TOKEN`
-- To iterate on an Actor's source without a rebuild for every change: push and build the Actor once with
-  `apify push`. When the CLI is pointed at this runtime it registers the pushed folder as the Actor's
-  local dev folder automatically. From then on, edit locally, recompile locally (`tsc` or the language-appropriate
-  equivalent), and `apify call` again - no `apify push`/build in between. `apify call --no-dev-folder`
-  runs once from the built image alone without touching the registration. Dependency changes still need
-  a real rebuild. To register a folder by hand (e.g. a different one than the pushed directory), use
-  `apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/src"'` (this runtime's own
-  `/actor-runtime/*` endpoint - also reachable at `/v2/actor-runtime/*`, purely because `apify api`
-  hardcodes a `/v2`-suffixed base URL); submitting `--body '""'` clears the registration.
-- To debug an Actor with a real IDE debugger, turn on debug mode for it once:
-  `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": true}'` (add `"language": "node"` or
-  `"python"` if auto-detection can't classify the image, and/or `"port": <n>` to override the language
-  default - `9229` Node, `5678` Python). Every subsequent `apify call` against that Actor then starts
-  paused, waiting for a debugger, with the attach address printed in the run's own log; connect PyCharm's
-  "Attach to DAP" / VS Code's "Python: Remote Attach" (Python) or VS Code's "Attach" (Node) to
-  `127.0.0.1:<port>` to continue past the pause. **An Actor pushed with no `Dockerfile` of its own needs a
-  change**: this runtime's injected default Dockerfile inherits its base image's default,
-  `CMD ["npm", "start", "--silent"]`, which debug mode refuses (it would attach to npm, not the Actor).
-  Give the Actor a `Dockerfile` whose `CMD` invokes `node` directly (e.g. `CMD ["node", "dist/main.js"]`)
-  to fix it. The run's own `--timeout` is NOT extended for the time spent attaching, so pass a larger one
-  when you expect a slow attach. Clear the toggle with
-  `apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'` to go back to running
-  normally.
-- To watch the browser of a Playwright/Puppeteer Actor while it runs, turn browser view on for it once:
-  `apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'` (`"interactive": true` also
-  sends mouse/keyboard input). Every subsequent run prints a viewer URL in its log,
-  `http://localhost:3000/runs/<runId>/browser` - a live view of the display the Actor's browser draws on. The
-  browser must run headful to show anything (Apify's templates default to headless, which shows as a black
-  display); see `sample_actor_playwright` and `sample_actor_playwright_py`. Clear with `--body '{"enabled": false}'`.
-- To test how an Actor handles platform migrations: while a run is `RUNNING`, call
-  `apify api POST /actor-runtime/migrate/<runId>`, or press the Migrate button on the run's console
-  detail page. The run gets the platform migration experience: a `migrating` event, its container
-  stopped a few seconds later, and a fresh container for the same run (same run id, env vars, and
-  storages, in-memory state gone). `POST /v2/actor-runs/<runId>/reboot` is also implemented.
-- If a call fails because this runtime doesn't have the Actor/run/build/storage id you're after, or
-  doesn't implement that endpoint at all, you can opt in to having such calls transparently relayed to
-  the real Apify platform instead of failing:
-  `apify api POST /actor-runtime/api-fallback --body '{"fallbackUnimplementedEnabled": true, "fallbackNotFoundEnabled": true}'`
-  (either field alone is also accepted; `apify api GET /actor-runtime/api-fallback` reads the current
-  state). Both default off and reset to off on every restart. Enabling either forwards whatever token you
-  authenticated the failing call with to the real platform, and - since all HTTP methods are eligible -
-  can turn a locally-missing `POST`/`PUT`/`DELETE` into a real write against your real account; only turn
-  this on with a token/account you're comfortable with that. A relayed response carries an
-  `x-actor-runtime-fallback` header naming which platform served it, and an
-  `x-actor-runtime-fallback-trigger` header naming which toggle let it through.
+Building the image from this checkout, rather than pulling it:
 
-## Through direct API calls
+```bash
+docker build -t actor-runtime .
+mkdir -p data
+docker run --rm -p 3333:3333 -p 3000:3000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd)/data:/data" \
+  actor-runtime
+```
 
-- You can also send direct API calls. For example: http://localhost:3333/v2/datasets?token=TOKEN
+Point `apify runtime install` at a locally built image to drive it with the CLI. Podman works the
+same way with its own socket path - see README.md's "Running with Podman".
+
+The behavioural spec lives in `requirements/*.md` (`system.md`, `api.md`, `storage.md`,
+`actor-driver.md`, `cli.md`, `console.md`, `test.md`). When a change alters what the runtime does for
+its users, update `skills/actor-runtime/SKILL.md` in the same commit - it is shipped documentation,
+not a README.

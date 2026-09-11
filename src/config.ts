@@ -52,3 +52,11 @@ export function browserViewerRootfsTarPath(): string {
 export function browserViewerVersionFilePath(): string {
 	return `${browserViewerPayloadDir()}/version.txt`;
 }
+
+/** Where this runtime's own Agent Skill (`skills/actor-runtime/SKILL.md`) lives inside the image -
+ * served by `api/routes/skill.ts` and copied out of a stopped image by `apify runtime skill`. Read
+ * fresh on every call, like the payload dirs above, so tests can point it at a fixture. Relative to the
+ * image's WORKDIR (`/usr/src/app`), which is also the repo root when running from a checkout. */
+export function skillFilePath(): string {
+	return process.env.ACTOR_RUNTIME_SKILL_PATH ?? 'skills/actor-runtime/SKILL.md';
+}

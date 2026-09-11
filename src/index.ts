@@ -35,6 +35,12 @@ async function main(): Promise<void> {
 	console.log(`actor-runtime API listening on port ${API_PORT}`);
 
 	console.log(`actor-runtime console listening on port ${CONSOLE_PORT}`);
+	// The discovery line. An agent that started this runtime is reading exactly this output and has no
+	// other reason to go looking for documentation, so the one place that reliably reaches it is here.
+	console.log(
+		`actor-runtime Agent Skill (how to drive this runtime): ` +
+			`'apify runtime skill --install', or GET http://localhost:${API_PORT}/actor-runtime/skill`,
+	);
 	if (!driver.available) {
 		console.warn(`Docker is not available: ${driver.unavailableReason}. Builds and runs will fail fast.`);
 	}

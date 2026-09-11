@@ -125,6 +125,21 @@
 # Actor runtime API
 
 - `/actor-runtime/*` is the API controlling functions specific to the local Actor runtime
+- **`GET /actor-runtime/skill`** (also at `/v2/actor-runtime/skill`) - serves this runtime's own Agent
+  Skill, the `skills/actor-runtime/SKILL.md` copied into the image at build time. It is what teaches an
+  agent that reached this runtime through the Apify CLI how to drive it, so it is shipped by the image
+  rather than by the CLI and can never describe a different version than the one answering.
+    - **Unauthenticated** - the single exception in this namespace, and deliberate: it is public
+      documentation, and one of the things it documents is how to authenticate here. A caller must be
+      able to read it before it has a token.
+    - **Default response**: the file verbatim, `Content-Type: text/markdown; charset=utf-8`. Not the
+      `{ "data": ... }` envelope - the body is the document, not a JSON payload.
+    - **`?format=json`**: `{ "data": { "name", "description", "content" } }`, where `name` and
+      `description` come from the file's YAML frontmatter and `content` is the whole file including that
+      frontmatter. Malformed or absent frontmatter yields empty strings rather than an error - the body
+      is still served.
+    - **Error response**: `500` `skill-unavailable` when the file is missing, which only happens in an
+      image built without `skills/`.
 - **`POST /actor-runtime/dev-folder/:actorId`** - registers (or clears) the Actor's local dev folder for
   the bind-mount feature (`actor-driver.md`). `:actorId` accepts the same forms as the rest of the API
   (id, plain name, `username~name`).
