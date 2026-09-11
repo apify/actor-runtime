@@ -434,7 +434,7 @@ function remainingTimeoutSecs(record: RunRecord): number {
  *
  * `gracefully` on a `RUNNING` run publishes the platform's `aborting` + `persistState` frame pair and
  * waits `GRACEFUL_ABORT_WINDOW_MS` before stopping; other states take the immediate path. A second
- * concurrent graceful abort joins the window rather than restarting it - see `requirements/api.md`.
+ * concurrent graceful abort joins the window rather than restarting it - see the abort entry in `src/api/openapi/actor-runtime.json`'s `x-actor-runtime-platform-notes`.
  *
  * Both flags come from `onBeforeTransition`, read inside the same mutex-serialized write that performs
  * the transition: a preceding `get()` could observe a stale status, and only the hook can tell "this call

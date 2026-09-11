@@ -99,6 +99,24 @@ Good to know:
 - `podman images` lists the images the runtime builds as `actor-runtime/<actor>:<buildId>` under the
   registry prefix Podman adds itself (`docker.io/` or `localhost/`, depending on the version).
 
+## What this runtime adds on top of the Apify API
+
+Everything under `/actor-runtime/*` is local-runtime-only - the dev folder, debug mode, browser view,
+migration emulation and the upstream API fallback used in the sections below. The runtime describes
+that namespace to itself in an OpenAPI document (`src/api/openapi/actor-runtime.json`) and serves it,
+so you never have to guess what a given runtime supports:
+
+```bash
+apify api GET /actor-runtime            # every runtime-specific endpoint, its body and its responses
+curl -s http://localhost:3333/actor-runtime/openapi.json | jq .paths   # same document, for tooling
+```
+
+Both are unauthenticated, and the real Apify platform has no such endpoint - so the same call also
+answers "am I pointed at a local runtime or at the platform?". Anything under `/actor-runtime/*` the
+document does not describe is rejected from the document too: an unknown path is a `404` pointing you
+back at `GET /actor-runtime`, and a known path with the wrong method is a `405` naming the methods it
+does have.
+
 ## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
 
 After the one push+build above, register your Actor's local source folder so every future run picks up

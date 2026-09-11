@@ -23,6 +23,11 @@ Local Actor runtime is an Actor development tool for developing, running, and de
 - To redirect Apify CLI back to the original Apify services unset the environment variables:
     - `APIFY_CLIENT_BASE_URL`
     - `APIFY_CONSOLE_URL`
+- To see everything this runtime adds on top of the Apify API (the `/actor-runtime/*` endpoints used
+  below), read its own OpenAPI specification: `apify api GET /actor-runtime` (no token needed; the real
+  Apify platform has no such endpoint, so a `404` there means you are talking to the platform, not to a
+  local runtime). `http://localhost:3333/actor-runtime/openapi.json` serves the same document
+  unenveloped for OpenAPI tooling.
 - Use `apify cli api ...` to send API calls and inspect the Actors, builds, runs, storages and other objects.
 - To simulate multiple users use custom token and in additional authorization header. For example: `apify cli api v2/datasets -H '{"authorization": "Bearer TOKEN"}'`
 - You can use already authenticated CLI or call `apify login --token TOKEN`
