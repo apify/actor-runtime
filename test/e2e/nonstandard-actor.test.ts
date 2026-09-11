@@ -1,20 +1,10 @@
 /**
- * E2E coverage for Actors that look nothing like one created from an Apify template
- * (`requirements/test.md`'s "Non-standard Actors" section): an unusual base image, a custom entry
- * point, an unusual working directory - and, at the far end of "unusual", an image with no working
- * directory at all. Everything the runtime does for an Actor is discovered from the built image, never
- * assumed from the Apify base images' conventions, and this file is where that claim is actually
- * tested against real containers.
+ * E2E coverage for Actors unlike anything an Apify template produces, driven through
+ * `sample_actor_nonstandard`: unusual base image, custom entry point, unusual working directory - plus
+ * an image with no working directory at all. The runtime must read all of it off the built image.
  *
- * The Actor under test is `sample_actor_nonstandard`: a stock `python:3.11-slim` base image with no
- * Apify SDK installed at all (it drives the runtime's HTTP API with the Python standard library), a
- * Dockerfile in neither default location, `WORKDIR /opt/weird-app`, its own uid-1500 non-root user,
- * and `ENTRYPOINT ["./launch.sh"]` with the real command line in `CMD`.
- *
- * Driven entirely by `apify` commands, per `requirements/test.md`'s CLI-only rule - except the one
- * narrow exception that rule already documents for debug mode: the last case opens a raw TCP
- * connection to the published debug port, because an IDE attach is not expressible as an `apify`
- * command. Requires a reachable Docker daemon and fails loudly, never skips, like every other e2e file.
+ * `apify` commands only, except the debug-port TCP connect no CLI command can express
+ * (`requirements/test.md`'s documented exception). Requires Docker and fails loudly without it.
  */
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,33 +41,24 @@ const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'sample_actor_nonstandard');
 const CONTAINER_NAME = 'actor-runtime-e2e-nonstandard';
 const IMAGE_TAG = 'actor-runtime:e2e-nonstandard';
 
-/** `sample_actor_nonstandard/docker/Actor.dockerfile`'s `WORKDIR` - deliberately neither `/usr/src/app`
- * (what every Apify base image sets) nor anything else the runtime could have guessed. */
+/** The sample's own `WORKDIR` and `USER` - neither of them an Apify base image's. */
 const WORKING_DIRECTORY = '/opt/weird-app';
-/** The uid that Dockerfile's own `USER` resolves to. */
 const ACTOR_UID = '1500';
 /** `app/main.py`'s `FINISHED_MARKER`, and the edit a dev-folder run must pick up instead. */
 const ORIGINAL_MARKER = 'Non-standard Actor finished.';
 const EDITED_MARKER = 'Non-standard Actor finished (dev-folder-edit-marker).';
-/** `launch.sh`'s own `$0`, when the run started through the image's own working-directory-relative
- * entry point. The two engines spell the same thing differently - Docker passes the image's `Entrypoint`
- * through verbatim (`./launch.sh`), Podman resolves it against the working directory first
- * (`/opt/weird-app/./launch.sh`) - so this accepts either, and the assertions pair it with an explicit
- * check that the path is NOT the preserved copy below, which is the distinction that actually matters. */
+/** `launch.sh`'s `$0` when started from the image's own copy. Docker keeps `./launch.sh`, Podman
+ * resolves it to `<workdir>/./launch.sh`; either way, not the preserved copy below. */
 const IMAGE_ENTRY_POINT_LINE = new RegExp(
 	`launch\\.sh: entry point running as (?:${WORKING_DIRECTORY}/)?\\./launch\\.sh`,
 );
-/** Where the runtime puts an entry point the dev-folder mount would otherwise hide
- * (`docker-driver.ts`'s `PRESERVED_ENTRYPOINT_DIR`) - an absolute path it sets itself, so unlike the
- * image's own it reads identically on every engine. */
+/** `docker-driver.ts`'s `PRESERVED_ENTRYPOINT_DIR` copy - the runtime's own absolute path. */
 const PRESERVED_ENTRY_POINT = '/apify-runtime-entrypoint/launch.sh';
 
-/** The Actor id `push`ed by the first test, reused by every later one - the `it` blocks in this file run
- * in declaration order against the one runtime container `beforeAll` starts. */
+/** Pushed by the first test, reused by the later ones (they run in declaration order). */
 let actorId: string;
 
-/** The stored log, not `apify call`'s streamed copy: this Actor exits within milliseconds, and the
- * CLI's stream can close before its last lines are flushed (see `dev-folder-bind-mount.test.ts`). */
+/** The stored log: this Actor exits so fast that `apify call`'s stream can miss its last lines. */
 function storedLog(runId: string, env: NodeJS.ProcessEnv): string {
 	return apify(['api', 'GET', `actor-runs/${runId}/log`], { cwd: REPO_ROOT, env });
 }
@@ -98,8 +79,7 @@ function registerDevFolder(id: string, path: string, env: NodeJS.ProcessEnv): { 
 	return (JSON.parse(output) as ApiEnvelope<{ localDevFolder: string | null }>).data;
 }
 
-/** Polls `check` until it returns a defined value or the deadline passes; a throwing check counts as
- * "not yet", so one flaky CLI invocation cannot fail the wait before its own deadline. */
+/** Polls until `check` returns a value or the deadline passes; a throwing check just retries. */
 async function waitFor<T>(check: () => T | undefined, timeoutMs: number, description: string): Promise<T> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
@@ -115,8 +95,7 @@ async function waitFor<T>(check: () => T | undefined, timeoutMs: number, descrip
 	}
 }
 
-/** A bare TCP connect to `127.0.0.1:port` - debugpy's listen socket accepts one before any DAP
- * handshake. The documented narrow exception to the CLI-only rule (`requirements/test.md`). */
+/** A bare TCP connect - debugpy accepts one before any DAP handshake. */
 function canConnectTcp(port: number): Promise<boolean> {
 	return new Promise((resolve) => {
 		const socket = connect({ host: '127.0.0.1', port, timeout: 2000 });
@@ -143,8 +122,7 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				);
 			}
 
-			// Only the two base images this file actually builds against - it never touches the
-			// `apify/actor-*` samples, so `pullBaseImages()` would only cost time here.
+			// Only what this file builds against; it never touches the `apify/actor-*` samples.
 			pullImage(NONSTANDARD_ACTOR_BASE_IMAGE);
 			pullImage(NO_WORKDIR_ACTOR_BASE_IMAGE);
 			buildRuntimeImage(REPO_ROOT, IMAGE_TAG);
@@ -171,9 +149,7 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 			expect(push.build.status).toBe('SUCCEEDED');
 			actorId = push.actor.id;
 
-			// The Dockerfile is in neither default location - `docker/Actor.dockerfile` is reachable only
-			// through the `dockerfile` field of `.actor/actor.json`, and the build log states which file
-			// resolution picked (`actor-driver.md`'s Dockerfile resolution order).
+			// In neither default location - reachable only through `.actor/actor.json`'s `dockerfile` field.
 			expect(buildLog(push.build.id, env)).toContain(
 				'Using Dockerfile "docker/Actor.dockerfile" (from the "dockerfile" field in .actor/actor.json).',
 			);
@@ -183,19 +159,18 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				expect(call.run.status).toBe('SUCCEEDED');
 
 				const log = storedLog(call.run.id, env);
-				// The custom entry point ran, in the image's own working directory, as its own user - and
-				// handed over to the command line `CMD` supplied, which is what actually produced the items.
+				// The custom entry point ran, in the image's own working directory, as its own user.
 				expect(log).toMatch(IMAGE_ENTRY_POINT_LINE);
 				expect(log).toContain(`launch.sh: working directory ${WORKING_DIRECTORY}`);
 				expect(log).toContain(`launch.sh: user id ${ACTOR_UID}`);
 				expect(log).toContain('launch.sh: handing over to: app/main.py');
 				expect(log).toContain(`main.py: working directory ${WORKING_DIRECTORY}`);
-				// The platform env-var contract reaches an Actor that never imports the Apify SDK.
+				// The platform env vars reach an Actor that never imports the SDK.
 				expect(log).toContain('main.py: APIFY_IS_AT_HOME=1');
 				expect(log).toContain(`main.py: ACTOR_RUN_ID=${call.run.id}`);
 				expect(log).toContain(ORIGINAL_MARKER);
 
-				// The SDK-less Actor's `OUTPUT` record, written over plain HTTP, read back through the CLI.
+				// The `OUTPUT` record it wrote over plain HTTP, read back through the CLI.
 				const output = JSON.parse(
 					apify(['api', 'GET', `key-value-stores/${call.storage.defaultKeyValueStoreId}/records/OUTPUT`], {
 						cwd: REPO_ROOT,
@@ -222,29 +197,21 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 			const env = apifyEnv(isolatedApifyHome);
 			expect(actorId).toBeTruthy();
 
-			// A throwaway copy - this case edits the Actor's source, and the committed sample must never be
-			// touched, not even transiently.
+			// A throwaway copy - this case edits the source, and the committed sample must stay untouched.
 			const devFolder = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-nonstandard-dev-'));
 			try {
-				// `mkdtemp` creates the directory 0700, owned by whoever runs this suite - and this Actor's
-				// image runs as its own uid-1500 user, which is neither root nor that owner, so without this
-				// the mounted directory would not even be traversable from inside the container. A developer
-				// registering a folder from their own home directory hits the same rule; 0755 is what makes
-				// the mount usable by an image whose user is its own.
+				// `mkdtemp` makes it 0700: unreadable to the image's own uid-1500 user once mounted.
 				chmodSync(devFolder, 0o755);
 				cpSync(SAMPLE_ACTOR_DIR, devFolder, { recursive: true });
-				// Explicit, rather than trusting the copy to carry the mode across every filesystem this
-				// suite may run on: without the execute bit the image's `ENTRYPOINT ["./launch.sh"]` could
-				// not start from the mounted copy at all.
+				// The mounted copy is what `ENTRYPOINT ["./launch.sh"]` executes - it needs the mode.
 				chmodSync(join(devFolder, 'launch.sh'), 0o755);
 				const mainPy = join(devFolder, 'app', 'main.py');
 				writeFileSync(mainPy, readFileSync(mainPy, 'utf8').replace(ORIGINAL_MARKER, EDITED_MARKER));
 
 				expect(registerDevFolder(actorId, devFolder, env).localDevFolder).toBe(devFolder);
 
-				// No `apify push`/`apify build` between the edit above and this call - the entire point of
-				// the feature, here against a working directory the runtime could only have learned from
-				// the built image itself.
+				// No push/build between the edit and this call, against a working directory the runtime could
+				// only have learned from the image.
 				const mounted = callWith({ itemCount: 1 }, env);
 				expect(mounted.run.status).toBe('SUCCEEDED');
 				const mountedLog = storedLog(mounted.run.id, env);
@@ -252,22 +219,20 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				expect(mountedLog).toContain(`mounted over the image's working directory ${WORKING_DIRECTORY}`);
 				expect(mountedLog).toContain(EDITED_MARKER);
 				expect(mountedLog).not.toContain(`${ORIGINAL_MARKER}\n`);
-				// The dev folder carries `launch.sh` itself, so the run starts through THAT copy - the
-				// image's own is never substituted.
+				// The dev folder carries `launch.sh`, so the image's copy is never substituted.
 				expect(mountedLog).toMatch(IMAGE_ENTRY_POINT_LINE);
 				expect(mountedLog).not.toContain(PRESERVED_ENTRY_POINT);
 				expect(mountedLog).not.toContain("using the image's own copy of it");
 
-				// Now the other branch of the same contract: a dev folder without the entry point the image
-				// starts through. The mount would hide `./launch.sh` and the engine would refuse to start the
-				// container; the runtime must fall back to the image's own copy, at a path no mount covers.
+				// The other branch: without it the mount would hide `./launch.sh` and the container would not
+				// start - the runtime must fall back to the image's copy, at a path no mount covers.
 				rmSync(join(devFolder, 'launch.sh'));
 				const preserved = callWith({ itemCount: 4 }, env);
 				expect(preserved.run.status).toBe('SUCCEEDED');
 				const preservedLog = storedLog(preserved.run.id, env);
 				expect(preservedLog).toContain('The image starts through ./launch.sh in its working directory');
 				expect(preservedLog).toContain(`launch.sh: entry point running as ${PRESERVED_ENTRY_POINT}`);
-				// Still the dev folder's own (edited) Actor body, started by the image's entry point.
+				// Still the dev folder's edited body, started by the image's entry point.
 				expect(preservedLog).toContain(EDITED_MARKER);
 				expect(preservedLog).toContain(`launch.sh: working directory ${WORKING_DIRECTORY}`);
 
@@ -276,8 +241,8 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				) as DatasetInfoResult;
 				expect(info.itemCount).toBe(4);
 			} finally {
-				// Cleared unconditionally: every later case in this file runs the same Actor from its built
-				// image alone, and a stale registration pointing at the removed temp folder would fail them.
+				// Later cases run this Actor from its image alone; a registration on a removed folder would
+				// fail them.
 				apify(['api', 'POST', `/actor-runtime/dev-folder/${actorId}`, '--body', '""'], {
 					cwd: REPO_ROOT,
 					env,
@@ -293,8 +258,7 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
 
-			// An Actor whose image sets no `WORKDIR` whatsoever - the `imageWorkingDirectory` half of the
-			// mount's both-or-neither precondition is simply absent (`actor-driver.md`).
+			// No `WORKDIR` at all: the `imageWorkingDirectory` half of the mount's precondition is absent.
 			const noWorkdirActorDir = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-no-workdir-'));
 			const devFolder = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-no-workdir-src-'));
 			try {
@@ -330,16 +294,15 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				expect(registerDevFolder(push.actor.id, devFolder, env).localDevFolder).toBe(devFolder);
 
 				const call = JSON.parse(apify(['call', '--json'], { cwd: noWorkdirActorDir, env })) as CallResult;
-				// The run itself is completely unaffected - it starts exactly as if the feature did not exist.
+				// The run starts exactly as if the feature did not exist...
 				expect(call.run.status).toBe('SUCCEEDED');
 				const log = storedLog(call.run.id, env);
 				expect(log).toContain('no-workdir actor: pwd=/');
 				expect(log).toContain('no-workdir actor: done');
-				// ...but the run says why the folder it was told about was not mounted, instead of leaving a
-				// registration that reads back fine and a run that quietly ignores it.
+				// ...but says why the folder was not mounted, instead of ignoring it silently.
 				expect(log).toContain(`Not mounting the registered local dev folder ${devFolder} for this run`);
 				expect(log).toContain('has no working directory of its own');
-				// Nothing was mounted, so the dev folder's own file is nowhere in the container.
+				// Nothing was mounted.
 				expect(log).not.toContain('Live dev folder mode');
 			} finally {
 				rmSync(noWorkdirActorDir, { recursive: true, force: true });
@@ -364,9 +327,8 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				port: 5678,
 			});
 
-			// Not `apify call`: a debug run pauses until a debugger attaches, which this test never does, so
-			// `call` would block for the run's whole timeout. `apify api POST actors/<id>/runs` is how
-			// `call` starts a run under the hood and returns immediately.
+			// Not `apify call`: a paused debug run would block it for the whole timeout. This is how `call`
+			// starts a run under the hood, returning immediately.
 			const run = (
 				JSON.parse(
 					apify(['api', 'POST', `actors/${actorId}/runs`, '--body', '{}'], { cwd: REPO_ROOT, env }),
@@ -385,14 +347,12 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 					60_000,
 					'the debug attach line to appear in the run log',
 				);
-				// Resolved from the image's own env fingerprint, not from its argv: the image starts through
-				// `./launch.sh`, which names no interpreter at all.
+				// Resolved from the image's env fingerprint: its argv names no interpreter at all.
 				expect(log).toMatch(/debugpy \d+\.\d+\.\d+/);
 				expect(log).toContain('0.0.0.0:5678');
 				expect(log).toContain('127.0.0.1:5678');
 
-				// The injected payload reaches a container that runs as a non-root user of the image's own
-				// making and starts through a shell script - its own "listening" line is the proof.
+				// The injected payload works in a container that starts through a shell script as uid 1500.
 				const listeningLog = await waitFor(
 					() => {
 						const text = storedLog(run.id, env);
@@ -401,8 +361,7 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 					60_000,
 					'sitecustomize.py\'s own "listening" line to appear in the run log',
 				);
-				// The custom entry point did run (it is what starts the interpreter at all), but the Actor's
-				// own body is paused before its first line - no items pushed, no finish marker.
+				// The entry point ran, but the Actor's body is paused before its first line.
 				expect(listeningLog).toContain('launch.sh: handing over to: app/main.py');
 				expect(listeningLog).not.toContain('main.py: pushing');
 				expect(listeningLog).not.toContain(ORIGINAL_MARKER);

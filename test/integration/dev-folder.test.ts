@@ -915,17 +915,16 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		const capturing = devMountCapturingDriver();
 		server = await startTestServer(capturing.driver);
 		const actor = await server.client.actors().create({ name: 'devmount-no-working-directory-actor' });
-		// A build whose image recorded no working directory at all - what a non-standard image that sets
-		// no `WORKDIR` (or sets it to `/`) produces (`docker-driver.ts: inspectWorkingDirectory`).
+		// No working directory recorded - what an image with no `WORKDIR` (or `/`) produces.
 		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
 		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
 
 		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
 		expect(run.status).toBe('SUCCEEDED');
-		// The container still starts exactly as if the feature did not exist...
+		// The run is unaffected...
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
 		const log = await server.client.log(run.id).get();
-		// ...but the outcome is not silent.
+		// ...but not silent.
 		expect(log).toContain('Not mounting the registered local dev folder /abs/dev/src for this run');
 		expect(log).toContain('has no working directory of its own');
 		expect(log).not.toContain('Live dev folder mode');

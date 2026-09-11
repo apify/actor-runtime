@@ -51,12 +51,12 @@ describe('validateDevFolderPathShape', () => {
 });
 
 describe('unknownWorkingDirectoryLine', () => {
-	it("names the folder, why it cannot be mounted, and both ways out - the line a non-standard image's run prints instead of ignoring a registration silently", () => {
+	it('names the folder, why it cannot be mounted, and both ways out', () => {
 		const line = unknownWorkingDirectoryLine('/home/dev/my-actor');
 		expect(line).toContain('/home/dev/my-actor');
 		expect(line).toContain('no working directory of its own');
 		expect(line).toContain('WORKDIR');
-		// Both remedies: make the image have one, or stop registering the folder.
+		// Both remedies: give the image a WORKDIR, or clear the registration.
 		expect(line).toMatch(/rebuild/i);
 		expect(line).toMatch(/clear the registration/i);
 	});

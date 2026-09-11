@@ -306,10 +306,7 @@ export async function runInBackground(
 				`(started with devFolder=false) - running from the built image alone.`,
 		);
 	}
-	// A registered folder the run cannot mount because this run's own build has no working directory to
-	// mount it over (a non-standard image that sets no `WORKDIR`, or sets it to `/`). The container still
-	// starts exactly as if the feature did not exist - only the silence is fixed. Not reported when the
-	// run opted out anyway (`devFolder=false`): that run was never going to mount anything.
+	// Nothing to mount the registered folder over. Not reported for a run that opted out anyway.
 	if (actor.localDevFolder && !build.imageWorkingDirectory && options.devFolder !== false) {
 		appendRuntimeLog(record.id, unknownWorkingDirectoryLine(actor.localDevFolder));
 	}

@@ -60,9 +60,7 @@
   never any other build the Actor happens to have.
 - **The mount is applied only when both a registered dev folder and a known working directory exist**
   for the run's resolved build; either missing means the run starts exactly as if the feature did not
-  exist. When a dev folder _is_ registered but the run's resolved build has no working directory (an
-  image that sets no `WORKDIR`, or sets it to `/`), the run's log says so, naming the folder and both
-  ways out - the container is still started unchanged, only the silence is fixed.
+  exist.
 - **A single run can opt out** of the mount (`?devFolder=false` on run start, `api.md`) without touching
   the registration. When a mount is skipped this way, the run's log says so.
 - The registration status the console and API report is the registered folder alone - never that a

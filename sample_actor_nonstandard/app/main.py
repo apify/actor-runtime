@@ -1,9 +1,7 @@
 """The non-standard sample Actor's body - Python standard library only, no Apify SDK.
 
-Everything it needs comes from the environment variables the runtime sets for every Actor container
-(`actor-driver.md`'s "Environment variables in every Actor container"), and everything it does goes
-over plain HTTP to `APIFY_API_BASE_URL`. That is the point: an Actor that never imports `apify` still
-gets its input, its default storages and its log, exactly like an SDK-based one.
+Input, storages and log all come from the runtime's env vars and its HTTP API: an Actor that never
+imports `apify` gets the same platform contract as an SDK-based one.
 """
 
 from __future__ import annotations
@@ -14,8 +12,7 @@ import sys
 import urllib.error
 import urllib.request
 
-# Printed by the runtime's own log as an ordinary Actor line; the e2e suite asserts on it to prove the
-# dev-folder bind mount actually replaced this file.
+# The e2e suite edits this marker to prove a dev-folder mount replaced the file.
 FINISHED_MARKER = 'Non-standard Actor finished.'
 
 API_BASE_URL = os.environ['APIFY_API_BASE_URL'].rstrip('/')
@@ -41,7 +38,6 @@ def api_request(method: str, path: str, body: object | None = None) -> bytes | N
 def main() -> None:
     print(f'main.py: interpreter {sys.executable}, argv {sys.argv}')
     print(f'main.py: working directory {os.getcwd()}')
-    # Proof that the platform contract vars reach an Actor that knows nothing about the Apify SDK.
     print(f'main.py: APIFY_IS_AT_HOME={os.environ.get("APIFY_IS_AT_HOME")}')
     print(f'main.py: ACTOR_RUN_ID={os.environ.get("ACTOR_RUN_ID")}')
 
@@ -53,8 +49,7 @@ def main() -> None:
     item_count = int(actor_input.get('itemCount', 2))
     print(f'main.py: pushing {item_count} item(s) to dataset {dataset_id}.')
 
-    # Deliberately both accepted body shapes of `POST /v2/datasets/:id/items`: a single object for the
-    # first item, an array for the rest.
+    # Both accepted body shapes of `POST /v2/datasets/:id/items`: one object, then an array.
     if item_count > 0:
         api_request('POST', f'datasets/{dataset_id}/items', {'index': 0, 'source': 'nonstandard'})
     if item_count > 1:

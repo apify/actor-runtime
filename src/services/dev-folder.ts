@@ -131,14 +131,8 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 	return { localDevFolder: actor.localDevFolder ?? null };
 }
 
-/**
- * The line a run prints when the Actor HAS a registered dev folder but this run's own resolved build
- * recorded no working directory for its image - the `imageWorkingDirectory` half of the both-or-neither
- * pair (`actor-driver.md`'s "Bind mount volumes with Actor source code"). The container still starts
- * exactly as if the feature did not exist; this line exists so that outcome is never silent, which is
- * what a non-standard image (one that sets no `WORKDIR` at all, or sets it to `/`) would otherwise
- * produce: a registration that reads back fine and a run that quietly ignores it.
- */
+/** Printed when a registered dev folder cannot be mounted because the run's build has no working
+ * directory (an image with no `WORKDIR`, or `/`). The run is unaffected; only the silence is. */
 export function unknownWorkingDirectoryLine(localDevFolder: string): string {
 	return (
 		`Not mounting the registered local dev folder ${localDevFolder} for this run: the image of the build ` +
