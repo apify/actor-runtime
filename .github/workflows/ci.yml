@@ -131,12 +131,6 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # `qemu` alone is a large bottle, and a fresh runner re-downloads every one of them.
-            - name: Cache Homebrew bottles
-              uses: actions/cache@v4
-              with:
-                  path: ~/Library/Caches/Homebrew/downloads
-                  key: brew-${{ runner.os }}-${{ runner.arch }}-colima-docker-buildx-qemu
             # Both extra formulae are load-bearing. `qemu` is Colima's VM driver on Intel and the source
             # of the `qemu-img` it shells out to for disks; nothing else pulls it in since Lima dropped the
             # dependency. `docker-buildx` is needed because the `docker` formula is the CLI alone, and
@@ -148,11 +142,6 @@ jobs:
             # at the default `/var/run/docker.sock`. Colima's host-side forwarding socket is not reachable
             # from in there.
             - name: Start a container engine (Colima)
-              # `brew install` otherwise runs its own `brew update` first, which costs more than the
-              # installs; `NO_INSTALL_CLEANUP` stops it pruning the bottles just cached.
-              env:
-                  HOMEBREW_NO_AUTO_UPDATE: '1'
-                  HOMEBREW_NO_INSTALL_CLEANUP: '1'
               run: |
                   brew install colima docker docker-buildx qemu
                   mkdir -p ~/.docker/cli-plugins
