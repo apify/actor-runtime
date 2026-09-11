@@ -232,7 +232,19 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 	afterAll(() => {
 		stopRuntimeContainer(CONTAINER_NAME);
 		if (isolatedApifyHome) removeIsolatedApifyHome(isolatedApifyHome);
-		if (actorDir) rmSync(actorDir, { recursive: true, force: true });
+		// Best-effort, like `stopRuntimeContainer`'s own cleanup - never a reason to fail a suite whose
+		// assertions have all already run. This folder IS the Actor's `HOME` inside the container (the
+		// mount covers `/home/myuser`), so Chrome leaves its dot-directories in it, owned by whatever host
+		// uid the container's `myuser` mapped to - the runner's own uid under rootful Docker's uid 1000,
+		// but a subuid the runner cannot touch under ROOTLESS Podman, where the removal then fails with
+		// EACCES. `rm` still takes out everything it is allowed to before giving up.
+		if (actorDir) {
+			try {
+				rmSync(actorDir, { recursive: true, force: true });
+			} catch (error) {
+				console.warn(`Could not fully remove the temporary Actor folder ${actorDir}: ${String(error)}`);
+			}
+		}
 	});
 
 	it(
