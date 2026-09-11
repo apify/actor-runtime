@@ -204,13 +204,6 @@ black display - the bundled `sample_actor_playwright` and `sample_actor_playwrig
 `headless=False`), and the image must provide an X display, which the Apify Playwright and Puppeteer base images
 do. Like Python debug mode, this needs the runtime to run from its own built image.
 
-### Using them together
-
-The dev-folder mount, debug mode and browser view are three independent per-Actor toggles, and a run can carry
-all three: edit and recompile locally, break on the first line in your IDE, and watch the browser the run drives,
-without pushing anything in between. Turn on whichever you want, in any order, and `apify call` as usual - the
-run's log names all of them. `test/e2e/all-modes.test.ts` runs exactly that combination against a real engine.
-
 ## Publishing the image
 
 Images go to [`apify/actor-runtime`](https://hub.docker.com/r/apify/actor-runtime) on Docker Hub by
