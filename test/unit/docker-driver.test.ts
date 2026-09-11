@@ -1039,8 +1039,7 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		stub.endLogStream();
 		await outcomePromise;
 
-		// The path RELATIVE to the mount target, resolved from the token - the dev folder is what it is
-		// looked up in, so the lookup can't be the token as the image happened to spell it.
+		// Relative to the mount target, resolved from the token - not the token as the image spelled it.
 		expect(hasEntry).toHaveBeenCalledWith('/host/src', 'xvfb-entrypoint.sh');
 		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/usr/src/app/xvfb-entrypoint.sh' });
 		// Two containers: the throwaway one the file is read from, then the run's own.
@@ -1058,11 +1057,9 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		expect(logged.join('')).toContain('starts through ./xvfb-entrypoint.sh in its working directory');
 	});
 
-	// `apify/actor-node-playwright-chrome:24-1.61.1` - the image `sample_actor_playwright` builds on - spells
-	// its entrypoint `/home/myuser/xvfb-entrypoint.sh` with `WorkingDir` `/home/myuser`: absolute, and
-	// squarely inside the mount target. Treating "absolute" as "the mount cannot reach it" left that image
-	// starting through a file the bind mount had just hidden, so its runs died with "executable file not
-	// found" the moment a dev folder was registered.
+	// `apify/actor-node-playwright-chrome` spells its entrypoint `/home/myuser/xvfb-entrypoint.sh` with
+	// `WorkingDir` `/home/myuser` - absolute, and squarely inside the mount target. Treating "absolute" as
+	// "out of the mount's reach" left its runs dying with "executable file not found".
 	it('an ABSOLUTE entrypoint that points inside the working directory is hidden by the mount just like a relative one, and is preserved the same way', async () => {
 		const stub = stubDockerForRun();
 		stub.imageInspect.mockResolvedValue({
@@ -1096,9 +1093,7 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 	});
 
 	it('the dev folder providing the file itself, an entrypoint outside the working directory, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
-		// `workingDirectory` is what the RUN mounts over (`devMount.imageWorkingDirectory`), which is what
-		// the decision is made against - the image's own `WorkingDir` is carried along only so each case
-		// reads like the image it stands for.
+		// `workingDirectory` is what the run mounts over, which is what the decision is made against.
 		for (const { config, workingDirectory, devFolderHasIt } of [
 			{
 				config: { Entrypoint: ['./xvfb-entrypoint.sh'] },
