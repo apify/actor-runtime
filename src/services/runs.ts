@@ -5,7 +5,7 @@ import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
 import { openKeyValueStore } from '../storage/open.js';
 import { DebugPortInUseError, type BrowserViewerHandle, type Driver } from '../driver/types.js';
-import { appendLog, flushLog, markLogTerminal } from './logs.js';
+import { appendLog, appendRuntimeLog, flushLog, markLogTerminal } from './logs.js';
 import { markEventsTerminal, publishAborting, publishPersistState, publishSystemInfo } from './events-channel.js';
 import { clearRunRestartState, consumeRunRestart } from './migrations.js';
 import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
@@ -20,6 +20,7 @@ import {
 import { browserViewLogLine, describeBrowserViewerStartFailure } from './browser-view.js';
 import { dedicatedCpusFor } from '../resources.js';
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
+import { formatRuntimeLogLines, type RuntimeLogLine } from '../runtime-log.js';
 
 const DEFAULT_MEMORY_MBYTES = 1024;
 const DEFAULT_TIMEOUT_SECS = 300;
@@ -203,15 +204,15 @@ export async function startRun(
 }
 
 /** Fails a run before any container exists: logs `logMessage`, flushes and terminates the log/events
- * channels, and transitions to `FAILED` with `statusMessage`. Adds no prefix itself - callers pass each
- * string already formatted as they want it to appear. */
+ * channels, and transitions to `FAILED` with `statusMessage`. Adds no wording of its own - callers
+ * pass each string already phrased as they want it to appear. */
 async function failBeforeContainer(
 	runId: string,
 	logMessage: string,
 	statusMessage: string | undefined,
 ): Promise<void> {
 	const { runs } = getRegistries();
-	appendLog(runId, `${logMessage}\n`);
+	appendRuntimeLog(runId, logMessage);
 	await flushLog(runId);
 	markLogTerminal(runId);
 	markEventsTerminal(runId);
@@ -299,10 +300,10 @@ export async function runInBackground(
 			: undefined;
 	const devMount = options.devFolder === false ? undefined : devMountApplicable;
 	if (devMountApplicable && !devMount) {
-		appendLog(
+		appendRuntimeLog(
 			record.id,
 			`Skipping the registered local dev folder ${devMountApplicable.localDevFolder} for this run ` +
-				`(started with devFolder=false) - running from the built image alone.\n`,
+				`(started with devFolder=false) - running from the built image alone.`,
 		);
 	}
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
@@ -324,7 +325,7 @@ export async function runInBackground(
 		await runs.update(record.id, (current) =>
 			current ? { ...current, localBrowserView: { interactive, vncHost, vncPort } } : current,
 		);
-		appendLog(record.id, browserViewLogLine(record.id, interactive));
+		appendRuntimeLog(record.id, browserViewLogLine(record.id, interactive));
 	}
 
 	// Re-check right before creating the container: an abort issued while the registry/version lookups
@@ -366,11 +367,11 @@ export async function runInBackground(
 			if (restart) {
 				const current = await runs.get(record.id);
 				if (current && current.status === 'RUNNING') {
-					appendLog(
+					appendRuntimeLog(
 						record.id,
 						restart === 'migration'
-							? 'Migrating Actor run to a new container.\n'
-							: 'Rebooting Actor run container.\n',
+							? 'Migrating Actor run to a new container.'
+							: 'Rebooting Actor run container.',
 					);
 					continue;
 				}
@@ -404,7 +405,7 @@ export async function runInBackground(
 				: (error as Error).message;
 		// Into the run's own log too: the engine refusing the container (a network it cannot set up, an
 		// unusable mount) is what `apify call` streams, and the status message alone leaves it empty.
-		appendLog(record.id, `Cannot start run: ${statusMessage}\n`);
+		appendRuntimeLog(record.id, `Cannot start run: ${statusMessage}`);
 		await flushLog(record.id);
 		await transitionJobStatus(runs, record.id, 'FAILED', {
 			finishedAt: new Date().toISOString(),
@@ -507,10 +508,15 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 	);
 }
 
-function renderRuntimeLogSection(lines: string[]): string {
-	const bold = (line: string) => `\x1b[1m${line}\x1b[0m`;
+/** 80 columns, not a terminal's full width: every line already carries a timestamp and the runtime
+ * marker, so a wider rule only forces wrapping. */
+function renderRuntimeLogSection(lines: readonly RuntimeLogLine[]): string {
 	const title = ' Local Actor runtime ';
-	const width = 100;
+	const width = 80;
 	const head = `${'='.repeat(4)}${title}${'='.repeat(width - 4 - title.length)}`;
-	return `${[bold(head), ...lines, bold('='.repeat(width))].join('\n')}\n`;
+	return formatRuntimeLogLines([
+		{ text: head, emphasis: true },
+		...lines,
+		{ text: '='.repeat(width), emphasis: true },
+	]);
 }

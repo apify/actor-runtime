@@ -311,9 +311,9 @@ describe('run lifecycle with browser view (services/runs.ts, through the real st
 		expect(stored?.localBrowserView).toEqual({ interactive: true, vncHost: '172.18.0.5', vncPort: 5900 });
 
 		const log = await server.client.run(run.id).log().get();
-		expect(log).toContain(
-			`Browser view: live mirror of this run's display at http://localhost:3000/runs/${run.id}/browser`,
-		);
+		// The URL carries its own color span (`runtime-log.ts`), so it is not contiguous with the text.
+		expect(log).toContain(`Browser view: live mirror of this run's display at`);
+		expect(log).toContain(`http://localhost:3000/runs/${run.id}/browser`);
 		expect(log).toContain('interactive');
 
 		// Never on the emulated /v2 run object.

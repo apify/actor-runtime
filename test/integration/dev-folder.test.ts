@@ -15,6 +15,7 @@ import axios from 'axios';
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
 import { createConsoleServer } from '../../src/console/server.js';
 import { getRegistries } from '../../src/storage/registries.js';
+import { RUNTIME_LOG_PREFIX } from '../../src/runtime-log.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import type { ActorRecord, BuildRecord } from '../../src/storage/entities.js';
@@ -838,6 +839,33 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		expect(log).toContain('Live dev folder mode');
 		expect(log).toContain('apify call --no-dev-folder');
 		expect(log!.indexOf('Local Actor runtime')).toBeLessThan(log!.indexOf('done'));
+	});
+
+	it("marks every runtime-authored line of a run's log with the runtime prefix and its blue, and leaves the Actor's own output untouched", async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-marked-runtime-lines' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		const log = (await server.client.log(run.id).get())!;
+		const lines = log.split('\n').filter((line) => line.length > 0);
+
+		// The dev-folder section is the runtime talking; `done` is the Actor's own output.
+		const runtimeLines = lines.filter((line) => line.includes(RUNTIME_LOG_PREFIX));
+		expect(runtimeLines.length).toBe(lines.length - 1);
+		for (const line of runtimeLines) {
+			// Stamp first, then the marker: log redirection (api.md) still finds the stamp at line start.
+			expect(line).toMatch(
+				// eslint-disable-next-line no-control-regex
+				/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \x1b\[(?:34|1;34)m\[actor-runtime\]\x1b\[0m /,
+			);
+		}
+
+		const actorLine = lines.find((line) => line.endsWith('done'))!;
+		expect(actorLine).not.toContain(RUNTIME_LOG_PREFIX);
+		expect(actorLine).not.toContain('\x1b');
 	});
 
 	it('an Actor that was never registered gets devMount: undefined on the real run-start service path', async () => {

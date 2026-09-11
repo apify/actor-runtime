@@ -5,6 +5,8 @@
 - A build is produced by building a docker image from the Actor source that was pushed to the system.
 - Build and run output is persisted as the job's log and fanned out live to any open
   `GET /v2/logs/:id?stream=true` response.
+- Every log line originating in the runtime itself (not in the Actor) opens with a blue
+  `[actor-runtime]` prefix, so the two are distinguishable at a glance.
 - **Status state machine**: `READY -> RUNNING -> SUCCEEDED | FAILED | TIMED-OUT | ABORTED`, with
   `RUNNING -> ABORTING -> ABORTED` while a stop is in flight (`ABORTING`/`ABORTED` are also reachable
   directly from `READY` - an abort issued before the build/run ever started).

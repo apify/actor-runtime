@@ -54,6 +54,7 @@ import {
 } from '../config.js';
 import { CPU_PERIOD_US, cpuQuotaFor, dedicatedCpusFor } from '../resources.js';
 import { normalizeEntryName } from './tar-entry-name.js';
+import { formatRuntimeLog } from '../runtime-log.js';
 import type { SourceFile } from '../storage/entities.js';
 import {
 	DebugPortInUseError,
@@ -1040,7 +1041,7 @@ export class DockerDriver implements Driver {
 
 		// Informational only - the requested limits are applied verbatim either way.
 		const overCapacityWarning = this.buildOverCapacityWarning(ctx);
-		if (overCapacityWarning) onLog(overCapacityWarning);
+		if (overCapacityWarning) onLog(formatRuntimeLog(overCapacityWarning));
 
 		// Re-verified on every dev-mount run, before any container exists: Docker would reject a `Mounts`
 		// bind whose source vanished since registration, but Podman's Docker-compatible API auto-creates the
@@ -1059,13 +1060,19 @@ export class DockerDriver implements Driver {
 			if (ctx.debug.language === 'python') {
 				debugPayload = await this.loadDebugPayload();
 				onLog(
-					this.buildDebugLogLine(
-						{ language: 'python', port: ctx.debug.port, debugpyVersion: debugPayload.debugpyVersion },
-						ctx.timeoutSecs,
+					formatRuntimeLog(
+						this.buildDebugLogLine(
+							{ language: 'python', port: ctx.debug.port, debugpyVersion: debugPayload.debugpyVersion },
+							ctx.timeoutSecs,
+						),
 					),
 				);
 			} else {
-				onLog(this.buildDebugLogLine({ language: 'node', port: ctx.debug.port }, ctx.timeoutSecs));
+				onLog(
+					formatRuntimeLog(
+						this.buildDebugLogLine({ language: 'node', port: ctx.debug.port }, ctx.timeoutSecs),
+					),
+				);
 			}
 		}
 
@@ -1281,8 +1288,10 @@ export class DockerDriver implements Driver {
 		const archive = await this.extractFromImage(imageId, inImage);
 		const tarball = await repackUnderDirectory(archive, PRESERVED_ENTRYPOINT_DIR);
 		onLog(
-			`The image starts through ${first} in its working directory, which the dev folder does not contain; ` +
-				`using the image's own copy of it.\n`,
+			formatRuntimeLog(
+				`The image starts through ${first} in its working directory, which the dev folder does not contain; ` +
+					`using the image's own copy of it.`,
+			),
 		);
 		return {
 			field,
