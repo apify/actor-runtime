@@ -67,12 +67,8 @@ export function appendLog(id: string, chunk: string): void {
 	for (const subscriber of state.subscribers) subscriber(stamped);
 }
 
-/**
- * `appendLog` for a message the runtime itself writes into a build/run log (not Actor output):
- * prefixed and colored by `runtime-log.ts` so a reader can tell the two voices apart at a glance.
- * Every runtime-authored message goes through here (or, in the driver, through `formatRuntimeLog`
- * before its `onLog` callback) - Actor output is passed to `appendLog` untouched.
- */
+/** For what the runtime writes itself, never for Actor output (`runtime-log.ts`). The driver formats
+ * its own through `formatRuntimeLog`, having no registry access. */
 export function appendRuntimeLog(id: string, text: string): void {
 	appendLog(id, formatRuntimeLog(text));
 }

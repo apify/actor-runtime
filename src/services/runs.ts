@@ -203,10 +203,9 @@ export async function startRun(
 	return record;
 }
 
-/** Fails a run before any container exists: logs `logMessage` as a runtime line (`runtime-log.ts`),
- * flushes and terminates the log/events channels, and transitions to `FAILED` with `statusMessage`.
- * Adds no textual prefix of its own - callers pass each string already worded as they want it to
- * appear. */
+/** Fails a run before any container exists: logs `logMessage`, flushes and terminates the log/events
+ * channels, and transitions to `FAILED` with `statusMessage`. Adds no wording of its own - callers
+ * pass each string already phrased as they want it to appear. */
 async function failBeforeContainer(
 	runId: string,
 	logMessage: string,
@@ -509,11 +508,8 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 	);
 }
 
-/** A block of runtime commentary rendered as one chunk: an emphasized `=== Local Actor runtime ===`
- * rule above and below `lines`, every line of it carrying the runtime's own prefix and color
- * (`runtime-log.ts`). The rules are 80 columns rather than the full width of a terminal: with a
- * timestamp and the runtime prefix already in front of every line, a wider rule only forces wrapping,
- * and the prefix identifies the block's lines even if one does wrap. */
+/** 80 columns, not a terminal's full width: every line already carries a timestamp and the runtime
+ * marker, so a wider rule only forces wrapping. */
 function renderRuntimeLogSection(lines: readonly RuntimeLogLine[]): string {
 	const title = ' Local Actor runtime ';
 	const width = 80;

@@ -8,7 +8,6 @@ const BOLD_BLUE = `${ESC}[1;34m`;
 const BOLD = `${ESC}[1m`;
 const RESET = `${ESC}[0m`;
 
-/** The colored marker every runtime line opens with, plain and emphasized. */
 const MARKER = `${BLUE}${RUNTIME_LOG_PREFIX}${RESET}`;
 const BOLD_MARKER = `${BOLD_BLUE}${RUNTIME_LOG_PREFIX}${RESET}`;
 
@@ -55,8 +54,7 @@ describe('formatRuntimeLog', () => {
 		const formatted = formatRuntimeLog('first\nsecond\n');
 
 		expect(formatted).toBe(`${MARKER} first\n${MARKER} second\n`);
-		// Every line starts with the marker and its reset: the runtime never leaves a span open across a
-		// newline, which is what keeps `services/logs.ts`'s line stamps outside the coloring.
+		// No span stays open across a newline, which keeps `services/logs.ts`'s stamps uncolored.
 		for (const line of formatted.split('\n').filter((l) => l.length > 0)) {
 			expect(line.startsWith(MARKER)).toBe(true);
 			expect(line.slice(MARKER.length)).not.toContain(ESC);

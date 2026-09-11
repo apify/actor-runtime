@@ -25,8 +25,7 @@ _STARTED_ENV_VAR = 'APIFY_ACTOR_RUNTIME_DEBUG_STARTED'
 
 def _log(message):
     # Runs before the Actor's own logging exists; docker-driver.ts captures stderr into the run log.
-    # The marker is the one every runtime-authored log line carries - keep it in sync with
-    # `src/runtime-log.ts`.
+    # Marker kept in sync with `src/runtime-log.ts`.
     print(f'\033[34m[actor-runtime]\033[0m {message}', file=sys.stderr, flush=True)
 
 

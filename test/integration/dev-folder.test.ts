@@ -852,13 +852,11 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		const log = (await server.client.log(run.id).get())!;
 		const lines = log.split('\n').filter((line) => line.length > 0);
 
-		// The whole dev-folder section is the runtime talking; `done` is the Actor's own output.
+		// The dev-folder section is the runtime talking; `done` is the Actor's own output.
 		const runtimeLines = lines.filter((line) => line.includes(RUNTIME_LOG_PREFIX));
 		expect(runtimeLines.length).toBe(lines.length - 1);
 		for (const line of runtimeLines) {
-			// Timestamp first, then the colored marker, then the message: the platform's log format
-			// (api.md) stays intact - a client's log redirection still sees the stamp at the very start
-			// of the line, and the coloring covers the marker only.
+			// Stamp first, then the marker: log redirection (api.md) still finds the stamp at line start.
 			expect(line).toMatch(
 				// eslint-disable-next-line no-control-regex
 				/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \x1b\[(?:34|1;34)m\[actor-runtime\]\x1b\[0m /,

@@ -132,9 +132,7 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 }
 
 /** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails
- * confusingly. Emphasis (bold), not a color of its own: the color of a runtime line always means "the
- * runtime wrote this", never a severity (`runtime-log.ts`), so these lines shout through the `!!`
- * markers and bold instead. `services/runs.ts` renders them into the run's log. */
+ * confusingly. Loud through `!!` and bold, not a color of its own (`runtime-log.ts`). */
 export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): RuntimeLogLine[] {
 	return [
 		{

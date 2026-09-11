@@ -19,8 +19,7 @@ else
 fi
 
 log() {
-	# The same marker every runtime-authored log line carries, blue included - keep it in sync with
-	# `src/runtime-log.ts`. `printf`, not `echo`, so the escapes are emitted portably by any `sh`.
+	# Marker kept in sync with `src/runtime-log.ts`. `printf`, not `echo`: portable escapes.
 	printf '\033[34m[actor-runtime]\033[0m %s\n' "$*"
 }
 
