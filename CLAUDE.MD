@@ -25,6 +25,16 @@ The human-oriented guide lives in `docs/quick-start.md`; this file is the conden
 - To redirect Apify CLI back to the original Apify services unset the environment variables:
     - `APIFY_CLIENT_BASE_URL`
     - `APIFY_CONSOLE_URL`
+- A recent `apify-cli` also manages the runtime itself, against the published image:
+    - `apify runtime start --detach` (installs the image if missing and starts the container),
+      `apify runtime stop`
+    - `apify runtime status` - whether it is running, on which engine and image, the published ports,
+      the host data directory, and which API the CLI currently talks to; exits 1 when it is down and
+      takes `--json`, so it is the cheapest way to check before running anything else
+    - `apify runtime connect` / `apify runtime disconnect` - point every later CLI command at the
+      runtime, or back at the Apify platform, without touching the login. The two environment
+      variables above take precedence wherever they are set, so prefer them for a one-off command
+      and use `connect` for a whole session.
 - Use `apify cli api ...` to send API calls and inspect the Actors, builds, runs, storages and other objects.
 - To simulate multiple users use custom token and in additional authorization header. For example: `apify cli api v2/datasets -H '{"authorization": "Bearer TOKEN"}'`
 - You can use already authenticated CLI or call `apify login --token TOKEN`

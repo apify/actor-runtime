@@ -42,6 +42,13 @@ apify push
 apify call --input '{"maxPages":3}'
 ```
 
+An `apify-cli` that knows about the runtime can do all of this itself, against the published image
+rather than a local build: `apify runtime start --detach` installs and starts it,
+`apify runtime status` reports whether it is up and on which ports and data directory, and
+`apify runtime connect` points every later command at it instead of the Apify platform
+(`apify runtime disconnect` reverts; the two environment variables above still win where they are
+set). See [docs/quick-start.md](docs/quick-start.md).
+
 This assumes you're already logged in (`apify login`, any stored token works - the runtime maps any
 non-empty token to its single local user). If that token happens to be a real Apify account token and
 the real platform is reachable, the runtime also adopts that account's real username/id/proxy password
