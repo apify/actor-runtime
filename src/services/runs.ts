@@ -1,5 +1,5 @@
 import { generateId } from '../storage/ids.js';
-import { liveDevFolderWarningLines } from './dev-folder.js';
+import { liveDevFolderWarningLines, unknownWorkingDirectoryLine } from './dev-folder.js';
 import type { ActorRecord, ActorVersionRecord, BuildRecord, JobStatus, RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
@@ -305,6 +305,10 @@ export async function runInBackground(
 			`Skipping the registered local dev folder ${devMountApplicable.localDevFolder} for this run ` +
 				`(started with devFolder=false) - running from the built image alone.`,
 		);
+	}
+	// Nothing to mount the registered folder over. Not reported for a run that opted out anyway.
+	if (actor.localDevFolder && !build.imageWorkingDirectory && options.devFolder !== false) {
+		appendRuntimeLog(record.id, unknownWorkingDirectoryLine(actor.localDevFolder));
 	}
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
 	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));
