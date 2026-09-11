@@ -26,7 +26,7 @@
 - The same suite must pass unchanged against Podman, rootful or rootless, selected through
   `CONTAINER_CLI` and `DOCKER_HOST`. CI runs every e2e file, browser view included, against Docker and
   against both the oldest and the newest supported Podman.
-- The sample Actors crawl a live site (`https://crawlee.dev/` by default), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
+- The sample Actors crawl a live site (`https://crawlee.dev/` by default; the browser-based cases point at Apify's own `https://demo-webstore.apify.org/`, whose links are server-rendered rather than hydrated in), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
 - CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view and all-modes e2e tests pre-pull the Playwright samples' base images themselves.
 
 ## Actor full dev loop

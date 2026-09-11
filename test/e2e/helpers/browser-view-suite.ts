@@ -37,12 +37,20 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 
+/**
+ * Apify's own demo store, not the samples' default `crawlee.dev`. That default is a Docusaurus site whose
+ * same-hostname links exist only after client-side hydration, so the crawl had to wait for `load` - every
+ * subresource - and regularly blew Playwright's 60s navigation budget from CI, failing the run with an
+ * empty dataset or one too slow to finish. This target is server-rendered and far lighter.
+ */
+export const CRAWL_START_URL = 'https://demo-webstore.apify.org/';
+
 export interface BrowserViewSample {
 	/** Directory under the repository root. */
 	dir: string;
 	label: string;
 	baseImage: string;
-	input: (maxRequests: number) => Record<string, number>;
+	input: (maxRequests: number) => Record<string, unknown>;
 	/** The "toggle cleared" case proves a runtime property; one sample is enough. */
 	withToggleClearedCase: boolean;
 }
@@ -53,13 +61,11 @@ interface RunApi {
 	statusMessage?: string;
 }
 
-/** Really a CPU grant: the runtime derives cores from memory (`resources.ts`: 4096 MB each) as a hard
- * quota. One core left a headful Chrome missing Crawlee's navigation budget, which failed runs as an
- * empty dataset or a crawl too slow to finish in time. */
-const RUN_MEMORY_MBYTES = 8192;
+/** The default 1024 MB grants a quarter core (`resources.ts`), too little for a headful browser. */
+const RUN_MEMORY_MBYTES = 4096;
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
-	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 600 });
+	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 900 });
 	const output = apify(
 		['api', 'POST', `actors/${actorId}/runs`, '--params', params, '--body', JSON.stringify(input)],
 		{
@@ -181,7 +187,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 									? current
 									: undefined;
 							},
-							8 * 60 * 1000,
+							12 * 60 * 1000,
 							'the browser-view run to finish',
 						);
 						expect(finished.status).toBe('SUCCEEDED');

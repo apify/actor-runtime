@@ -9,7 +9,7 @@ import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import {
@@ -21,6 +21,7 @@ import {
 	stopRuntimeContainer,
 	waitForHttpOk,
 } from './helpers/docker.js';
+import { CRAWL_START_URL } from './helpers/browser-view-suite.js';
 import { CONSOLE_URL, readMirrorGreeting } from './helpers/console-view.js';
 import { withRunLogOnFailure } from './helpers/run-log.js';
 import { waitFor } from './helpers/wait.js';
@@ -45,10 +46,8 @@ const IMAGE_TAG = 'actor-runtime:e2e-all-modes';
 const EXPECTED_IMAGE_WORKING_DIR = '/home/myuser';
 /** What `language: "auto"` resolves to for this image. */
 const DEBUG_PORT = 9229;
-/** Really a CPU grant: the runtime derives cores from memory at 4096 MB each (`resources.ts`) and applies
- * a hard CFS quota. One core left a headful Chrome missing Crawlee's navigation budget - see the same
- * constant in `helpers/browser-view-suite.ts`. */
-const RUN_MEMORY_MBYTES = 8192;
+/** The default 1024 MB grants a quarter core (`resources.ts`), too little for a headful browser. */
+const RUN_MEMORY_MBYTES = 4096;
 const MAX_REQUESTS_PER_CRAWL = 4;
 
 /** Edited in the dev folder after the push: printing the edited form proves the mount, not the image,
@@ -134,6 +133,23 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 	let isolatedApifyHome: string;
 	let actorDir: string;
 	let actorId: string;
+	let startedRunId: string | undefined;
+
+	// A `retry` must not inherit the previous attempt's container: it still holds the published debug
+	// port, and the next run dies with "Host port 9229 is already in use".
+	afterEach(() => {
+		const runId = startedRunId;
+		startedRunId = undefined;
+		if (!runId) return;
+		try {
+			apify(['api', 'POST', `actor-runs/${runId}/abort`], {
+				cwd: REPO_ROOT,
+				env: apifyEnv(isolatedApifyHome),
+			});
+		} catch {
+			// Already terminal.
+		}
+	});
 
 	beforeAll(
 		async () => {
@@ -221,7 +237,12 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			);
 			expect(JSON.parse(browserView).data.localBrowserView).toEqual({ interactive: false });
 
-			const run = startRun(actorId, { maxRequestsPerCrawl: MAX_REQUESTS_PER_CRAWL }, env);
+			const run = startRun(
+				actorId,
+				{ maxRequestsPerCrawl: MAX_REQUESTS_PER_CRAWL, startUrls: [{ url: CRAWL_START_URL }] },
+				env,
+			);
+			startedRunId = run.id;
 
 			// The debug line lands last of the three, so waiting on it waits on all of them.
 			const pausedLog = await waitFor(
@@ -278,7 +299,7 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 								? current
 								: undefined;
 						},
-						8 * 60 * 1000,
+						12 * 60 * 1000,
 						'the all-modes run to finish',
 					);
 					expect(finished.status).toBe('SUCCEEDED');
