@@ -11,6 +11,13 @@ running them does.
 See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 `storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`).
 
+## Documentation
+
+- [Quick start](docs/quick-start.md) - start the runtime with Apify CLI or Docker, connect the CLI,
+  push and run your Actor, view the results, and debug with your IDE.
+
+The sections below are the condensed reference; the docs above are the guided version.
+
 ## Quick start
 
 ```bash

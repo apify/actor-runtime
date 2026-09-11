@@ -3,6 +3,8 @@
 This file provides guidance to programming agents when using the local Actor runtime.
 Local Actor runtime is an Actor development tool for developing, running, and debugging Actors. It emulates subset of the real Apify API and Apify console to allow actor development locally without the need to do costly rebuilds on Apify platform.
 
+The human-oriented guide lives in `docs/quick-start.md`; this file is the condensed agent reference.
+
 # Set up
 
 - Build the docker image `docker build -t actor-runtime .`
