@@ -503,11 +503,13 @@ describe('api-fallback: eligibility, relay, and fail-closed behaviour', () => {
 			process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
 			try {
 				// Express's own default mount matching is case-insensitive, so this reaches the same
-				// `actor-runtime` sub-router as the lowercase path above, finds no matching PUT route, and
-				// falls through to the terminal catch-all with the original casing intact in `originalUrl`.
+				// `actor-runtime` sub-router as the lowercase path above and finds no matching PUT route.
+				// The namespace's own unmatched handler answers it from the runtime's OpenAPI document
+				// (`405`, since the path itself is documented for GET/POST) and never reaches the
+				// app-level catch-all - either way, nothing about it is eligible for relaying.
 				const res = await call('put', '/v2/ACTOR-RUNTIME/api-fallback');
-				expect(res.status).toBe(404);
-				expect(res.data.error.type).toBe('not-found');
+				expect(res.status).toBe(405);
+				expect(res.data.error.type).toBe('method-not-allowed');
 				expect(res.headers['x-actor-runtime-fallback']).toBeUndefined();
 				expect(stub.hitCount()).toBe(0);
 			} finally {

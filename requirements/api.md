@@ -17,7 +17,7 @@
 - `DELETE /v2/actor-builds/:buildId` and `DELETE /v2/actor-runs/:runId` on a **non-terminal** build/run
   are rejected, not aborted-then-deleted: `400` with error type `deleting-unfinished-build` (builds) or
   `cannot-remove-running-run` (runs), matching the Apify platform.
-- Three endpoints are exceptions to the `{data}` envelope:
+- Four endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
     - `GET /v2/datasets/:datasetId/items` (and its `actor-runs/:runId/dataset/items` alias): the body is
@@ -25,6 +25,9 @@
       `x-apify-pagination-*` response headers, matching apify-client-js's pagination handling.
     - `GET /actor-runtime/events/:runId`: a websocket upgrade, not a JSON response at all - see "Actor
       runtime API" below.
+    - `GET /actor-runtime/openapi.json`: the runtime's own OpenAPI document, served bare so standard
+      OpenAPI tooling can consume the URL - see "Actor runtime API" below. The same document _is_
+      `{data}`-enveloped at `GET /actor-runtime`, which is what the CLI reads.
 - `*At` timestamp fields are ISO-8601 strings.
 - Log content matches the Apify platform's log format: every log line starts with an ISO-8601 UTC
   timestamp with millisecond precision followed by a space (`2026-08-31T09:13:25.123Z `), exactly one
@@ -39,6 +42,8 @@
 
 # 501 vs 404
 
+- This section is about the emulated platform surface only. The `/actor-runtime/*` namespace has its
+  own specification and its own rule for what it does not describe - see "Actor runtime API" below.
 - Which endpoints answer `501` (unimplemented spec path) instead of `404` (off-spec path entirely) is
   decided from a fixed, built-in list of known Apify API v2 spec paths - nothing is fetched from
   `docs.apify.com` at runtime. See "Known differences from the Apify platform" in `storage.md` for the
@@ -120,82 +125,59 @@
       read/write/delete) just above, which this runtime does implement. Both paths answer `501`, not
       `404`.
 - All endpoints from the specification that do not have implementation must return response `501 Not Implemented`
-- All endpoints not present in specification must return `404 Not Found` - **except** the `/actor-runtime/*`
+- All endpoints not present in specification must return `404 Not Found` - **except** `/actor-runtime/*`,
+  which is not part of the Apify API at all and answers from its own specification instead ("Actor
+  runtime API" below)
 
 # Actor runtime API
 
-- `/actor-runtime/*` is the API controlling functions specific to the local Actor runtime
-- **`POST /actor-runtime/dev-folder/:actorId`** - registers (or clears) the Actor's local dev folder for
-  the bind-mount feature (`actor-driver.md`). `:actorId` accepts the same forms as the rest of the API
-  (id, plain name, `username~name`).
-    - **Authenticated** the same way as every `/v2` route, and scoped to the caller's own Actors.
-    - **No build-first precondition** - registration works for an Actor that has never been built at all.
-    - **Request body**: a JSON string - the absolute path to set, or `""` to clear.
-    - **Response**: on success, `{ data: { localDevFolder } }` - the same value the console detail page
-      shows (`console.md`), doubling as the read-back this design has no separate `GET` for.
-    - **Error responses**, by rejection reason:
-        - `400` `invalid-request` - the body isn't a JSON string, or the string isn't a valid absolute
-          path.
-        - `400` `dev-folder-path-not-found` - the path does not exist on the host.
-        - `400` `dev-folder-not-a-directory` - the path exists but is not a directory.
-        - `400` `dev-folder-check-failed` - the path could not be verified, for any other reason.
-        - `503` `dev-folder-check-unavailable` - Docker itself is unreachable.
-        - `500` `internal-error` - an operational fault unrelated to the submitted path.
-- The console's own dev-folder form (`console.md`) does **not** go through this endpoint - it posts to a
-  console-local, unauthenticated route on the console's own port - but the two surfaces accept and
-  reject exactly the same inputs with the same outcomes.
+- `/actor-runtime/*` is the API controlling functions specific to the local Actor runtime: developer
+  conveniences (live dev folder, debug mode, browser view, migration emulation, upstream API fallback,
+  the per-run events channel) that the real Apify platform API has no counterpart for.
+- **The namespace has its own OpenAPI specification**, committed at `src/api/openapi/actor-runtime.json`.
+  That document is the normative contract for every endpoint in it - paths, methods, request bodies,
+  response payloads, per-rejection error `type`s, and worked examples. This file does not repeat it:
+  the sections below state only what OpenAPI cannot express (behaviour over time, cross-surface
+  consistency, and the guarantees the fallback and migration features rest on).
+- **The runtime serves that specification from itself**, so a client can enumerate what a given
+  runtime supports rather than hard-coding a list:
+    - **`GET /actor-runtime`** - the document in the usual `{data}` envelope, so it reads through
+      apify-client-js and therefore through `apify api GET /actor-runtime` (`cli.md`).
+    - **`GET /actor-runtime/openapi.json`** - the same document unenveloped, for OpenAPI tooling
+      pointed straight at the URL.
+    - Both are **unauthenticated**, unlike every other endpoint in the namespace: the document is
+      static, identical for every caller and carries no user data, so a client can identify a local
+      Actor runtime and enumerate its capabilities before it holds a token.
+    - The document's `info.version` is the runtime's own version.
+- Every endpoint in the namespace is served at both `/actor-runtime/*` (canonical) and
+  `/v2/actor-runtime/*` (the same routes, reachable a second way purely because `apify api` builds
+  every URL against a base that already ends in `/v2`). Neither mount is part of the emulated Apify
+  API, and neither is ever relayed upstream (see "Upstream fallback" below).
+- Every endpoint except the two specification endpoints above and the events websocket (below) is
+  **authenticated** the same way as every `/v2` route and **scoped to the caller's own** Actors/runs,
+  and none has a **build-first precondition** - a toggle can be set for an Actor that has never been built at all. The endpoints
+  that set a per-Actor toggle (dev folder, debug mode, browser view) have no separate `GET`: each
+  response body doubles as the read-back, and each call fully replaces the prior state rather than
+  merging into it.
+- **Anything under `/actor-runtime/*` that the specification does not describe is answered from the
+  specification**, never from the emulated platform surface:
+    - an undescribed path answers `404` `not-found`, with a message pointing at `GET /actor-runtime`;
+    - a described path addressed with an undescribed method answers `405` `method-not-allowed` with an
+      `Allow` header naming the methods it does have;
+    - a plain HTTP request to the events websocket path answers `426` `upgrade-required`.
+- The console's own dev-folder, debug-mode and browser-view forms (`console.md`) do **not** go through
+  these endpoints - they post to console-local, unauthenticated routes on the console's own port - but
+  the two surfaces accept and reject exactly the same inputs with the same outcomes.
 - **`POST /v2/actors/:actorId/runs?devFolder=false`** - runs from the built image alone, ignoring the
-  registered dev folder for that one run only; the registration itself is unchanged. Any other value, or
-  no parameter, means the default behaviour.
-- **`POST /actor-runtime/debug/:actorId`** - sets (or clears) the Actor's persistent debug-mode toggle
-  (`actor-driver.md`'s "Debug mode" section). `:actorId` accepts the same forms as the rest of the API.
-    - **Authenticated** the same way as every `/v2` route, and scoped to the caller's own Actors.
-    - **No build-first precondition** - the toggle itself needs no build to exist.
-    - **Request body**: a strict JSON object with exactly these fields:
-        - `enabled` (required, boolean).
-        - `language` (optional, one of `"auto"` / `"node"` / `"python"`; defaults to `"auto"`).
-        - `port` (optional, integer `1024..65535`; absent means "use the resolved language's own
-          default port at run start" - never a stored literal).
-          Any other key present is rejected. Every accepted call fully replaces the prior state for that
-          Actor (never a partial merge) - a field the body omits resets to its own default, it does not keep
-          whatever a previous call set. `{"enabled": false}` clears the whole toggle, whatever else the body
-          names.
-    - **Response**: on success, `{ data: { localDebug } }`, where `localDebug` is `null` when debug mode
-      is off, or `{ language, port }` when on - `port` here is a nominal default (`5678`) for an
-      unresolved `language: "auto"`, purely for display; the port a given run actually publishes depends
-      on that run's own resolved language (`actor-driver.md`). Same doubles-as-read-back contract as the
-      dev-folder endpoint - no separate `GET`.
-    - **Error responses**: `400` `invalid-request` for every malformed body (not a JSON object, an
-      unknown field, a missing/non-boolean `enabled`, an invalid `language`, or a `port` outside
-      `1024..65535`) - no state change on rejection.
-    - Worked examples:
-        ```
-        POST /actor-runtime/debug/<actorId> --body '{"enabled": true}'
-        -> { "data": { "localDebug": { "language": "auto", "port": 5678 } } }
-
-        POST /actor-runtime/debug/<actorId> --body '{"enabled": true, "language": "node", "port": 9229}'
-        -> { "data": { "localDebug": { "language": "node", "port": 9229 } } }
-
-        POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'
-        -> { "data": { "localDebug": null } }
-
-        POST /actor-runtime/debug/<actorId> --body '{"enabled": true, "prot": 9229}'
-        -> 400 invalid-request "Unknown field \"prot\" - allowed fields are \"enabled\", \"language\", \"port\"."
-        ```
-    - The console's own debug-mode form (`console.md`) does **not** go through this endpoint - same
-      console-local, unauthenticated split as the dev-folder form - but both surfaces accept and reject
-      exactly the same inputs with the same outcomes.
-- **`POST /actor-runtime/browser-view/:actorId`** - sets or clears the Actor's browser-view toggle
-  (`actor-driver.md`'s "Browser view" section). Authenticated and owner-scoped like every `/v2` route; no
-  build-first precondition.
-    - **Body**: `{ "enabled": boolean, "interactive"?: boolean }`, `interactive` defaulting to `false`. A call
-      fully replaces the prior state; `{"enabled": false}` clears it. Any other shape is `400 invalid-request`.
-    - **Response**: `{ data: { localBrowserView: { interactive } | null } }` - the read-back; there is no `GET`.
-- **`GET /actor-runtime/events/:runId`** - a websocket upgrade, reachable at exactly this one path on
-  the fixed API port (`system.md`). It carries the run's platform events: `systemInfo` once a second
-  (`actor-driver.md`), a one-off `aborting`-plus-`persistState` pair under `?gracefully=` (below), and a
-  one-off `migrating` frame when a migration is triggered ("Migration emulation" below). Each frame is a
-  single text message, `{"name": "...", "data": {...}}`.
+  registered dev folder for that one run only; the registration itself is unchanged. Any other value,
+  or no parameter, means the default behaviour. A runtime-only query parameter on an otherwise
+  faithful platform endpoint, so it lives on the platform surface rather than in this namespace; the
+  specification lists it under `x-actor-runtime-platform-extensions` so a client enumerating the
+  document still sees it.
+- **The events websocket** (`GET /actor-runtime/events/:runId`) carries the run's platform events:
+  `systemInfo` once a second (`actor-driver.md`), a one-off `aborting`-plus-`persistState` pair under
+  `?gracefully=` (below), and a one-off `migrating` frame when a migration is triggered ("Migration
+  emulation" below). It is reachable at exactly this one path on the fixed API port (`system.md`).
     - The endpoint has no authentication. The run id in the path is the only thing it scopes on, and a
       connection only ever receives that run's own frames; one run never sees another's.
     - An unknown or already-terminal run id gets a completed upgrade followed immediately by a `1008`
@@ -236,8 +218,6 @@ This runtime emulates that observable experience on demand:
       the container env are unchanged. `stats.migrationCount` increments once per performed stop.
     - Responds immediately with the run object (same shape as `abort`/`reboot`). A second call during
       the open window joins it: same response, no second frame or window.
-    - Errors: unknown/foreign run `404` `record-not-found`; finished run `403` `job-finished`;
-      `READY`/`ABORTING` `400` `invalid-request`.
     - The timeout budget is per run, not per container: a restarted container gets only the remaining
       `timeoutSecs`.
     - An abort (graceful or hard) landing during the window or restart wins: the run ends `ABORTED`,
@@ -256,20 +236,12 @@ This runtime emulates that observable experience on demand:
   a request this runtime cannot satisfy locally is instead relayed to the real Apify platform. Both
   default to `false`, and a restart always brings both back to `false`, regardless of how they were
   last set. Either can be on without the other; all four combinations are valid.
-- **`GET /actor-runtime/api-fallback`** (also reachable at `/v2/actor-runtime/api-fallback`, like every
-  other endpoint in this namespace) returns
-  `{ "data": { "fallbackUnimplementedEnabled": <bool>, "fallbackNotFoundEnabled": <bool>, "upstreamBaseUrl": <string> } }`.
-  `upstreamBaseUrl` is the platform this runtime would relay to (default `https://api.apify.com`, or the
-  value of `APIFY_UPSTREAM_API_BASE_URL` if set) - reported for visibility, but read-only: no request
-  body can change it.
-- **`POST /actor-runtime/api-fallback`** (same two mounts) accepts a body naming either field, or both;
-  a field the body doesn't mention keeps its current value. The response is the same shape `GET`
-  returns, showing the state immediately after the change.
-    - **Authenticated** the same way as every other route in this namespace: no token is `401`
-      `user-not-authenticated`, with no state change.
-    - **Error responses**: a body that isn't a JSON object (a JSON array, scalar, or `null`), a body
-      present but empty (`{}`), a body containing a key other than the two above, or a body where a
-      present key's value isn't a boolean, is `400` `invalid-request`, with no state change.
+- **`GET`/`POST /actor-runtime/api-fallback`** read and change that state; the request and response
+  shapes are in the specification. `POST` is a partial update - a field the body doesn't mention keeps
+  its current value - and is the only way to change the state: `upstreamBaseUrl` is reported on every
+  response for visibility but is read-only (it is the platform this runtime would relay to,
+  `https://api.apify.com` by default, or the value of `APIFY_UPSTREAM_API_BASE_URL`). A rejected body
+  changes nothing, not even the fields that would have passed on their own.
 - **Which local outcome each toggle covers** (exhaustive - every other error response is never
   eligible, under any toggle combination):
     - `fallbackUnimplementedEnabled` covers a request the runtime does not serve at all: a local `404`

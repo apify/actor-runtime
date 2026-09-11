@@ -43,6 +43,19 @@
   With neither source, `/users/me`'s `proxy` field is omitted and no `APIFY_PROXY_PASSWORD` is set
   on run containers - never a placeholder.
 
+## Enumerating the runtime's own endpoints
+
+- The runtime-specific endpoints (`/actor-runtime/*`, `api.md`) have no counterpart on the Apify
+  platform, so a client cannot learn them from the platform's own OpenAPI specification. The runtime
+  therefore serves its own specification for that namespace, and the CLI reads it with a single stock
+  call: **`apify api GET /actor-runtime`** - one response enumerating every runtime-specific endpoint,
+  its request body, and its responses.
+- No token is needed for that call, and the real Apify platform answers `404` on the same path, so it
+  doubles as "is the CLI pointed at a local Actor runtime, and which one?" - the document's
+  `info.version` is the runtime's own version.
+- A client that asks for something in that namespace which the specification does not describe is told
+  so in those terms: `404` naming `GET /actor-runtime`, or `405` with an `Allow` header (`api.md`).
+
 ## Supported commands (POC)
 
 - `apify push` - creates the Actor and Actor version from local source and triggers
