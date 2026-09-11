@@ -59,6 +59,18 @@ const ACTOR_UID = '1500';
 /** `app/main.py`'s `FINISHED_MARKER`, and the edit a dev-folder run must pick up instead. */
 const ORIGINAL_MARKER = 'Non-standard Actor finished.';
 const EDITED_MARKER = 'Non-standard Actor finished (dev-folder-edit-marker).';
+/** `launch.sh`'s own `$0`, when the run started through the image's own working-directory-relative
+ * entry point. The two engines spell the same thing differently - Docker passes the image's `Entrypoint`
+ * through verbatim (`./launch.sh`), Podman resolves it against the working directory first
+ * (`/opt/weird-app/./launch.sh`) - so this accepts either, and the assertions pair it with an explicit
+ * check that the path is NOT the preserved copy below, which is the distinction that actually matters. */
+const IMAGE_ENTRY_POINT_LINE = new RegExp(
+	`launch\\.sh: entry point running as (?:${WORKING_DIRECTORY}/)?\\./launch\\.sh`,
+);
+/** Where the runtime puts an entry point the dev-folder mount would otherwise hide
+ * (`docker-driver.ts`'s `PRESERVED_ENTRYPOINT_DIR`) - an absolute path it sets itself, so unlike the
+ * image's own it reads identically on every engine. */
+const PRESERVED_ENTRY_POINT = '/apify-runtime-entrypoint/launch.sh';
 
 /** The Actor id `push`ed by the first test, reused by every later one - the `it` blocks in this file run
  * in declaration order against the one runtime container `beforeAll` starts. */
@@ -173,7 +185,7 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				const log = storedLog(call.run.id, env);
 				// The custom entry point ran, in the image's own working directory, as its own user - and
 				// handed over to the command line `CMD` supplied, which is what actually produced the items.
-				expect(log).toContain('launch.sh: entry point running as ./launch.sh');
+				expect(log).toMatch(IMAGE_ENTRY_POINT_LINE);
 				expect(log).toContain(`launch.sh: working directory ${WORKING_DIRECTORY}`);
 				expect(log).toContain(`launch.sh: user id ${ACTOR_UID}`);
 				expect(log).toContain('launch.sh: handing over to: app/main.py');
@@ -242,7 +254,8 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				expect(mountedLog).not.toContain(`${ORIGINAL_MARKER}\n`);
 				// The dev folder carries `launch.sh` itself, so the run starts through THAT copy - the
 				// image's own is never substituted.
-				expect(mountedLog).toContain('launch.sh: entry point running as ./launch.sh');
+				expect(mountedLog).toMatch(IMAGE_ENTRY_POINT_LINE);
+				expect(mountedLog).not.toContain(PRESERVED_ENTRY_POINT);
 				expect(mountedLog).not.toContain("using the image's own copy of it");
 
 				// Now the other branch of the same contract: a dev folder without the entry point the image
@@ -253,7 +266,7 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 				expect(preserved.run.status).toBe('SUCCEEDED');
 				const preservedLog = storedLog(preserved.run.id, env);
 				expect(preservedLog).toContain('The image starts through ./launch.sh in its working directory');
-				expect(preservedLog).toContain('launch.sh: entry point running as /apify-runtime-entrypoint/launch.sh');
+				expect(preservedLog).toContain(`launch.sh: entry point running as ${PRESERVED_ENTRY_POINT}`);
 				// Still the dev folder's own (edited) Actor body, started by the image's entry point.
 				expect(preservedLog).toContain(EDITED_MARKER);
 				expect(preservedLog).toContain(`launch.sh: working directory ${WORKING_DIRECTORY}`);
