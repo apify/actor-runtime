@@ -1,9 +1,14 @@
 """Injected via PYTHONPATH by actor-runtime's Python debug-mode payload (see actor-driver.md "Debug
 mode"). CPython's `site` module imports this before any user code runs.
 
-Runs in every Python process in the container, not just the Actor's own - an atomic marker-file create
-(O_CREAT | O_EXCL) picks the single process that starts debugpy; every other process returns immediately.
-The marker lives beside this file, not under /tmp (some Apify base images ship without one).
+It runs in every Python process in the container, so it must pick exactly one to start debugpy in.
+`debugpy.listen()` spawns debugpy's own adapter as a child Python that inherits PYTHONPATH and imports
+this file again - unguarded, that child starts debugpy too, endlessly, and the Actor never runs. Hence
+three guards, in order: an inherited env flag set before `listen()` (no filesystem, so no permissions to
+lose on), a skip for processes started from inside the payload directory (the adapter), and the marker
+file, which also covers siblings that inherit no flag from each other. A marker the Actor's user cannot
+create (the payload directory is extracted root-owned) is not fatal - the flag already rules out the
+runaway case, and a sibling that slips through fails to bind the port.
 
 No synthetic breakpoint after wait_for_client() - the IDE's own attach decides where execution stops.
 """
@@ -11,20 +16,33 @@ No synthetic breakpoint after wait_for_client() - the IDE's own attach decides w
 import os
 import sys
 
-_MARKER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.debugpy-started')
+_PAYLOAD_DIR = os.path.dirname(os.path.abspath(__file__))
+_MARKER_PATH = os.path.join(_PAYLOAD_DIR, '.debugpy-started')
 _PORT_ENV_VAR = 'APIFY_ACTOR_RUNTIME_DEBUG_PORT'
+# Set by this file on itself, never by the driver: "an ancestor of this process already started debugpy".
+_STARTED_ENV_VAR = 'APIFY_ACTOR_RUNTIME_DEBUG_STARTED'
 
 
 def _log(message):
-    # Runs before the Actor's own logging is set up - write directly to stderr; docker-driver.ts
-    # captures both stdout and stderr into the run log.
+    # Runs before the Actor's own logging exists; docker-driver.ts captures stderr into the run log.
     print(f'[actor-runtime debug] {message}', file=sys.stderr, flush=True)
 
 
+def _is_payload_process() -> bool:
+    """True for a process started *from* the payload directory - debugpy's adapter, never Actor code."""
+    argv0 = sys.argv[0] if sys.argv else ''
+    if not argv0:
+        return False
+    try:
+        argv0 = os.path.abspath(argv0)
+    except OSError:  # pragma: no cover - abspath needs the cwd, which a container run always has
+        return False
+    return argv0 == _PAYLOAD_DIR or argv0.startswith(_PAYLOAD_DIR + os.sep)
+
+
 def _win_marker_race() -> bool:
-    """True if this process should start debugpy - exclusive create avoids a check-then-create race.
-    Any error other than FileExistsError falls back to "try anyway" rather than risking a silent
-    non-debug start."""
+    """True if this process should start debugpy - the exclusive create avoids a check-then-create race.
+    Anything but FileExistsError falls back to "try anyway" rather than silently not debugging."""
     try:
         fd = os.open(_MARKER_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -35,6 +53,14 @@ def _win_marker_race() -> bool:
     else:
         os.close(fd)
         return True
+
+
+def _should_start() -> bool:
+    if os.environ.get(_STARTED_ENV_VAR):
+        return False
+    if _is_payload_process():
+        return False
+    return _win_marker_race()
 
 
 def _start() -> None:
@@ -55,10 +81,13 @@ def _start() -> None:
         _log(f'internal error: could not import the injected debugpy ({error})')
         sys.exit(1)
 
+    # Before listen(), not after: the adapter it spawns inherits this environment.
+    os.environ[_STARTED_ENV_VAR] = '1'
+
     try:
         debugpy.listen(('0.0.0.0', port))
     except OSError as error:
-        # Fallback for a race the marker guard missed - another process likely already bound this port.
+        # A race the marker guard missed - another process likely already bound this port.
         _log(
             f'debugpy could not bind 0.0.0.0:{port} ({error}); assuming another process in this '
             'container already started it - continuing without pausing'
@@ -81,5 +110,5 @@ def _start() -> None:
     # No synthetic breakpoint - control returns to `site`'s import machinery.
 
 
-if _win_marker_race():
+if _should_start():
     _start()
