@@ -93,9 +93,17 @@ jobs:
         # `system.md` lists macOS as a supported host; until now nothing verified it, so every macOS
         # regression had to be found by hand. This leg runs the mandated dev-loop e2e - push, build, call,
         # input-dependent item count - against a real engine on a real macOS host.
-        runs-on: macos-15
+        #
+        # The INTEL runner, deliberately - do not "modernize" this to `macos-15`/`macos-latest`. A
+        # container engine on macOS means a Linux VM, and GitHub's Apple silicon runners are themselves
+        # VMs on which Apple's Virtualization.framework is unavailable, so `colima start` there dies with
+        # `VZErrorDomain Code=2 "Virtualization is not available on this hardware."` before any container
+        # exists. GitHub documents the same ("Nested-virtualization is not supported due to the limitation
+        # of Apple's Virtualization Framework"). `macos-15-intel` is a standard-tier runner too, with more
+        # RAM and cores, and Colima's own CI runs there.
+        runs-on: macos-15-intel
         # A macOS runner has no engine preinstalled, so this job pays for a Linux VM boot on top of
-        # everything the Linux legs do, and does it on Apple silicon.
+        # everything the Linux legs do, and runs the suite against a QEMU-hosted daemon.
         timeout-minutes: 90
         steps:
             - uses: actions/checkout@v4
@@ -109,14 +117,15 @@ jobs:
             # Lima-managed Linux VM plus the stock `docker` CLI, which `colima start` also points at it by
             # creating and selecting a `colima` docker context.
             #
-            # `qemu` is installed for its `qemu-img` alone, not to run the VM (that is Apple's
-            # Virtualization.framework, `--vm-type=vz`): Colima shells out to `qemu-img` to convert its
-            # disks, and since Lima dropped its own qemu dependency no formula pulls it in - without it
-            # `colima start` dies at "Converting ... to a raw disk" (abiosoft/colima#1188).
+            # `qemu` is a real dependency here, not a convenience: it is both Colima's VM driver on Intel
+            # (Hypervisor.framework-accelerated) and the source of the `qemu-img` Colima shells out to for
+            # its disks - and since Lima dropped its own qemu dependency, no formula installed above pulls
+            # it in. No `--vm-type`/`--mount-type` is passed: Colima's Intel defaults (qemu + sshfs) are
+            # the combination that works on this runner, and `virtiofs` is a `vz`-only mount type anyway.
             #
-            # Sizes are bounded by the runner, not by what the suite would like: a standard macOS runner is
-            # 3 cores / 7 GB RAM / 14 GB SSD, so the VM takes 5 GB and leaves the rest to macOS itself. The
-            # disk is sparse - the number is a ceiling, not an allocation.
+            # Sizes are bounded by the runner: `macos-15-intel` is 4 cores / 14 GB RAM / 14 GB SSD, so the
+            # VM takes 3 of those cores and 8 GB and leaves the rest to macOS itself. The disk is sparse -
+            # the number is a ceiling, not an allocation.
             #
             # DOCKER_HOST is deliberately NOT set. The suite mounts the host engine's socket into the
             # runtime container (`helpers/docker.ts`), and a `-v` source is resolved by the daemon - i.e.
@@ -126,7 +135,7 @@ jobs:
             - name: Start a container engine (Colima)
               run: |
                   brew install colima docker qemu
-                  colima start --cpu 3 --memory 5 --disk 20 --vm-type=vz --mount-type=virtiofs
+                  colima start --cpu 3 --memory 8 --disk 20
                   docker version
                   docker info --format '{{.OperatingSystem}} / {{.Architecture}}'
             # The VM's own boot/hostagent logs, which `colima start` only ever points at by path.
@@ -141,12 +150,11 @@ jobs:
                       tail -100 "$log"
                     fi
                   done
-            # Only the dev-loop file. GitHub's macOS runners are Apple silicon, and
-            # `apify/actor-node-playwright-chrome` publishes no arm64 image - so `browser-view-*` and
-            # `all-modes` cannot run here at all, while `debug-mode` and `dev-folder-bind-mount` would add
-            # macOS-specific host-path and port-forwarding questions on top of the core flow this leg is
-            # meant to protect. `apify/actor-node:24`, `apify/actor-python:3.13` and `python:3.11-slim`
-            # (the images this file needs) are all multi-arch, so it runs natively, unemulated.
+            # Only the dev-loop file - a budget choice, not a technical limit: macOS runner minutes bill at
+            # a multiple of Linux ones and a QEMU-hosted daemon is slower than the Linux legs' native one,
+            # so this leg protects the core flow (`test.md`'s mandated "Actor full dev loop") and leaves
+            # the rest to the Linux matrix. Widening it is now possible if that trade ever changes: on
+            # x86_64 every sample's base image resolves, the Playwright ones included.
             - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
             - name: Dump runtime container logs on failure
               if: failure()

@@ -6,7 +6,7 @@
 
 - CI (GitHub Actions) runs on every pull request and on pushes to the main branches: build, lint, format check, and all test layers, with the mandatory CLI-only e2e suite below executing against a real Docker daemon. A missing daemon fails the CI job - the e2e suite never silently skips.
 - CI runs each e2e file as its own job, in parallel; locally the files run one after another (each starts a runtime container on the fixed ports).
-- **macOS is covered by CI too** (`system.md` lists it as a supported host): one job runs the "Actor full dev loop" file below on a macOS runner, against a real engine installed on that runner. It runs that file only - GitHub's macOS runners are Apple silicon and the Playwright samples' base image (`apify/actor-node-playwright-chrome`) has no arm64 build, so the browser-view and all-modes cases cannot run there at all.
+- **macOS is covered by CI too** (`system.md` lists it as a supported host): one job runs the "Actor full dev loop" file below on a macOS runner, against a real engine installed on that runner. It runs that one file - macOS runner minutes are expensive and its engine runs in a VM, so the leg protects the core flow and leaves the rest of the matrix to Linux. The runner must be an Intel one: a container engine on macOS needs a Linux VM, and GitHub's Apple silicon runners cannot start one at all.
 
 # Mandatory end-to-end tests
 
