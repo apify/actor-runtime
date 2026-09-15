@@ -30,14 +30,6 @@ The runtime is a single container that emulates the parts of the Apify platform 
 
     </details>
 
-- **Log in.** The runtime accepts any non-empty token, so no Apify account is needed:
-
-    ```
-    apify login --token local-dev-token
-    ```
-
-    A real token makes the runtime adopt that account's username, id, and proxy password on first contact. Any other token makes you `local-user-1`.
-
 ## 1. Start the runtime
 
 ```
@@ -112,6 +104,12 @@ The setting is global to your machine - there is no per-project scope and no nam
 ```
 export APIFY_CLIENT_BASE_URL=http://localhost:3333
 export APIFY_CONSOLE_URL=http://localhost:3000
+```
+
+If you are not logged in already, any non-empty token will do - the runtime does not check it against a real account:
+
+```
+apify login --token local-dev-token
 ```
 
 ## 3. Push and run your Actor
