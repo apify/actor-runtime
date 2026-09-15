@@ -22,6 +22,12 @@
  * so `abortBuild` can call `.abort()` on the live one. Runs are cancelled the same way as before -
  * `container.stop()` - since there is no HTTP request to abort there.
  *
+ * Host architecture: a build runs for the host's own architecture, as the engine would build it on its
+ * own - with one fallback. A base image published only for `linux/amd64` (both Apify Playwright images
+ * are) makes that build impossible on an arm64 host, so `startBuild` retries it once for
+ * `linux/amd64` under the engine's emulation, which is the image the platform itself would have built
+ * (`build-platform.ts`).
+ *
  * Engine neutrality: everything here goes through the Docker Engine API, which Podman also serves
  * (`podman system service` / the `podman.socket` unit), so the same driver runs Actors on Docker and on
  * Podman 3.4 or newer, rootful or rootless. Where the engines genuinely differ, the difference is handled
@@ -54,6 +60,11 @@ import {
 } from '../config.js';
 import { CPU_PERIOD_US, cpuQuotaFor, dedicatedCpusFor } from '../resources.js';
 import { normalizeEntryName } from './tar-entry-name.js';
+import {
+	COMPATIBILITY_BUILD_PLATFORM,
+	compatibilityBuildNotice,
+	isMissingManifestForBuildPlatform,
+} from './build-platform.js';
 import { formatRuntimeLog } from '../runtime-log.js';
 import type { SourceFile } from '../storage/entities.js';
 import {
@@ -915,7 +926,6 @@ export class DockerDriver implements Driver {
 		}
 
 		const imageTag = `actor-runtime/${ctx.actorName}:${ctx.buildId}`.toLowerCase();
-		const tarball = buildTarball(ctx.sourceFiles);
 
 		const controller = new AbortController();
 		this.buildControllers.set(ctx.buildId, controller);
@@ -924,28 +934,51 @@ export class DockerDriver implements Driver {
 			controller.abort();
 		}, ctx.timeoutSecs * 1000);
 
-		const cleanup = (): void => {
+		try {
+			return await this.buildImageOnce(ctx, imageTag, controller.signal, onLog);
+		} catch (error) {
+			// The one failure worth a second attempt: an Actor whose base image is published for
+			// `linux/amd64` alone (both Playwright images are) cannot be built on an arm64 host at all, and
+			// the platform's own image is buildable there through the engine's emulation - see
+			// `build-platform.ts`. Never after an abort or a timeout (the retry would be a build the caller
+			// already cancelled), and never twice: the second attempt names its platform explicitly, so a
+			// repeat of the same failure is genuine and is reported as the build's own.
+			const failure = this.asTimedOutOrOriginal(ctx, error as Error);
+			if (controller.signal.aborted || !isMissingManifestForBuildPlatform(failure.message)) throw failure;
+			onLog(formatRuntimeLog(compatibilityBuildNotice(failure.message)));
+			return await this.buildImageOnce(ctx, imageTag, controller.signal, onLog, COMPATIBILITY_BUILD_PLATFORM);
+		} finally {
 			clearTimeout(timeoutTimer);
 			this.buildControllers.delete(ctx.buildId);
-		};
-		// Consumed exactly once, however the build ends (success, `startBuild`'s own throw below, or the
-		// `followProgress` callback) - whichever site notices the flag first wins and reports TIMED-OUT.
-		const asTimedOutOrOriginal = (error: Error): Error =>
-			this.timedOutBuilds.delete(ctx.buildId)
-				? new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`)
-				: error;
+			// Consumed by whichever site noticed it first; dropped here for the paths that never look (a
+			// build that finished successfully after its own timeout fired), so the flag can never leak
+			// into a later build with the same id.
+			this.timedOutBuilds.delete(ctx.buildId);
+		}
+	}
 
+	/** One `docker build` attempt against the daemon. The tar is built per attempt - a tar stream is
+	 * consumed once, so the retry cannot reuse the first attempt's. `platform` is left off the options
+	 * entirely for the host-native attempt, leaving every build that never needed the fallback exactly as
+	 * the engine would have built it on its own. */
+	private async buildImageOnce(
+		ctx: BuildContext,
+		imageTag: string,
+		abortSignal: AbortSignal,
+		onLog: (chunk: string) => void,
+		platform?: string,
+	): Promise<BuildOutcome> {
 		let stream: NodeJS.ReadableStream;
 		try {
-			stream = await this.docker.buildImage(tarball, {
+			stream = await this.docker.buildImage(buildTarball(ctx.sourceFiles), {
 				t: imageTag,
 				nocache: !ctx.useCache,
 				dockerfile: ctx.dockerfilePath,
-				abortSignal: controller.signal,
+				abortSignal,
+				...(platform ? { platform } : {}),
 			});
 		} catch (error) {
-			cleanup();
-			throw asTimedOutOrOriginal(error as Error);
+			throw this.asTimedOutOrOriginal(ctx, error as Error);
 		}
 
 		return new Promise<BuildOutcome>((resolve, reject) => {
@@ -956,7 +989,6 @@ export class DockerDriver implements Driver {
 				// never awaits its result - `resolve`/`reject` below settle the outer Promise whenever this
 				// async function actually gets there.
 				async (err: Error | null, res: Array<{ stream?: string; error?: string; aux?: { ID?: string } }>) => {
-					cleanup();
 					if (this.timedOutBuilds.delete(ctx.buildId)) {
 						reject(new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`));
 						return;
@@ -980,6 +1012,15 @@ export class DockerDriver implements Driver {
 				},
 			);
 		});
+	}
+
+	/** The timeout flag is consumed exactly once, however a build attempt ends (a `buildImage` rejection,
+	 * the `followProgress` callback, or `startBuild`'s own retry decision) - whichever site notices it
+	 * first wins and reports TIMED-OUT rather than whatever error the cancelled build produced. */
+	private asTimedOutOrOriginal(ctx: BuildContext, error: Error): Error {
+		return this.timedOutBuilds.delete(ctx.buildId)
+			? new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`)
+			: error;
 	}
 
 	/** `.Config.WorkingDir` of the image just built, via `dockerode`, never a shelled-out

@@ -25,6 +25,13 @@
   number - stock `apify push` polls for exactly this field before returning.
 - Actor, build, and build-log details are kept in internal records that persist across runtime
   restarts (`storage.md`).
+- **A build is produced for the host's own architecture, with one fallback.** A base image published
+  only for `linux/amd64` (both Apify Playwright images are) cannot be built on an arm64 host at all -
+  the build fails on its first `FROM` with "no matching manifest for linux/arm64/v8". Such a build,
+  and only such a build, is retried once for `linux/amd64` - the architecture the platform itself
+  builds and runs on, emulated by the engine (Rosetta on Apple Silicon) - with the reason stated in
+  the build log before the second attempt starts. An abort or timeout is never retried, and the
+  retry's own failure is the build's failure.
 - **The Dockerfile to build is resolved from the Actor's pushed source**, not Docker's implicit default. `.actor/actor.json` is parsed as JSON5; an unparseable file fails the build with a "Could not parse .actor/actor.json" message. Resolution order, stopping at the first hit:
     1. the `dockerfile` field of `.actor/actor.json`, relative to `.actor/` - a path escaping the Actor root fails with "points outside the Actor root directory"; a non-string value fails with `"dockerfile" must be a string`; a value naming no pushed file (including empty) falls through instead of failing.
     2. `.actor/Dockerfile`
