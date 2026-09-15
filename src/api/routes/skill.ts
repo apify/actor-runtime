@@ -1,15 +1,6 @@
 /**
- * `GET /actor-runtime/skill` (`api.md`'s "Actor runtime API" section) - serves this runtime's own Agent
- * Skill, the `skills/actor-runtime/SKILL.md` baked into the image.
- *
- * Deliberately **unauthenticated**, which is why this is the one `/actor-runtime/*` route module not
- * mounted on the shared `auth()`-wrapped sub-router (`server.ts` gives it its own router registered just
- * ahead of that one). It is public documentation, and one of the things it documents is how to
- * authenticate against this runtime - an agent must be able to read it before it has a token.
- *
- * Two representations of the same file: the raw markdown by default (what a reader, or
- * `apify runtime skill`, wants), and `?format=json` for the parsed frontmatter alongside the content,
- * for a caller that wants the skill's `name`/`description` without parsing YAML itself.
+ * Unauthenticated, unlike the rest of `/actor-runtime/*`: explaining how to authenticate here is one of
+ * the things the skill does, so a caller must be able to read it before it has a token.
  */
 import { readFile } from 'node:fs/promises';
 
@@ -26,13 +17,8 @@ export interface SkillDocument {
 	content: string;
 }
 
-/**
- * Pulls `name` and `description` out of the leading YAML frontmatter block. Deliberately not a YAML
- * parser (no dependency for two scalar fields): it reads the `key: value` lines of the first `---`
- * block, joining a folded continuation line (one indented under its key, which is how a long
- * `description` is wrapped) onto the value above it. Anything it cannot find comes back as `''` rather
- * than throwing - a malformed header is not a reason to refuse to serve the body.
- */
+/** Not a YAML parser - no dependency for two scalar fields. Missing fields come back empty rather than
+ * throwing, since a malformed header is no reason to refuse to serve the body. */
 export function parseSkillFrontmatter(markdown: string): { name: string; description: string } {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(markdown);
 	const block = match?.[1];
@@ -49,8 +35,7 @@ export function parseSkillFrontmatter(markdown: string): { name: string; descrip
 			fields.set(key, (value ?? '').trim());
 			continue;
 		}
-		// An indented, non-empty line continues the value above it (YAML's folded scalar): join with a
-		// space, the way a YAML parser would fold it back into one line.
+		// YAML's folded scalar: an indented line continues the value above it.
 		if (currentKey !== undefined && /^\s+\S/.test(line)) {
 			fields.set(currentKey, `${fields.get(currentKey) ?? ''} ${line.trim()}`.trim());
 		}
@@ -66,16 +51,14 @@ async function readSkill(): Promise<SkillDocument> {
 	try {
 		content = await readFile(path, 'utf8');
 	} catch {
-		// Only reachable when the image was built without `skills/` (or a test pointed the override at a
-		// path that isn't there) - a deployment fault, not a request the caller got wrong.
+		// A deployment fault (an image built without `skills/`), not a bad request.
 		throw new ApiError(500, 'skill-unavailable', `This runtime's Agent Skill was not found at ${path}`);
 	}
 
 	return { ...parseSkillFrontmatter(content), content };
 }
 
-/** Mounts `GET /skill` onto `router`, matching every other route module's `mount*(router): void`
- * convention. Unlike the others, `router` here is expected **not** to have `auth()` registered on it. */
+/** `router` is expected **not** to have `auth()` registered on it, unlike every other route module's. */
 export function mountSkill(router: Router): void {
 	router.get(
 		'/skill',

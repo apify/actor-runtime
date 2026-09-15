@@ -79,9 +79,7 @@ RUN pnpm install --prod --frozen-lockfile && pnpm store prune
 
 COPY --from=builder /usr/src/app/dist ./dist
 
-# This runtime's own Agent Skill, served by `GET /actor-runtime/skill` and copied straight out of the
-# stopped image by `apify runtime skill`. Shipping it in the image is the whole point: the CLI never
-# carries a copy that can drift from the runtime it is talking to.
+# Shipped in the image so the CLI never carries a copy that can drift from the runtime it talks to.
 COPY skills ./skills
 
 # Matches config.ts's debugpyPayloadDir() default.

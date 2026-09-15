@@ -49,12 +49,8 @@ export function createApiServer(deps: ApiServerDeps): Express {
 	// module mounted on this router (`mountDevFolder`, `mountMigrate`, `mountApiFallback`) rather than each registering
 	// its own - they are the same router instance, so a second registration would just run `auth()`
 	// twice per request for no benefit.
-	// `GET /actor-runtime/skill` is the one route in this namespace that is *not* authenticated - it is
-	// public documentation, and it is what tells a caller how to authenticate in the first place. Hence
-	// its own router, registered just ahead of the `auth()`-wrapped one below: Express tries these in
-	// registration order, so `/skill` is answered here and every other `/actor-runtime/*` path falls
-	// through to the authenticated router. Both mounts below get it, for the same reason they get the
-	// rest of the namespace.
+	// Registered ahead of the `auth()`-wrapped router below so Express answers `/skill` here and lets
+	// every other `/actor-runtime/*` path fall through to it - see `routes/skill.ts` for why it is public.
 	const actorRuntimePublic = express.Router();
 	mountSkill(actorRuntimePublic);
 	app.use('/actor-runtime', actorRuntimePublic);

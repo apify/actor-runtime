@@ -1,12 +1,5 @@
-/**
- * Covers `GET /actor-runtime/skill` (`api.md`'s "Actor runtime API" section, `api/routes/skill.ts`):
- * both representations, both mounts, the unauthenticated contract that separates this route from every
- * other `/actor-runtime/*` one, and the frontmatter parser.
- *
- * The shipped `skills/actor-runtime/SKILL.md` is asserted on directly (not a fixture) for the one thing
- * that must never silently break: it has to parse into a usable `name`/`description`, or every agent
- * that installs it loses its discovery stage.
- */
+/** Asserts on the shipped `SKILL.md` rather than a fixture: it must keep parsing into a usable
+ * `name`/`description`, or every agent that installs it loses its discovery stage. */
 import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import axios from 'axios';
@@ -41,8 +34,7 @@ describe('GET /actor-runtime/skill', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.data.data.name).toBe('apify-actor-runtime');
-		// The description is what an agent matches a task against at its discovery stage - an empty one
-		// means the skill is installed but never activates.
+		// An agent matches a task against the description; an empty one never activates.
 		expect(response.data.data.description.length).toBeGreaterThan(40);
 		expect(response.data.data.content).toContain('# Local Apify Actor runtime');
 	});
