@@ -18,6 +18,7 @@ import { mountDebugMode } from './routes/debug-mode.js';
 import { mountBrowserView } from './routes/browser-view.js';
 import { mountMigrate } from './routes/migrate.js';
 import { mountApiFallback } from './routes/api-fallback.js';
+import { mountSkill } from './routes/skill.js';
 import { attemptFallback, type LocalError } from '../services/api-fallback.js';
 import type { Driver } from '../driver/types.js';
 
@@ -48,6 +49,13 @@ export function createApiServer(deps: ApiServerDeps): Express {
 	// module mounted on this router (`mountDevFolder`, `mountMigrate`, `mountApiFallback`) rather than each registering
 	// its own - they are the same router instance, so a second registration would just run `auth()`
 	// twice per request for no benefit.
+	// Registered ahead of the `auth()`-wrapped router below so Express answers `/skill` here and lets
+	// every other `/actor-runtime/*` path fall through to it - see `routes/skill.ts` for why it is public.
+	const actorRuntimePublic = express.Router();
+	mountSkill(actorRuntimePublic);
+	app.use('/actor-runtime', actorRuntimePublic);
+	app.use('/v2/actor-runtime', actorRuntimePublic);
+
 	const actorRuntime = express.Router();
 	actorRuntime.use(auth());
 	mountDevFolder(actorRuntime, deps);

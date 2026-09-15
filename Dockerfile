@@ -79,6 +79,9 @@ RUN pnpm install --prod --frozen-lockfile && pnpm store prune
 
 COPY --from=builder /usr/src/app/dist ./dist
 
+# Shipped in the image so the CLI never carries a copy that can drift from the runtime it talks to.
+COPY skills ./skills
+
 # Matches config.ts's debugpyPayloadDir() default.
 COPY --from=debugpy-payload /payload/debugpy-payload.tar /opt/apify-debug-payload/debugpy-payload.tar
 COPY --from=debugpy-payload /payload/debugpy-version.txt /opt/apify-debug-payload/debugpy-version.txt

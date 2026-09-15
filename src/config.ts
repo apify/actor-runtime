@@ -52,3 +52,9 @@ export function browserViewerRootfsTarPath(): string {
 export function browserViewerVersionFilePath(): string {
 	return `${browserViewerPayloadDir()}/version.txt`;
 }
+
+/** Relative to the image's WORKDIR, which is also the repo root when running from a checkout. Read
+ * fresh on every call, like the payload dirs above, so tests can point it at a fixture. */
+export function skillFilePath(): string {
+	return process.env.ACTOR_RUNTIME_SKILL_PATH ?? 'skills/actor-runtime/SKILL.md';
+}

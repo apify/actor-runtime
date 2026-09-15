@@ -125,6 +125,9 @@
 # Actor runtime API
 
 - `/actor-runtime/*` is the API controlling functions specific to the local Actor runtime
+- **`GET /actor-runtime/skill`** (also at `/v2/actor-runtime/skill`) - serves this runtime's own Agent
+  Skill, `skills/actor-runtime/SKILL.md`, as markdown; unauthenticated, since it documents how to
+  authenticate here.
 - **`POST /actor-runtime/dev-folder/:actorId`** - registers (or clears) the Actor's local dev folder for
   the bind-mount feature (`actor-driver.md`). `:actorId` accepts the same forms as the rest of the API
   (id, plain name, `username~name`).
