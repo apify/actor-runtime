@@ -49,48 +49,6 @@ apify runtime status
 
 It prints the image, data directory, ports, and which API your CLI talks to, and exits `1` when the runtime is down.
 
-<details>
-<summary>Both ports hang on macOS</summary>
-
-On some Docker Desktop installations every request to `localhost:3333` and `localhost:3000` times out while `docker logs apify-actor-runtime` looks healthy. The runtime has attached itself to both `apify-local` and `bridge`, and Docker Desktop routes the replies back the wrong way. Two networks in this output means you have hit it:
-
-```
-docker inspect apify-actor-runtime --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
-```
-
-`apify runtime start` has no flag for the container's network yet, so start it by hand on one:
-
-```
-docker network create apify-local 2>/dev/null || true
-docker run --rm --init -d --name apify-actor-runtime \
-  --network apify-local --network-alias apify-api \
-  -p 3333:3333 -p 3000:3000 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$HOME/.apify/actor-runtime/data:/data" \
-  apify/actor-runtime:latest
-```
-
-Everything after this works normally, `apify runtime stop` included.
-
-</details>
-
-<details>
-<summary>Starting the runtime with Docker or Podman directly</summary>
-
-```
-docker build -t actor-runtime .
-mkdir -p data
-docker run --rm --init --name apify-actor-runtime \
-  -p 3333:3333 -p 3000:3000 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd)/data:/data" \
-  actor-runtime
-```
-
-The socket mount lets the runtime build and start Actor containers. The data directory must exist first. For Podman, mount its socket in place of Docker's; see [Running with Podman](../README.md) in the README.
-
-</details>
-
 ## 2. Point the Apify CLI at the runtime
 
 ```
