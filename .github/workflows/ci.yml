@@ -102,8 +102,11 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # Only this file: both Playwright base images are amd64-only, so the browser-based cases
-            # cannot run here at all.
+            # Only this file. Both Playwright base images are amd64-only, so the browser-based cases
+            # reach `startBuild`'s `linux/amd64` fallback here, and that fallback needs the engine's
+            # amd64 emulation: an Apple Silicon Mac has it (Rosetta) and runs those cases through it,
+            # but nothing in this workflow installs binfmt/QEMU on this runner, so they stay off this
+            # leg rather than failing it.
             - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
             - name: Dump runtime container logs on failure
               if: failure()

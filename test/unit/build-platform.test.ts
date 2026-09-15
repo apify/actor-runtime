@@ -23,10 +23,20 @@ describe('isMissingManifestForBuildPlatform', () => {
 		).toBe(true);
 	});
 
-	it("recognizes Podman's wording", () => {
+	it("recognizes Podman 4's wording", () => {
 		expect(
 			isMissingManifestForBuildPlatform(
 				'no image found in manifest list for architecture arm64, variant "v8", OS "linux"',
+			),
+		).toBe(true);
+	});
+
+	it("recognizes Podman 5+'s wording, verbatim from Podman 6.0 on an Apple Silicon machine - it renamed the list to an image index and quoted the architecture", () => {
+		expect(
+			isMissingManifestForBuildPlatform(
+				'creating build container: unable to copy from source docker://apify/actor-python-playwright:3.14-1.61.0: ' +
+					'choosing an image from manifest list docker://apify/actor-python-playwright:3.14-1.61.0: ' +
+					'no image found in image index for architecture "arm64", variant "v8", OS "linux"\n',
 			),
 		).toBe(true);
 	});
@@ -39,6 +49,9 @@ describe('isMissingManifestForBuildPlatform', () => {
 		).toBe(false);
 		expect(
 			isMissingManifestForBuildPlatform('no image found in manifest list for architecture amd64, OS "linux"'),
+		).toBe(false);
+		expect(
+			isMissingManifestForBuildPlatform('no image found in image index for architecture "amd64", OS "linux"'),
 		).toBe(false);
 	});
 

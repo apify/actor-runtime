@@ -16,12 +16,19 @@ export const COMPATIBILITY_BUILD_PLATFORM = 'linux/amd64';
  * How each engine words "this image's manifest list has nothing for the platform I asked for", with the
  * platform captured where the message names one: Docker's classic builder ("no matching manifest for
  * linux/arm64/v8 in the manifest list entries"), BuildKit (which names the image rather than the
- * platform), and Podman ("no image found in manifest list for architecture arm64, variant ...").
+ * platform), and Podman.
+ *
+ * Podman's wording has moved with its versions and all of them are still in the field, so the two halves
+ * that vary are both made optional rather than matched literally: the list is called a "manifest list"
+ * up to Podman 4 and an "image index" from Podman 5 on (6.0 on an Apple Silicon machine: `no image found
+ * in image index for architecture "arm64", variant "v8", OS "linux"`), and the architecture is bare in
+ * the older wording and double-quoted in the newer one. Matching only the older spelling let the retry
+ * miss Podman entirely on exactly the hosts it exists for.
  */
 const MISSING_MANIFEST_PATTERNS: readonly RegExp[] = [
 	/no matching manifest for (?<platform>\S+)/i,
 	/no match for platform in manifest/i,
-	/no image found in manifest list for architecture (?<platform>[^,\s]+)/i,
+	/no image found in (?:manifest list|image index) for architecture "?(?<platform>[^",\s]+)/i,
 ];
 
 /** Whether the platform named in a failure is already the one the retry would ask for - an arm64-only
