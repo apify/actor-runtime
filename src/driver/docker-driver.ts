@@ -54,6 +54,7 @@ import {
 } from '../config.js';
 import { CPU_PERIOD_US, cpuQuotaFor, dedicatedCpusFor } from '../resources.js';
 import { normalizeEntryName } from './tar-entry-name.js';
+import { formatRuntimeLog } from '../runtime-log.js';
 import type { SourceFile } from '../storage/entities.js';
 import {
 	DebugPortInUseError,
@@ -219,11 +220,19 @@ function devNodeModulesVolumeName(runId: string): string {
 	return `${DEV_NODE_MODULES_VOLUME_PREFIX}${runId}`;
 }
 
-/** A command token the engine resolves against the working directory rather than `PATH`: `./x.sh`,
- * `bin/x` - relative, with a slash. A bare `x.sh` goes through `PATH`, an absolute path is unaffected
- * by what is mounted over the working directory. */
-function isWorkingDirectoryRelative(token: string): boolean {
-	return !token.startsWith('/') && token.includes('/');
+/** Where a hidden command token's file sits in the image, or `undefined` if the mount cannot hide it.
+ * Resolved rather than matched on spelling: Apify's Playwright images write the same entrypoint both
+ * relative (`./xvfb-entrypoint.sh`) and absolute (`/home/myuser/...`). */
+function entryHiddenByDevMount(
+	token: string,
+	imageWorkingDirectory: string,
+): { inImage: string; relative: string } | undefined {
+	// No path component at all: `PATH` decides, never the working directory.
+	if (!token.startsWith('/') && !token.includes('/')) return undefined;
+	const inImage = path.posix.resolve(imageWorkingDirectory, token);
+	const relative = path.posix.relative(imageWorkingDirectory, inImage);
+	if (relative === '' || relative === '..' || relative.startsWith('../')) return undefined;
+	return { inImage, relative };
 }
 
 function readStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
@@ -1040,7 +1049,7 @@ export class DockerDriver implements Driver {
 
 		// Informational only - the requested limits are applied verbatim either way.
 		const overCapacityWarning = this.buildOverCapacityWarning(ctx);
-		if (overCapacityWarning) onLog(overCapacityWarning);
+		if (overCapacityWarning) onLog(formatRuntimeLog(overCapacityWarning));
 
 		// Re-verified on every dev-mount run, before any container exists: Docker would reject a `Mounts`
 		// bind whose source vanished since registration, but Podman's Docker-compatible API auto-creates the
@@ -1059,13 +1068,19 @@ export class DockerDriver implements Driver {
 			if (ctx.debug.language === 'python') {
 				debugPayload = await this.loadDebugPayload();
 				onLog(
-					this.buildDebugLogLine(
-						{ language: 'python', port: ctx.debug.port, debugpyVersion: debugPayload.debugpyVersion },
-						ctx.timeoutSecs,
+					formatRuntimeLog(
+						this.buildDebugLogLine(
+							{ language: 'python', port: ctx.debug.port, debugpyVersion: debugPayload.debugpyVersion },
+							ctx.timeoutSecs,
+						),
 					),
 				);
 			} else {
-				onLog(this.buildDebugLogLine({ language: 'node', port: ctx.debug.port }, ctx.timeoutSecs));
+				onLog(
+					formatRuntimeLog(
+						this.buildDebugLogLine({ language: 'node', port: ctx.debug.port }, ctx.timeoutSecs),
+					),
+				);
 			}
 		}
 
@@ -1256,12 +1271,9 @@ export class DockerDriver implements Driver {
 	}
 
 	/**
-	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when that names a file
-	 * inside the working directory - Apify's Playwright base images start through `./xvfb-entrypoint.sh`
-	 * there - the bind mount hides it unless the dev folder happens to carry the same file, and the engine
-	 * refuses to start ("executable file not found"). Unless the dev folder provides it, the file is
-	 * taken from the image and the run starts through that copy, at a path no mount covers. Anything
-	 * `PATH`-resolved or absolute is left alone: the mount cannot hide it.
+	 * A `devMount` run starts through the image's own `Entrypoint` (or `Cmd`); when the mount hides that
+	 * file the engine refuses to start ("executable file not found"). Unless the dev folder carries its
+	 * own copy, the image's is extracted and the run starts through it, at a path no mount covers.
 	 */
 	private async preserveHiddenEntrypoint(
 		imageId: string,
@@ -1274,15 +1286,18 @@ export class DockerDriver implements Driver {
 		const field: PreservedEntrypoint['field'] = entrypoint.length > 0 ? 'Entrypoint' : 'Cmd';
 		const command = field === 'Entrypoint' ? entrypoint : (info.Config?.Cmd ?? []);
 		const first = command[0];
-		if (!first || !isWorkingDirectoryRelative(first)) return undefined;
-		if (await this.devFolderHasEntry(devMount.localDevFolder, first)) return undefined;
+		const hidden = first ? entryHiddenByDevMount(first, devMount.imageWorkingDirectory) : undefined;
+		if (!hidden) return undefined;
+		if (await this.devFolderHasEntry(devMount.localDevFolder, hidden.relative)) return undefined;
 
-		const inImage = path.posix.resolve(devMount.imageWorkingDirectory, first);
+		const inImage = hidden.inImage;
 		const archive = await this.extractFromImage(imageId, inImage);
 		const tarball = await repackUnderDirectory(archive, PRESERVED_ENTRYPOINT_DIR);
 		onLog(
-			`The image starts through ${first} in its working directory, which the dev folder does not contain; ` +
-				`using the image's own copy of it.\n`,
+			formatRuntimeLog(
+				`The image starts through ${first} in its working directory, which the dev folder does not contain; ` +
+					`using the image's own copy of it.`,
+			),
 		);
 		return {
 			field,

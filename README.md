@@ -41,6 +41,10 @@ the real platform is reachable, the runtime also adopts that account's real user
 the first time it sees the token; fully offline (or with any other non-empty token) it just keeps using
 the single local user, with no error either way - see `requirements/cli.md`'s User bootstrap section.
 
+In a build or run log, everything the runtime itself has to say - dev-folder notices, the debug-mode
+attach line, the browser-view URL, migration markers, a run that could not be started - opens with a
+blue `[actor-runtime]` prefix. Your Actor's own output is passed through byte for byte.
+
 ## Running with Podman instead of Docker
 
 The runtime talks to the container engine only through its Docker-compatible API socket, and Podman

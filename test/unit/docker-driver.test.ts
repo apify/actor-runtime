@@ -1039,7 +1039,7 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		stub.endLogStream();
 		await outcomePromise;
 
-		expect(hasEntry).toHaveBeenCalledWith('/host/src', './xvfb-entrypoint.sh');
+		expect(hasEntry).toHaveBeenCalledWith('/host/src', 'xvfb-entrypoint.sh');
 		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/usr/src/app/xvfb-entrypoint.sh' });
 		// Two containers: the throwaway one the file is read from, then the run's own.
 		expect(stub.createContainer).toHaveBeenCalledTimes(2);
@@ -1056,20 +1056,81 @@ describe('DockerDriver.startRun - an image entrypoint the dev-folder mount would
 		expect(logged.join('')).toContain('starts through ./xvfb-entrypoint.sh in its working directory');
 	});
 
-	it('the dev folder providing the file itself, an absolute entrypoint, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
-		for (const [config, devFolderHasIt] of [
-			[{ Entrypoint: ['./xvfb-entrypoint.sh'], WorkingDir: '/usr/src/app' }, true],
-			[{ Entrypoint: ['/usr/local/bin/xvfb-run', 'node', 'main.js'], WorkingDir: '/usr/src/app' }, false],
-			[{ Cmd: ['npm', 'start'], WorkingDir: '/usr/src/app' }, false],
-		] as Array<[Record<string, unknown>, boolean]>) {
+	// `apify/actor-node-playwright-chrome` spells this one absolute, inside the mount target; treating
+	// "absolute" as "out of the mount's reach" left its runs dying with "executable file not found".
+	it('an ABSOLUTE entrypoint that points inside the working directory is hidden by the mount just like a relative one, and is preserved the same way', async () => {
+		const stub = stubDockerForRun();
+		stub.imageInspect.mockResolvedValue({
+			Config: {
+				Entrypoint: ['/home/myuser/xvfb-entrypoint.sh'],
+				Cmd: ['node', 'dist/main.js'],
+				WorkingDir: '/home/myuser',
+			},
+		});
+		stub.container.getArchive.mockResolvedValue(scriptArchive('xvfb-entrypoint.sh', '#!/bin/sh\nexec "$@"\n'));
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		allowDevMountRecheck(driver);
+		const hasEntry = vi.spyOn(driver, 'devFolderHasEntry').mockResolvedValue(false);
+
+		const outcomePromise = driver.startRun(
+			{ ...devMountRun, devMount: { localDevFolder: '/host/src', imageWorkingDirectory: '/home/myuser' } },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		await new Promise((resolve) => setImmediate(resolve));
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcomePromise;
+
+		expect(hasEntry).toHaveBeenCalledWith('/host/src', 'xvfb-entrypoint.sh');
+		expect(stub.container.getArchive).toHaveBeenCalledWith({ path: '/home/myuser/xvfb-entrypoint.sh' });
+		const runOptions = stub.createContainer.mock.calls[1]![0];
+		expect(runOptions.Entrypoint).toEqual(['/apify-runtime-entrypoint/xvfb-entrypoint.sh']);
+		expect(runOptions.Cmd).toEqual(['node', 'dist/main.js']);
+	});
+
+	it('the dev folder providing the file itself, an entrypoint outside the working directory, or a PATH-resolved one: nothing is preserved and the image command stands', async () => {
+		for (const { config, workingDirectory, devFolderHasIt } of [
+			{
+				config: { Entrypoint: ['./xvfb-entrypoint.sh'] },
+				workingDirectory: '/usr/src/app',
+				devFolderHasIt: true,
+			},
+			// Hidden, but the dev folder carries its own copy.
+			{
+				config: { Entrypoint: ['/home/myuser/xvfb-entrypoint.sh'] },
+				workingDirectory: '/home/myuser',
+				devFolderHasIt: true,
+			},
+			{
+				config: { Entrypoint: ['/usr/local/bin/xvfb-run', 'node', 'main.js'] },
+				workingDirectory: '/usr/src/app',
+				devFolderHasIt: false,
+			},
+			// A sibling whose name merely starts with the working directory's - a raw prefix match would
+			// wrongly call this hidden.
+			{
+				config: { Entrypoint: ['/usr/src/app-tools/xvfb-run'] },
+				workingDirectory: '/usr/src/app',
+				devFolderHasIt: false,
+			},
+			{ config: { Cmd: ['npm', 'start'] }, workingDirectory: '/usr/src/app', devFolderHasIt: false },
+		]) {
 			const stub = stubDockerForRun();
-			stub.imageInspect.mockResolvedValue({ Config: config });
+			stub.imageInspect.mockResolvedValue({ Config: { ...config, WorkingDir: workingDirectory } });
 			const driver = new DockerDriver(stub.docker);
 			driver.available = true;
 			allowDevMountRecheck(driver);
 			vi.spyOn(driver, 'devFolderHasEntry').mockResolvedValue(devFolderHasIt);
 
-			const outcomePromise = driver.startRun(devMountRun, () => {});
+			const outcomePromise = driver.startRun(
+				{
+					...devMountRun,
+					devMount: { localDevFolder: '/host/src', imageWorkingDirectory: workingDirectory },
+				},
+				() => {},
+			);
 			await new Promise((resolve) => setImmediate(resolve));
 			await new Promise((resolve) => setImmediate(resolve));
 			stub.triggerContainerExit(0);

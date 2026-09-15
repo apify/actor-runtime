@@ -12,6 +12,7 @@
 import type { ActorRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import type { DevFolderMount, Driver } from '../driver/types.js';
+import type { RuntimeLogLine } from '../runtime-log.js';
 
 /** Upper bound on a candidate path's length - generous enough that no genuine host path would ever hit
  * it, just a guard against pathological input. */
@@ -130,14 +131,34 @@ export function devFolderStatus(actor: ActorRecord): DevFolderStatus {
 	return { localDevFolder: actor.localDevFolder ?? null };
 }
 
-/** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails confusingly. */
-export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): string[] {
-	const red = (line: string) => `\x1b[1;31m${line}\x1b[0m`;
+/** Printed when a registered dev folder cannot be mounted because the run's build has no working
+ * directory (an image with no `WORKDIR`, or `/`). The run is unaffected; only the silence is. */
+export function unknownWorkingDirectoryLine(localDevFolder: string): string {
+	return (
+		`Not mounting the registered local dev folder ${localDevFolder} for this run: the image of the build ` +
+		`this run resolved has no working directory of its own (its Dockerfile sets no WORKDIR, or sets it to ` +
+		`/), and a mount needs one. Give the Actor's Dockerfile a WORKDIR and rebuild to use the live dev ` +
+		`folder, or clear the registration with an empty-string body to stop seeing this line.`
+	);
+}
+
+/** Loud on purpose: the mount hides the image's compiled output, so an un-rebuilt TS Actor fails
+ * confusingly. Loud through `!!` and bold, not a color of its own (`runtime-log.ts`). */
+export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirectory }: DevFolderMount): RuntimeLogLine[] {
 	return [
-		`Live dev folder: ${localDevFolder} (mounted over the image's working directory ${imageWorkingDirectory}; ` +
-			'node_modules preserved via a per-run volume)',
-		red('!! Running in `Live dev folder mode`: this run uses the local source files above, mounted over the'),
-		red('!! built Docker image. TS-based Actors require local compilation (e.g. `npm run build`) before the run.'),
-		red('!! To run purely from the built Docker image, use `apify call --no-dev-folder`.'),
+		{
+			text:
+				`Live dev folder: ${localDevFolder} (mounted over the image's working directory ${imageWorkingDirectory}; ` +
+				'node_modules preserved via a per-run volume)',
+		},
+		{
+			text: '!! Running in `Live dev folder mode`: this run uses the local source files above, mounted over the',
+			emphasis: true,
+		},
+		{
+			text: '!! built Docker image. TS-based Actors require local compilation (e.g. `npm run build`) before the run.',
+			emphasis: true,
+		},
+		{ text: '!! To run purely from the built Docker image, use `apify call --no-dev-folder`.', emphasis: true },
 	];
 }

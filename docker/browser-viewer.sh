@@ -19,7 +19,8 @@ else
 fi
 
 log() {
-	echo "[actor-runtime browser view] $*"
+	# Marker kept in sync with `src/runtime-log.ts`. `printf`, not `echo`: portable escapes.
+	printf '\033[34m[actor-runtime]\033[0m %s\n' "$*"
 }
 
 log "waiting for an X display socket in $SOCKET_DIR (created by the Actor's own Xvfb when the Actor starts)"

@@ -15,6 +15,7 @@ import axios from 'axios';
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
 import { createConsoleServer } from '../../src/console/server.js';
 import { getRegistries } from '../../src/storage/registries.js';
+import { RUNTIME_LOG_PREFIX } from '../../src/runtime-log.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import type { ActorRecord, BuildRecord } from '../../src/storage/entities.js';
@@ -840,6 +841,33 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		expect(log!.indexOf('Local Actor runtime')).toBeLessThan(log!.indexOf('done'));
 	});
 
+	it("marks every runtime-authored line of a run's log with the runtime prefix and its blue, and leaves the Actor's own output untouched", async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-marked-runtime-lines' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		const log = (await server.client.log(run.id).get())!;
+		const lines = log.split('\n').filter((line) => line.length > 0);
+
+		// The dev-folder section is the runtime talking; `done` is the Actor's own output.
+		const runtimeLines = lines.filter((line) => line.includes(RUNTIME_LOG_PREFIX));
+		expect(runtimeLines.length).toBe(lines.length - 1);
+		for (const line of runtimeLines) {
+			// Stamp first, then the marker: log redirection (api.md) still finds the stamp at line start.
+			expect(line).toMatch(
+				// eslint-disable-next-line no-control-regex
+				/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \x1b\[(?:34|1;34)m\[actor-runtime\]\x1b\[0m /,
+			);
+		}
+
+		const actorLine = lines.find((line) => line.endsWith('done'))!;
+		expect(actorLine).not.toContain(RUNTIME_LOG_PREFIX);
+		expect(actorLine).not.toContain('\x1b');
+	});
+
 	it('an Actor that was never registered gets devMount: undefined on the real run-start service path', async () => {
 		const capturing = devMountCapturingDriver();
 		server = await startTestServer(capturing.driver);
@@ -881,6 +909,37 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			localDevFolder: '/abs/dev/src',
 			imageWorkingDirectory: '/usr/src/app',
 		});
+	});
+
+	it('an Actor with a registered folder whose resolved build has NO working directory gets devMount: undefined, and the run says why rather than ignoring the registration silently', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-no-working-directory-actor' });
+		// No working directory recorded - what an image with no `WORKDIR` (or `/`) produces.
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		expect(run.status).toBe('SUCCEEDED');
+		// The run is unaffected...
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		const log = await server.client.log(run.id).get();
+		// ...but not silent.
+		expect(log).toContain('Not mounting the registered local dev folder /abs/dev/src for this run');
+		expect(log).toContain('has no working directory of its own');
+		expect(log).not.toContain('Live dev folder mode');
+	});
+
+	it('an unregistered Actor whose build has no working directory says nothing about dev folders at all', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-no-working-directory-unregistered' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
+
+		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		expect(await server.client.log(run.id).get()).not.toContain('Not mounting the registered local dev folder');
 	});
 
 	it("a run against a non-latest tag mounts at that tag's OWN build working directory, not latest's", async () => {
@@ -965,6 +1024,21 @@ describe('per-run opt-out: POST /v2/actors/:actorId/runs?devFolder=false (servic
 			imageWorkingDirectory: '/usr/src/app',
 		});
 		expect(await server.client.log(run.id).get()).not.toContain('Skipping the registered local dev folder');
+	});
+
+	it('devFolder=false on an Actor whose build has no working directory says nothing either - that run was never going to mount anything', async () => {
+		const capturing = devMountCapturingDriver();
+		server = await startTestServer(capturing.driver);
+		const actor = await server.client.actors().create({ name: 'devmount-optout-no-working-directory' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest');
+		await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+
+		const run = await startRunRaw(server, actor.id, 'devFolder=false');
+		expect(run.status).toBe('SUCCEEDED');
+		expect(capturing.getCapturedDevMount()).toBeUndefined();
+		const log = await server.client.log(run.id).get();
+		expect(log).not.toContain('Not mounting the registered local dev folder');
+		expect(log).not.toContain('Skipping the registered local dev folder');
 	});
 
 	it('devFolder=false on an Actor with nothing registered is a plain run - no mount, and no "skipping" line either', async () => {

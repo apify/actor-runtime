@@ -21,6 +21,9 @@ RUN pip download --no-deps --only-binary=:all: \
 	&& python3 -m zipfile -e "/tmp/wheel/debugpy-${DEBUGPY_VERSION}-py2.py3-none-any.whl" "/payload/root/${PAYLOAD_DIR}" \
 	&& rm -rf /tmp/wheel
 COPY docker/sitecustomize.py /payload/root/${PAYLOAD_DIR}/sitecustomize.py
+# World-writable (sticky, like /tmp): extracted into the Actor container as root, but the Actor itself
+# commonly runs as a non-root user, who must be able to create `sitecustomize.py`'s start-marker here.
+RUN chmod 1777 "/payload/root/${PAYLOAD_DIR}"
 # Read back from the extracted package rather than duplicating DEBUGPY_VERSION as a separate constant.
 RUN python3 -c "\
 import sys; \
@@ -75,6 +78,9 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile && pnpm store prune
 
 COPY --from=builder /usr/src/app/dist ./dist
+
+# Shipped in the image so the CLI never carries a copy that can drift from the runtime it talks to.
+COPY skills ./skills
 
 # Matches config.ts's debugpyPayloadDir() default.
 COPY --from=debugpy-payload /payload/debugpy-payload.tar /opt/apify-debug-payload/debugpy-payload.tar

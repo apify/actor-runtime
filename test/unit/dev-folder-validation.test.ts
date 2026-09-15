@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { validateDevFolderPathShape } from '../../src/services/dev-folder.js';
+import { unknownWorkingDirectoryLine, validateDevFolderPathShape } from '../../src/services/dev-folder.js';
 
 describe('validateDevFolderPathShape', () => {
 	it('accepts a plain absolute POSIX path', () => {
@@ -47,5 +47,17 @@ describe('validateDevFolderPathShape', () => {
 		const atCap = '/' + 'a'.repeat(4095);
 		expect(atCap.length).toBe(4096);
 		expect(validateDevFolderPathShape(atCap)).toBeNull();
+	});
+});
+
+describe('unknownWorkingDirectoryLine', () => {
+	it('names the folder, why it cannot be mounted, and both ways out', () => {
+		const line = unknownWorkingDirectoryLine('/home/dev/my-actor');
+		expect(line).toContain('/home/dev/my-actor');
+		expect(line).toContain('no working directory of its own');
+		expect(line).toContain('WORKDIR');
+		// Both remedies: give the image a WORKDIR, or clear the registration.
+		expect(line).toMatch(/rebuild/i);
+		expect(line).toMatch(/clear the registration/i);
 	});
 });

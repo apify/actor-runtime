@@ -57,6 +57,12 @@ export function pullBaseImages(): void {
  * `pullBaseImages`, since it is large and no other file builds against it. */
 export const PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-node-playwright-chrome:24-1.61.1';
 
+/** `sample_actor_nonstandard`'s base image, pulled only by `nonstandard-actor.test.ts`. */
+export const NONSTANDARD_ACTOR_BASE_IMAGE = 'docker.io/library/python:3.11-slim';
+
+/** Base image of the no-`WORKDIR` Actor `nonstandard-actor.test.ts` builds inline. */
+export const NO_WORKDIR_ACTOR_BASE_IMAGE = 'docker.io/library/busybox';
+
 /** `sample_actor_playwright_py/Dockerfile`'s base image. */
 export const PYTHON_PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-python-playwright:3.14-1.61.0';
 

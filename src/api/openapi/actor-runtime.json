@@ -83,6 +83,59 @@
 				}
 			}
 		},
+		"/actor-runtime/skill": {
+			"get": {
+				"operationId": "getActorRuntimeSkill",
+				"summary": "This runtime's own Agent Skill",
+				"description": "Serves `skills/actor-runtime/SKILL.md` - the shipped, agent-facing instructions for driving this runtime - from inside the running image, so an agent can load them without the repository checkout. Markdown by default; `?format=json` returns the `{data}`-enveloped `{ name, description, content }` parsed from the file's front matter plus its full body. Unauthenticated, because explaining how to authenticate against this runtime is one of the things the skill does: a caller must be able to read it before it holds a token. `500` `skill-unavailable` when the file is missing from the image - a deployment fault, not a bad request.",
+				"security": [],
+				"parameters": [
+					{
+						"name": "format",
+						"in": "query",
+						"required": false,
+						"description": "`json` for the enveloped, parsed form. Any other value (or none) serves the raw markdown.",
+						"schema": {
+							"type": "string",
+							"enum": ["json"]
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "The skill, as markdown by default or as `{data}`-enveloped JSON under `?format=json`.",
+						"content": {
+							"text/markdown": {
+								"schema": {
+									"type": "string"
+								}
+							},
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["data"],
+									"properties": {
+										"data": {
+											"$ref": "#/components/schemas/SkillDocument"
+										}
+									}
+								}
+							}
+						}
+					},
+					"500": {
+						"description": "`skill-unavailable` - the skill file is not present in this image.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/actor-runtime/dev-folder/{actorId}": {
 			"post": {
 				"operationId": "setActorDevFolder",
@@ -760,6 +813,25 @@
 					}
 				},
 				"additionalProperties": true
+			},
+			"SkillDocument": {
+				"type": "object",
+				"description": "The skill's YAML front matter (`name`, `description`) alongside the whole markdown file.",
+				"required": ["name", "description", "content"],
+				"properties": {
+					"name": {
+						"type": "string",
+						"description": "The skill's `name` field; empty when the front matter is missing or malformed."
+					},
+					"description": {
+						"type": "string",
+						"description": "The skill's `description` field; empty on the same terms as `name`."
+					},
+					"content": {
+						"type": "string",
+						"description": "The complete markdown file, front matter included."
+					}
+				}
 			}
 		}
 	},
@@ -775,7 +847,7 @@
 			"method": "POST",
 			"path": "/v2/actor-runs/{runId}/abort",
 			"parameter": "gracefully",
-			"summary": "Graceful abort, with the platform’s warning frames and grace period",
+			"summary": "Graceful abort, with the platform\u2019s warning frames and grace period",
 			"description": "`POST /v2/actor-runs/{runId}/abort` accepts an optional `?gracefully=` boolean. Omitted or `false`: the run aborts immediately. `true` on a running run: the record moves to `ABORTING` at once, an `aborting` frame plus a `persistState {\"isMigrating\": false}` frame (in that order, matching the platform) are published on the run's events channel, and the container is stopped 30 seconds later - the request stays open until then. `true` on a run with no container (still `READY`, or already terminal) behaves as if omitted. A second abort arriving during an open window: another `?gracefully=true` joins that window and neither restarts it nor stops the container early; a non-graceful one escalates and stops the container at once."
 		},
 		{

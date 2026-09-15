@@ -1,0 +1,10 @@
+{
+	"actorSpecification": 1,
+	"name": "nonstandard-sample-actor",
+	"title": "Deliberately non-standard sample actor for actor-runtime",
+	"description": "An Actor that looks nothing like one created from an Apify template: a plain python:3.11-slim base image with no Apify SDK, a Dockerfile outside both default locations, a working directory that is not /usr/src/app, its own non-root user, and a custom entry point script.",
+	"version": "0.0",
+	"buildTag": "latest",
+	"dockerfile": "../docker/Actor.dockerfile",
+	"input": "./input_schema.json"
+}

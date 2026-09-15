@@ -8,7 +8,7 @@ import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
-import { appendLog, flushLog, markLogTerminal } from './logs.js';
+import { appendLog, appendRuntimeLog, flushLog, markLogTerminal } from './logs.js';
 import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
 
 /**
@@ -180,7 +180,7 @@ export async function runBuildInBackground(
 	}
 
 	if (!driver.available) {
-		appendLog(record.id, `Docker is not available: ${driver.unavailableReason}\n`);
+		appendRuntimeLog(record.id, `Docker is not available: ${driver.unavailableReason}`);
 		await flushLog(record.id);
 		markLogTerminal(record.id);
 		await transitionJobStatus(builds, record.id, 'FAILED', {
@@ -204,7 +204,7 @@ export async function runBuildInBackground(
 
 	const dockerfileResolution = resolveDockerfileLocation(version.sourceFiles);
 	if (dockerfileResolution.outcome === 'failure') {
-		appendLog(record.id, `${dockerfileResolution.message}\n`);
+		appendRuntimeLog(record.id, dockerfileResolution.message);
 		await flushLog(record.id);
 		markLogTerminal(record.id);
 		await transitionJobStatus(builds, record.id, 'FAILED', {
@@ -213,13 +213,13 @@ export async function runBuildInBackground(
 		});
 		return;
 	}
-	for (const line of dockerfileResolution.logLines) appendLog(record.id, line);
+	for (const line of dockerfileResolution.logLines) appendRuntimeLog(record.id, line);
 	const sourceFiles: SourceFile[] = qualifyDockerfileImages(
 		dockerfileResolution.outcome === 'default'
 			? [...version.sourceFiles, dockerfileResolution.extraSourceFile]
 			: version.sourceFiles,
 		dockerfileResolution.dockerfilePath,
-		(line) => appendLog(record.id, line),
+		(line) => appendRuntimeLog(record.id, line),
 	);
 
 	try {

@@ -10,7 +10,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import WebSocket from 'ws';
 
 import {
 	buildRuntimeImage,
@@ -20,6 +19,9 @@ import {
 	stopRuntimeContainer,
 	waitForHttpOk,
 } from './docker.js';
+import { CONSOLE_URL, readMirrorGreeting } from './console-view.js';
+import { withRunLogOnFailure } from './run-log.js';
+import { waitFor } from './wait.js';
 import {
 	apify,
 	apifyEnv,
@@ -34,14 +36,17 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
-const CONSOLE_URL = 'http://localhost:3000';
+
+/** Server-rendered, unlike the samples' default `crawlee.dev`, whose links appear only after client-side
+ * hydration - so the crawl had to wait for `load` and kept blowing the 60s navigation budget. */
+export const CRAWL_START_URL = 'https://demo-webstore.apify.org/';
 
 export interface BrowserViewSample {
 	/** Directory under the repository root. */
 	dir: string;
 	label: string;
 	baseImage: string;
-	input: (maxRequests: number) => Record<string, number>;
+	input: (maxRequests: number) => Record<string, unknown>;
 	/** The "toggle cleared" case proves a runtime property; one sample is enough. */
 	withToggleClearedCase: boolean;
 }
@@ -52,7 +57,7 @@ interface RunApi {
 	statusMessage?: string;
 }
 
-/** The default 1024 MB grants 0.25 core, on which a headful browser is too slow for a tight e2e budget. */
+/** The default 1024 MB grants a quarter core (`resources.ts`), too little for a headful browser. */
 const RUN_MEMORY_MBYTES = 4096;
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
@@ -75,55 +80,6 @@ function getRun(runId: string, env: NodeJS.ProcessEnv): RunApi {
 /** Non-streaming log fetch (see `debug-mode.test.ts`'s `currentLog` for why not `apify runs log`). */
 function currentLog(runId: string, env: NodeJS.ProcessEnv): string {
 	return apify(['api', 'GET', `actor-runs/${runId}/log`], { cwd: REPO_ROOT, env });
-}
-
-async function waitFor<T>(
-	check: () => T | undefined | Promise<T | undefined>,
-	timeoutMs: number,
-	description: string,
-): Promise<T> {
-	const deadline = Date.now() + timeoutMs;
-	for (;;) {
-		let result: T | undefined;
-		try {
-			result = await check();
-		} catch {
-			result = undefined;
-		}
-		if (result !== undefined) return result;
-		if (Date.now() >= deadline) throw new Error(`Timed out waiting for: ${description}`);
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-}
-
-/**
- * Opens the console's viewer websocket for the run and resolves with the first bytes the mirror sends: an
- * RFB server's `ProtocolVersion` greeting (`RFB 003.008\n`), which x11vnc sends the moment a client
- * connects - proof that the bridge reached a live VNC server mirroring the run's display, before any
- * handshake. The console bridge itself keeps re-dialing the sidecar until the Actor's Xvfb is up, so one
- * connection attempt is enough; the timeout here just bounds that wait.
- */
-function readMirrorGreeting(runId: string, timeoutMs: number): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const ws = new WebSocket(`${CONSOLE_URL.replace('http', 'ws')}/runs/${runId}/browser/ws`);
-		const timer = setTimeout(() => {
-			ws.terminate();
-			reject(new Error('Timed out waiting for the RFB greeting over the viewer websocket'));
-		}, timeoutMs);
-		ws.once('message', (data) => {
-			clearTimeout(timer);
-			ws.close();
-			resolve(Buffer.from(data as Buffer).toString('latin1'));
-		});
-		ws.once('close', (code, reason) => {
-			clearTimeout(timer);
-			reject(new Error(`Viewer websocket closed before any data: ${code} ${reason.toString()}`));
-		});
-		ws.once('error', (error) => {
-			clearTimeout(timer);
-			reject(error);
-		});
-	});
 }
 
 /** One e2e file per sample (`browser-view-ts.test.ts`, `browser-view-py.test.ts`), so CI runs them as separate
@@ -215,25 +171,33 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
 				expect(client.status).toBe(200);
 
-				// Mirroring changed nothing about the crawl itself: the run finishes and the item count tracks input.
-				const finished = await waitFor(
-					() => {
-						const current = getRun(run.id, env);
-						return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
-							? current
-							: undefined;
+				await withRunLogOnFailure(
+					run.id,
+					() => currentLog(run.id, env),
+					async () => {
+						const finished = await waitFor(
+							() => {
+								const current = getRun(run.id, env);
+								return ['SUCCEEDED', 'FAILED', 'TIMED-OUT', 'ABORTED'].includes(current.status)
+									? current
+									: undefined;
+							},
+							8 * 60 * 1000,
+							'the browser-view run to finish',
+						);
+						expect(finished.status).toBe('SUCCEEDED');
+						const runDetail = JSON.parse(
+							apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
+						) as ApiEnvelope<{ defaultDatasetId: string }>;
+						const info = JSON.parse(
+							apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], {
+								cwd: actorDir,
+								env,
+							}),
+						) as DatasetInfoResult;
+						expect(info.itemCount).toBe(4);
 					},
-					8 * 60 * 1000,
-					'the browser-view run to finish',
 				);
-				expect(finished.status).toBe('SUCCEEDED');
-				const runDetail = JSON.parse(
-					apify(['api', 'GET', `actor-runs/${run.id}`], { cwd: REPO_ROOT, env }),
-				) as ApiEnvelope<{ defaultDatasetId: string }>;
-				const info = JSON.parse(
-					apify(['datasets', 'info', runDetail.data.defaultDatasetId, '--json'], { cwd: actorDir, env }),
-				) as DatasetInfoResult;
-				expect(info.itemCount).toBe(4);
 
 				// Once the run is over its mirror is gone: the viewer page says so, and the websocket is refused.
 				const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);

@@ -46,6 +46,7 @@ describe('the Actor runtime OpenAPI document', () => {
 			[
 				'GET /actor-runtime',
 				'GET /actor-runtime/openapi.json',
+				'GET /actor-runtime/skill',
 				'GET /actor-runtime/api-fallback',
 				'POST /actor-runtime/api-fallback',
 				'POST /actor-runtime/browser-view/{actorId}',

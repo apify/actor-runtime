@@ -19,6 +19,7 @@ import { mountBrowserView } from './routes/browser-view.js';
 import { mountMigrate } from './routes/migrate.js';
 import { mountApiFallback } from './routes/api-fallback.js';
 import { mountActorRuntimeSpec, mountActorRuntimeUnmatched } from './routes/actor-runtime-spec.js';
+import { mountSkill } from './routes/skill.js';
 import { attemptFallback, type LocalError } from '../services/api-fallback.js';
 import type { Driver } from '../driver/types.js';
 
@@ -51,6 +52,15 @@ export function createApiServer(deps: ApiServerDeps): Express {
 	// twice per request for no benefit.
 	// What the namespace contains is specified by `openapi/actor-runtime.json`, which the runtime serves
 	// from itself (`routes/actor-runtime-spec.ts`) and decides its own 404/405/426 from.
+	// Registered ahead of the `auth()`-wrapped router below so Express answers `/skill` here and lets
+	// every other `/actor-runtime/*` path fall through to it - see `routes/skill.ts` for why it is public.
+	// It is registered on its own router rather than on the one below because that one ends in a terminal
+	// handler (`mountActorRuntimeUnmatched`), which would answer `/skill` instead of letting it through.
+	const actorRuntimePublic = express.Router();
+	mountSkill(actorRuntimePublic);
+	app.use('/actor-runtime', actorRuntimePublic);
+	app.use('/v2/actor-runtime', actorRuntimePublic);
+
 	const actorRuntime = express.Router();
 	// Registered before this router's `auth()` on purpose, so the namespace can be enumerated without a
 	// token - see `routes/actor-runtime-spec.ts`. Everything after `auth()` below is authenticated as

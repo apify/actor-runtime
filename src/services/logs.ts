@@ -4,6 +4,7 @@
  */
 import { getRegistries } from '../storage/registries.js';
 import { KeyedMutex } from '../storage/mutex.js';
+import { formatRuntimeLog } from '../runtime-log.js';
 
 interface LiveLog {
 	buffer: string[];
@@ -64,6 +65,12 @@ export function appendLog(id: string, chunk: string): void {
 	const stamped = stampLines(state, chunk);
 	state.buffer.push(stamped);
 	for (const subscriber of state.subscribers) subscriber(stamped);
+}
+
+/** For what the runtime writes itself, never for Actor output (`runtime-log.ts`). The driver formats
+ * its own through `formatRuntimeLog`, having no registry access. */
+export function appendRuntimeLog(id: string, text: string): void {
+	appendLog(id, formatRuntimeLog(text));
 }
 
 /** Returns an unsubscribe function. */

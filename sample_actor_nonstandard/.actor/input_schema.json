@@ -1,0 +1,14 @@
+{
+	"title": "Non-standard sample actor input",
+	"type": "object",
+	"schemaVersion": 1,
+	"properties": {
+		"itemCount": {
+			"title": "Item count",
+			"type": "integer",
+			"description": "How many items the Actor pushes to its default dataset.",
+			"editor": "number",
+			"default": 2
+		}
+	}
+}
