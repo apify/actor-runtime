@@ -13,10 +13,12 @@ See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
 
 ## Documentation
 
-- [Quick start](docs/quick-start.md) - start the runtime with Apify CLI or Docker, connect the CLI,
-  push and run your Actor, view the results, and debug with your IDE.
+- [Quick start](docs/quick-start.md) - install and start the runtime with `apify runtime`, point the
+  CLI at it, push and run your Actor, view the results, and iterate without rebuilding.
 
-The sections below are the condensed reference; the docs above are the guided version.
+The sections below are the condensed reference; the guide above is the walkthrough. For everything
+past the basic loop - IDE debugging, browser view, migration testing, API fallback - read the
+runtime's own Agent Skill (`apify runtime skill`, or `skills/actor-runtime/SKILL.md`).
 
 ## Quick start
 
