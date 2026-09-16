@@ -29,6 +29,7 @@ Point `apify runtime install` at a locally built image to drive it with the CLI.
 same way with its own socket path - see README.md's "Running with Podman".
 
 The behavioural spec lives in `requirements/*.md` (`system.md`, `api.md`, `storage.md`,
-`actor-driver.md`, `cli.md`, `console.md`, `test.md`). When a change alters what the runtime does for
+`actor-driver.md`, `cli.md`, `console.md`, `test.md`; `unsupported.md` lists the platform behavior the runtime
+does not emulate). When a change alters what the runtime does for
 its users, update `skills/actor-runtime/SKILL.md` in the same commit - it is shipped documentation,
 not a README.
