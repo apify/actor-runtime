@@ -228,9 +228,11 @@ there rather than added by hand.
 
 Per-branch and per-commit tags pile up on Docker Hub as branches come and go. The **Delete Docker
 image tags** workflow (`.github/workflows/delete-image-tags.yml`) removes them: Actions -> Delete
-Docker image tags -> Run workflow, then give it the repository and the tags to delete - comma- or
-newline-separated, either exact tag names or shell-style globs matched against the repository's
-current tags (`claude-*`, `master-*`, `*` for everything deletable).
+Docker image tags -> Run workflow, then give it the tags to delete - comma- or newline-separated,
+either exact tag names or shell-style globs matched against the repository's current tags
+(`claude-*`, `master-*`, `*` for everything deletable). The repository it deletes from is hardcoded
+to `apify/actor-runtime`, unlike the release workflow's target: it deletes, so it can only ever reach
+the one repository it is written for.
 
 `master`, `main` and `latest` are never deleted: a glob covering one of them skips it and says so, so
 the tags users pull cannot be removed from here. Every other tag in the repository can be.

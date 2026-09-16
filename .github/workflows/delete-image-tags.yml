@@ -1,8 +1,12 @@
 name: Delete Docker image tags
 
-# Manual-only: deletes tags from the Docker Hub repository the release workflow publishes to
-# (https://hub.docker.com/r/apify/actor-runtime/tags). Meant for cleaning up the per-branch and
-# per-commit tags `release.yml` leaves behind (`<branch>`, `<branch>-<sha>`) once a branch is gone.
+# Manual-only: deletes tags from https://hub.docker.com/r/apify/actor-runtime/tags, the repository
+# `release.yml` publishes to. Meant for cleaning up the per-branch and per-commit tags it leaves
+# behind (`<branch>`, `<branch>-<sha>`) once a branch is gone.
+#
+# The repository is hardcoded, not an input: this workflow deletes, so the blast radius stays the one
+# repository it is written for. Pushing elsewhere is a `release.yml` input; cleaning up elsewhere is
+# not this workflow's job.
 #
 # `master` and `latest` are never deleted, whatever is asked for: they are the tags users pull, and
 # the moving tags `release.yml` maintains. `main` is protected the same way, so a future default-branch
@@ -13,10 +17,6 @@ name: Delete Docker image tags
 on:
     workflow_dispatch:
         inputs:
-            image:
-                description: Docker Hub repository to delete tags from
-                required: true
-                default: apify/actor-runtime
             tags:
                 description: >-
                     Tags to delete - comma- or newline-separated. Shell-style globs are matched against
@@ -30,7 +30,7 @@ on:
 
 jobs:
     delete:
-        name: Delete tags from ${{ inputs.image }}
+        name: Delete tags from apify/actor-runtime
         runs-on: ubuntu-latest
         timeout-minutes: 15
         steps:
@@ -58,7 +58,6 @@ jobs:
               env:
                   DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
                   DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
-                  IMAGE: ${{ inputs.image }}
                   TAGS: ${{ inputs.tags }}
                   DRY_RUN: ${{ inputs.dry_run }}
               run: |
@@ -66,11 +65,9 @@ jobs:
 
                   api=https://hub.docker.com/v2
 
-                  case "$IMAGE" in
-                    */*/*|/*|*/) echo "::error::'$IMAGE' is not a <namespace>/<repository> Docker Hub repository."; exit 1 ;;
-                    */*) ;;
-                    *) echo "::error::'$IMAGE' is not a <namespace>/<repository> Docker Hub repository."; exit 1 ;;
-                  esac
+                  # The one repository this workflow may touch. Hardcoded on purpose - see the note at
+                  # the top of the file.
+                  IMAGE=apify/actor-runtime
 
                   # Tags this workflow refuses to delete, matched exactly - a glob that happens to cover
                   # one of them (`*`, `m*`) skips it rather than failing the run.
