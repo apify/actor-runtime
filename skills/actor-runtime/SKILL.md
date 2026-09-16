@@ -46,6 +46,13 @@ apify runs log <runId>
 apify datasets get-items <datasetId> --format json
 ```
 
+### Apple Silicon and other arm64 hosts
+
+Builds run for the host's architecture. Some Apify base images are published for `linux/amd64` only -
+both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - and a build from one of
+those is retried for `linux/amd64`, the architecture the Apify platform builds and runs on, with the
+reason in the build log. The engine emulates it (Rosetta on Apple Silicon), so it works, just slower.
+
 ## Iterate without rebuilding (dev folder)
 
 After that first `apify push`, the runtime registers the pushed directory as the Actor's **dev
