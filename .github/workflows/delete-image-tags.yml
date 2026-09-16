@@ -1,0 +1,196 @@
+name: Delete Docker image tags
+
+# Manual-only: deletes tags from the Docker Hub repository the release workflow publishes to
+# (https://hub.docker.com/r/apify/actor-runtime/tags). Meant for cleaning up the per-branch and
+# per-commit tags `release.yml` leaves behind (`<branch>`, `<branch>-<sha>`) once a branch is gone.
+#
+# `master` and `latest` are never deleted, whatever is asked for: they are the tags users pull, and
+# the moving tags `release.yml` maintains. `main` is protected the same way, so a future default-branch
+# rename cannot be undone from here. Everything else in the repository is fair game.
+#
+# Deleting a tag only removes the tag; the underlying manifest and layers stay until Docker Hub's own
+# garbage collection reclaims them, and any other tag pointing at the same digest keeps working.
+on:
+    workflow_dispatch:
+        inputs:
+            image:
+                description: Docker Hub repository to delete tags from
+                required: true
+                default: apify/actor-runtime
+            tags:
+                description: >-
+                    Tags to delete - comma- or newline-separated. Shell-style globs are matched against
+                    the repository's tags (e.g. `claude-*`, `master-*`, `*` for everything deletable).
+                required: true
+            dry_run:
+                description: Only list what would be deleted, delete nothing
+                type: boolean
+                required: false
+                default: true
+
+jobs:
+    delete:
+        name: Delete tags from ${{ inputs.image }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            # Same credentials, same failure mode as `release.yml`: fail up front with the fix named,
+            # rather than after a successful login-less API call returns an unhelpful 401. They are the
+            # Apify service account's, synced into this repository's Actions secrets by the org's secret
+            # manager - a missing value is fixed there, not by adding a secret here by hand. The token
+            # needs delete permission on the repository; a read/write-only PAT gets 403 per tag.
+            - name: Check Docker Hub credentials are configured
+              env:
+                  DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
+                  DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
+              run: |
+                  if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+                    echo "::error::Missing APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME / APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN" \
+                      "repository secrets. They are synced from the org's secret manager - check that its" \
+                      "GitHub integration for this repository includes both."
+                    exit 1
+                  fi
+
+            # One step: the JWT, the repository's current tag list, the patterns and the protected list
+            # are all inputs to the same decision, and splitting them would mean passing the token
+            # between steps.
+            - name: Resolve and delete tags
+              env:
+                  DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
+                  DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
+                  IMAGE: ${{ inputs.image }}
+                  TAGS: ${{ inputs.tags }}
+                  DRY_RUN: ${{ inputs.dry_run }}
+              run: |
+                  set -euo pipefail
+
+                  api=https://hub.docker.com/v2
+
+                  case "$IMAGE" in
+                    */*/*|/*|*/) echo "::error::'$IMAGE' is not a <namespace>/<repository> Docker Hub repository."; exit 1 ;;
+                    */*) ;;
+                    *) echo "::error::'$IMAGE' is not a <namespace>/<repository> Docker Hub repository."; exit 1 ;;
+                  esac
+
+                  # Tags this workflow refuses to delete, matched exactly - a glob that happens to cover
+                  # one of them (`*`, `m*`) skips it rather than failing the run.
+                  protected=(latest master main)
+
+                  token=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" '{username: $u, password: $p}' \
+                    | curl -sS -X POST "$api/users/login" -H 'Content-Type: application/json' -d @- \
+                    | jq -r '.token // empty')
+                  if [ -z "$token" ]; then
+                    echo "::error::Docker Hub login failed for '$DOCKERHUB_USERNAME'. Check the token is valid and not expired."
+                    exit 1
+                  fi
+                  # Keep the JWT out of the log even if a later curl is run with -v or an error echoes it.
+                  echo "::add-mask::$token"
+
+                  # Every existing tag, one per line. `next` is followed rather than counting pages, so a
+                  # repository larger than one page needs no special case.
+                  existing=$(mktemp)
+                  url="$api/repositories/$IMAGE/tags?page_size=100"
+                  while [ -n "$url" ] && [ "$url" != "null" ]; do
+                    page=$(curl -sS -f -H "Authorization: JWT $token" "$url") || {
+                      echo "::error::Could not list tags of '$IMAGE'. Does the repository exist and is it visible to '$DOCKERHUB_USERNAME'?"
+                      exit 1
+                    }
+                    jq -r '.results[].name' <<< "$page" >> "$existing"
+                    url=$(jq -r '.next // empty' <<< "$page")
+                  done
+                  echo "Repository '$IMAGE' currently has $(wc -l < "$existing") tag(s)."
+
+                  # Patterns are comma- or newline-separated; blank entries and stray whitespace (the
+                  # dispatch form is a free-text box) are dropped rather than matched as an empty tag.
+                  patterns=()
+                  while IFS= read -r pattern; do
+                    pattern=$(printf '%s' "$pattern" | tr -d '[:space:]')
+                    [ -n "$pattern" ] && patterns+=("$pattern")
+                  done < <(printf '%s\n' "$TAGS" | tr ',' '\n')
+                  if [ ${#patterns[@]} -eq 0 ]; then
+                    echo "::error::No tags given."
+                    exit 1
+                  fi
+
+                  # Match every pattern against the repository's tags. `case` globbing is what makes a
+                  # literal tag name work unchanged: it matches only itself.
+                  targets=()
+                  skipped=()
+                  for pattern in "${patterns[@]}"; do
+                    matched=0
+                    while IFS= read -r tag; do
+                      case "$tag" in $pattern) ;; *) continue ;; esac
+                      matched=1
+                      for keep in "${protected[@]}"; do
+                        if [ "$tag" = "$keep" ]; then
+                          printf '%s\n' "${skipped[@]:-}" | grep -qxF "$tag" || skipped+=("$tag")
+                          continue 2
+                        fi
+                      done
+                      # A tag matched by two patterns is deleted once.
+                      printf '%s\n' "${targets[@]:-}" | grep -qxF "$tag" || targets+=("$tag")
+                    done < "$existing"
+                    if [ "$matched" -eq 0 ]; then
+                      echo "::warning::Pattern '$pattern' matched no tag in '$IMAGE'."
+                    fi
+                  done
+
+                  for tag in "${skipped[@]:-}"; do
+                    [ -n "$tag" ] && echo "::notice::Keeping protected tag '$tag'."
+                  done
+
+                  if [ ${#targets[@]} -eq 0 ]; then
+                    echo "::error::Nothing to delete: the given tags matched only protected or non-existent tags."
+                    {
+                      echo "### No tags deleted from \`$IMAGE\`"
+                      echo
+                      echo "The given tags matched only protected or non-existent tags."
+                    } >> "$GITHUB_STEP_SUMMARY"
+                    exit 1
+                  fi
+
+                  if [ "$DRY_RUN" = "true" ]; then
+                    echo "Dry run - would delete ${#targets[@]} tag(s):"
+                    printf '  %s\n' "${targets[@]}"
+                    {
+                      echo "### Dry run: would delete ${#targets[@]} tag(s) from \`$IMAGE\`"
+                      echo
+                      printf -- '- `%s`\n' "${targets[@]}"
+                      echo
+                      echo "Re-run with **dry_run** unchecked to delete them."
+                    } >> "$GITHUB_STEP_SUMMARY"
+                    exit 0
+                  fi
+
+                  # Deleting keeps going after a failure so one 403 does not hide the state of the rest;
+                  # the run still fails at the end.
+                  deleted=()
+                  failed=()
+                  for tag in "${targets[@]}"; do
+                    status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+                      -H "Authorization: JWT $token" "$api/repositories/$IMAGE/tags/$tag/" || echo 000)
+                    case "$status" in
+                      # 204 is the delete; 404 means it is already gone, which is the requested end state.
+                      204|404)
+                        echo "Deleted '$IMAGE:$tag' (HTTP $status)."
+                        deleted+=("$tag")
+                        ;;
+                      *)
+                        echo "::error::Could not delete '$IMAGE:$tag' (HTTP $status). A 403 usually means the token lacks delete permission on the repository."
+                        failed+=("$tag")
+                        ;;
+                    esac
+                  done
+
+                  {
+                    echo "### Deleted ${#deleted[@]} tag(s) from \`$IMAGE\`"
+                    echo
+                    if [ ${#deleted[@]} -gt 0 ]; then printf -- '- `%s`\n' "${deleted[@]}"; fi
+                    if [ ${#failed[@]} -gt 0 ]; then
+                      echo
+                      echo "Failed:"
+                      printf -- '- `%s`\n' "${failed[@]}"
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+                  [ ${#failed[@]} -eq 0 ]

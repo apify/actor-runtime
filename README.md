@@ -224,6 +224,26 @@ account, using the same two repository secrets as
 synced into this repository's Actions secrets from the org's secret manager, so they are managed
 there rather than added by hand.
 
+### Deleting published tags
+
+Per-branch and per-commit tags pile up on Docker Hub as branches come and go. The **Delete Docker
+image tags** workflow (`.github/workflows/delete-image-tags.yml`) removes them: Actions -> Delete
+Docker image tags -> Run workflow, then give it the repository and the tags to delete - comma- or
+newline-separated, either exact tag names or shell-style globs matched against the repository's
+current tags (`claude-*`, `master-*`, `*` for everything deletable).
+
+`master`, `main` and `latest` are never deleted: a glob covering one of them skips it and says so, so
+the tags users pull cannot be removed from here. Every other tag in the repository can be.
+
+Runs are a dry run by default - they list what would go and delete nothing. Uncheck **dry_run** to
+delete for real. Either way the run summary lists the tags. It authenticates with the same two
+service-account secrets as the release workflow; the token needs delete permission on the repository,
+or each delete comes back 403.
+
+Deleting a tag only removes that tag. The manifest and layers stay until Docker Hub's own garbage
+collection reclaims them, and any other tag pointing at the same digest keeps working - so deleting
+`master-<sha>` does not break `master` when both point at the same build.
+
 ## Development
 
 ```bash
