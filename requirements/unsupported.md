@@ -21,79 +21,89 @@ real account, not in the runtime.
 - Synchronous runs returning output (`run-sync`)
 - Actor-set run status messages
 - Pay-per-event charging from a run
-- Result caps (`maxItems`, `maxTotalChargeUsd`)
+- Result and cost caps (`maxItems`, `maxTotalChargeUsd`)
 - Ad-hoc webhooks on run start
-- Run usage, cost and billing figures
+- Run usage, cost and compute units
 - Last-run shortcuts (`runs/last`)
-- Input validation against the input schema
+- Input validation and defaults from the input schema
 - Encrypted secret input fields
 - Actor-level default run options
-- Memory bounds from `.actor/actor.json`
-- Limited-permission Actors and scoped run tokens
+- Dynamic and bounded memory from `.actor/actor.json`
+- Extra named default storages (`storageIds`)
+- Limited-permission Actors and per-run scoped tokens
+- Automatic run and build retention
 - Running Actors from the console
 
 ## Building and publishing Actors
 
 - Building from Git repository, archive or Gist
 - Build on push (Git integration)
-- Secret environment variables
+- Secret and build-time environment variables
 - Generated per-build OpenAPI definition
+- Output, key-value store and web server schemas
 - Publishing to Apify Store
 - Actor monetization (rental, pay per result, pay per event)
-- Deprecation and maintenance notices
-- Actor README, categories and SEO metadata
+- Actor status, deprecation and maintenance notices
+- README, changelog, categories and SEO metadata
 
 ## Automation and integrations
 
 - Tasks (saved input configurations)
 - Schedules
 - Webhooks and webhook dispatches
+- Actor-to-Actor integrations
 - Integrations (Slack, Gmail, Drive, GitHub, Zapier, Make)
 - Run notifications (email, Slack)
 - Monitoring and alerting
+- Apify MCP server and MCP connectors
 
 ## Storage
 
 - Dataset export formats (CSV, XLSX, XML, HTML, RSS, JSONL)
-- Dataset views, schema and item validation
-- Dataset field statistics
+- Dataset views, schema validation and field statistics
+- Key-value store schema and collections
 - Bulk key-value store download (zip)
 - Public and signed storage URLs
-- Storage sharing (`generalAccess`)
+- Sharing runs and storages (`generalAccess`, access rights)
+- Storage addressing by `username~name`
+- Unnamed and shared storage listing filters
 - Storage retention and expiry
 - Request queue locking and request deletion (`storage.md`)
-- Storage size limits and quotas
 
 ## Account and platform
 
 - Apify Store (browsing and running public Actors)
-- Organizations, teams and member permissions
+- Actor issues, reviews and quality score
+- Organizations, teams and access rights
 - Account usage, limits and billing
-- Scoped API tokens
+- Multiple, scoped and expiring API tokens
 - Apify Proxy emulation (real proxy used when password known)
 - OAuth connections for Actors
-- Apify MCP server
+- Legacy `/v2/acts` API paths (older clients)
+- Unauthenticated reads of public resources
 
 ## Console
 
 - Input editor and run start from the console
 - Run charts, usage and cost
-- Storage export and download
-- Account, token and billing settings
-- Actor insights and analytics
-- Login and per-user scoping (`console.md`)
+- Output tab, storage export and download
+- Login, account, token and billing settings
+- Actor insights, analytics and monitoring
+- Per-user scoping (`console.md`)
 
 ## Inside the Actor container
 
-- Run metadata env vars (started/timeout at, build, user)
+- Run metadata env vars (input key, build, task, user, timestamps)
+- Web server, Standby and proxy env vars
 - Input secrets private key
-- Web server and Standby ports
-- Log size limit and secret redaction
-- Outdated SDK version warning
+- Log rate limiting, line truncation and size cap
+- Secret redaction in logs
+- Legacy `cpuInfo` events
 
 ## Platform limits not enforced
 
 - Memory steps and bounds (128 MB - 32 GB, powers of two)
-- Record and item size limits
-- Concurrent run and rate limits
-- Maximum run timeout
+- Record, item and input size limits
+- Concurrent run, rate and per-account quotas
+- Process, file-descriptor and shared-memory limits
+- Network isolation of Actor containers
