@@ -491,4 +491,26 @@ describe('console pages (HTTP fetch)', () => {
 			expect(redirect.headers.location).toBe(to);
 		}
 	});
+
+	/** `console.md`'s "Styling" section: one stylesheet, served by the console, linked by every page. */
+	it('stylesheet: served at /console.css and linked by every page, with no external resources', async () => {
+		const css = await axios.get(`${consoleBaseUrl}/console.css`);
+		expect(css.status).toBe(200);
+		expect(css.headers['content-type']).toContain('text/css');
+		// The Apify tokens the stylesheet is built on, under their upstream `@apify/ui-library` names.
+		expect(css.data).toContain('--color-primary-action: #246dff;');
+		expect(css.data).toContain('@media (prefers-color-scheme: dark)');
+		// The `1rem = 10px` scale every copied token value assumes.
+		expect(css.data).toContain('font-size: 62.5%;');
+
+		const pages = ['/', '/actors', '/runs', '/datasets', '/settings'];
+		for (const path of pages) {
+			const page = await axios.get(`${consoleBaseUrl}${path}`);
+			expect(page.data).toContain('<link rel="stylesheet" href="/console.css">');
+			// Offline-safe: nothing is fetched from anywhere but this server, and no page inlines CSS
+			// of its own.
+			expect(page.data).not.toContain('<style');
+			expect(page.data).not.toMatch(/(?:href|src)="https?:\/\//);
+		}
+	});
 });

@@ -103,3 +103,20 @@
   the other, and via the API's own `GET`, with no restart needed either way.
 - The console has no login, so anyone who can reach it can flip either toggle for every caller of the
   API.
+
+## Styling
+
+- Every page links one stylesheet, served by the console itself at `/console.css`. No CSS is inlined
+  into a page, no page pulls anything from a CDN, and there is no webfont: the runtime is expected to
+  work offline, so a page renders identically with no outbound network at all.
+- The look follows Apify's design system: the color tokens are a copied subset of
+  `@apify/ui-library`'s published `style/colors/tokens.light.css` and `tokens.dark.css` (Apache-2.0,
+  public on npm), under their upstream names, and type and spacing follow the same `1rem = 10px` token
+  scale the library is written in. The library itself is not a dependency - it is React plus
+  styled-components, which the server-rendered console has no use for.
+- Light and dark both come from the same stylesheet, chosen by the reader's `prefers-color-scheme`.
+  The console has no theme switch of its own.
+- Styling never changes what a page says. The stylesheet is the only place presentation lives: the
+  HTML keeps the element and class names it already emits (`.empty`, `.error`, `.warning`,
+  `.wide-input`, `.browser-view-screen`), and no route's markup depends on it being fetched - a page
+  served without the stylesheet is plain, ordered and fully usable.

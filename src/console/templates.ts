@@ -37,35 +37,26 @@ function fallbackNavEntry(): string {
 }
 
 export function layout(title: string, body: string): string {
-	const nav = [...NAV.map(([href, label]) => `<a href="${href}">${label}</a>`), fallbackNavEntry()].join(' | ');
+	const nav = [...NAV.map(([href, label]) => `<a href="${href}">${label}</a>`), fallbackNavEntry()].join('');
 	return `<!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)} - actor-runtime console</title>
-<style>
-	body { font-family: -apple-system, sans-serif; margin: 2rem; color: #1a1a1a; }
-	nav { margin-bottom: 1.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid #ccc; }
-	nav a { margin-right: 0.5rem; text-decoration: none; color: #0b5fff; }
-	table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-	th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.9rem; }
-	th { background: #f5f5f5; }
-	dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
-	dt { font-weight: 600; }
-	pre { background: #f5f5f5; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
-	.empty { color: #777; font-style: italic; }
-	.error { color: #b00020; }
-	.warning { color: #94600b; }
-	.wide-input { width: 28rem; }
-	h1 { margin-top: 0; }
-	.browser-view-screen { width: 100%; height: 75vh; background: #222; }
-	.browser-view-screen canvas { outline: none; }
-</style>
+<link rel="stylesheet" href="/console.css">
 </head>
 <body>
+<header class="topbar">
+<div class="topbar-inner">
+<span class="brand">Apify <span>actor-runtime</span></span>
 <nav>${nav}</nav>
+</div>
+</header>
+<main>
 <h1>${escapeHtml(title)}</h1>
 ${body}
+</main>
 </body>
 </html>`;
 }
