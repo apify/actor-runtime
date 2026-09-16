@@ -48,13 +48,10 @@ apify datasets get-items <datasetId> --format json
 
 ### Apple Silicon and other arm64 hosts
 
-Builds run for the host's own architecture. Some Apify base images are published for `linux/amd64`
-only - both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - and a build
-from one of those dies on its first `FROM` with "no matching manifest for linux/arm64/v8". The
-runtime retries such a build once for `linux/amd64`, the architecture the Apify platform itself
-builds and runs on, and says so in the build log. The engine emulates it (Rosetta on Apple Silicon),
-so the build and every run from it work, just slower than a native one. A build that fails for any
-other reason is never retried.
+Builds run for the host's architecture. Some Apify base images are published for `linux/amd64` only -
+both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - and a build from one of
+those is retried for `linux/amd64`, the architecture the Apify platform builds and runs on, with the
+reason in the build log. The engine emulates it (Rosetta on Apple Silicon), so it works, just slower.
 
 ## Iterate without rebuilding (dev folder)
 

@@ -594,9 +594,8 @@ describe('DockerDriver.startBuild - amd64 fallback (a base image published only 
 	const ARM64_MANIFEST_FAILURE =
 		'no matching manifest for linux/arm64/v8 in the manifest list entries: no match for platform in manifest: not found';
 
-	/** A stub whose builds fail with `failures[n]` for the n-th attempt (an `error` line in the build
-	 * stream, exactly how the daemon reports a base image it could not pull) and succeed once the list
-	 * runs out. */
+	/** A stub whose n-th build fails with `failures[n]` as an `error` line in the build stream (how the
+	 * daemon reports a base image it could not pull), and succeeds once the list runs out. */
 	function stubDockerForBuildAttempts(failures: Array<string | undefined>) {
 		let attempt = 0;
 		const followProgress = vi.fn(
@@ -641,11 +640,8 @@ describe('DockerDriver.startBuild - amd64 fallback (a base image published only 
 		expect(stub.buildImage).toHaveBeenCalledTimes(2);
 		const [, firstOptions] = stub.buildImage.mock.calls[0]!;
 		const [, secondOptions] = stub.buildImage.mock.calls[1]!;
-		// The host-native attempt carries no platform at all - every build that never needed the fallback
-		// is left exactly as the engine would have built it.
 		expect(firstOptions).not.toHaveProperty('platform');
 		expect(secondOptions).toMatchObject({ platform: 'linux/amd64', dockerfile: 'Dockerfile' });
-		// Only the marker and any URL are colored (`runtime-log.ts`), so the message itself reads verbatim.
 		expect(logged.join('')).toContain(RUNTIME_LOG_PREFIX);
 		expect(logged.join('')).toContain('Retrying the build for linux/amd64');
 	});
@@ -715,8 +711,7 @@ describe('DockerDriver.startBuild - amd64 fallback (a base image published only 
 		const outcome = driver.startBuild(buildContext('build-aborted'), () => {});
 		await vi.waitFor(() => expect(finish).toBeDefined());
 		await driver.abortBuild('build-aborted');
-		// What the destroyed request surfaces as: the daemon's last words on the stream, which on an
-		// arm64 host are the very manifest error the fallback looks for.
+		// What the destroyed request surfaces as - on an arm64 host, the very error the fallback looks for.
 		finish!([{ error: ARM64_MANIFEST_FAILURE }]);
 
 		await expect(outcome).rejects.toThrow(ARM64_MANIFEST_FAILURE);

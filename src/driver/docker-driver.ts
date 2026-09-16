@@ -22,11 +22,8 @@
  * so `abortBuild` can call `.abort()` on the live one. Runs are cancelled the same way as before -
  * `container.stop()` - since there is no HTTP request to abort there.
  *
- * Host architecture: a build runs for the host's own architecture, as the engine would build it on its
- * own - with one fallback. A base image published only for `linux/amd64` (both Apify Playwright images
- * are) makes that build impossible on an arm64 host, so `startBuild` retries it once for
- * `linux/amd64` under the engine's emulation, which is the image the platform itself would have built
- * (`build-platform.ts`).
+ * Host architecture: a build runs for the host's own, except that one whose base image has no manifest
+ * for it is retried once for `linux/amd64` under the engine's emulation (`build-platform.ts`).
  *
  * Engine neutrality: everything here goes through the Docker Engine API, which Podman also serves
  * (`podman system service` / the `podman.socket` unit), so the same driver runs Actors on Docker and on
@@ -937,12 +934,8 @@ export class DockerDriver implements Driver {
 		try {
 			return await this.buildImageOnce(ctx, imageTag, controller.signal, onLog);
 		} catch (error) {
-			// The one failure worth a second attempt: an Actor whose base image is published for
-			// `linux/amd64` alone (both Playwright images are) cannot be built on an arm64 host at all, and
-			// the platform's own image is buildable there through the engine's emulation - see
-			// `build-platform.ts`. Never after an abort or a timeout (the retry would be a build the caller
-			// already cancelled), and never twice: the second attempt names its platform explicitly, so a
-			// repeat of the same failure is genuine and is reported as the build's own.
+			// Never after an abort or a timeout, and never twice - the second attempt names its platform, so
+			// the same failure again is genuine.
 			const failure = this.asTimedOutOrOriginal(ctx, error as Error);
 			if (controller.signal.aborted || !isMissingManifestForBuildPlatform(failure.message)) throw failure;
 			onLog(formatRuntimeLog(compatibilityBuildNotice(failure.message)));
@@ -950,17 +943,14 @@ export class DockerDriver implements Driver {
 		} finally {
 			clearTimeout(timeoutTimer);
 			this.buildControllers.delete(ctx.buildId);
-			// Consumed by whichever site noticed it first; dropped here for the paths that never look (a
-			// build that finished successfully after its own timeout fired), so the flag can never leak
-			// into a later build with the same id.
+			// Dropped for the paths that never look at it (a build that succeeded after its timeout fired),
+			// so it cannot leak into a later build with the same id.
 			this.timedOutBuilds.delete(ctx.buildId);
 		}
 	}
 
-	/** One `docker build` attempt against the daemon. The tar is built per attempt - a tar stream is
-	 * consumed once, so the retry cannot reuse the first attempt's. `platform` is left off the options
-	 * entirely for the host-native attempt, leaving every build that never needed the fallback exactly as
-	 * the engine would have built it on its own. */
+	/** One `docker build` attempt. The tar is rebuilt per attempt (a tar stream is consumed once), and
+	 * `platform` is left off entirely for the host-native one. */
 	private async buildImageOnce(
 		ctx: BuildContext,
 		imageTag: string,
@@ -1014,9 +1004,8 @@ export class DockerDriver implements Driver {
 		});
 	}
 
-	/** The timeout flag is consumed exactly once, however a build attempt ends (a `buildImage` rejection,
-	 * the `followProgress` callback, or `startBuild`'s own retry decision) - whichever site notices it
-	 * first wins and reports TIMED-OUT rather than whatever error the cancelled build produced. */
+	/** The timeout flag is consumed exactly once, however a build attempt ends - whichever site notices it
+	 * first reports TIMED-OUT instead of whatever error the cancelled build produced. */
 	private asTimedOutOrOriginal(ctx: BuildContext, error: Error): Error {
 		return this.timedOutBuilds.delete(ctx.buildId)
 			? new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`)
