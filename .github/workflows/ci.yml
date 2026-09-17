@@ -104,7 +104,8 @@ jobs:
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
             # Only this file. The browser-based cases need the amd64 emulation `startBuild`'s fallback
-            # builds under, and nothing here installs binfmt/QEMU - an Apple Silicon Mac runs them.
+            # builds under, and nothing here installs binfmt/QEMU - `e2e-macos-arm64` runs them, under
+            # Rosetta.
             - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
             - name: Dump runtime container logs on failure
               if: failure()
@@ -114,31 +115,43 @@ jobs:
                   done
 
     e2e-macos-arm64:
-        name: e2e actor-dev-loop (apify-cli + docker on macOS arm64, self-hosted)
-        # The one leg on the platform most developers run the runtime on: an Apple Silicon Mac, with the
-        # engine in a Linux VM and the socket the runtime container gets mounted (`/var/run/docker.sock`)
-        # being the VM's, not a kernel socket of the host. The runner is a clean Mac - no Docker, Podman
-        # or OrbStack - so the job brings its own engine (Colima + the Docker CLI, user space, no sudo;
-        # `.github/scripts/macos-docker-engine.sh`) and removes it again when done. It is a persistent
-        # self-hosted machine, so unlike every hosted leg above it is also cleaned before and after.
+        name: e2e all files (apify-cli + ${{ matrix.engine }} on macOS arm64, self-hosted)
+        # The leg on the platform most developers run the runtime on: an Apple Silicon Mac, with the
+        # engine in a Linux VM, the host's `$HOME` shared into it, and the socket the runtime container
+        # gets mounted being the VM's, not a kernel socket of the host. The runner is a clean Mac - no
+        # Docker, Podman or OrbStack - so each job brings its own engine (user space, no sudo;
+        # `.github/scripts/macos-container-engine.sh`) and removes it again when done: Docker via Colima,
+        # Podman via Lima's own template. It is a persistent self-hosted machine, so unlike every hosted
+        # leg above it is also cleaned before and after.
+        #
+        # One job per engine running every e2e file in turn (`test:e2e` serializes them: fixed host
+        # ports), rather than one job per file as above: the engine install is per job, and there is
+        # one runner, so jobs queue rather than parallelize anyway. The browser-view files pull ~2 GB
+        # base images and run Chrome under amd64 emulation, hence the wide budget.
         #
         # Self-hosted, so never for a fork's pull request: `pull_request` runs the head branch's code,
         # and the runner is a long-lived Apify machine. Pushes to master and same-repo PRs only.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         runs-on: [self-hosted, macOS, ARM64]
-        timeout-minutes: 45
+        timeout-minutes: 120
+        strategy:
+            fail-fast: false
+            matrix:
+                engine:
+                    - docker
+                    - podman
         steps:
             - uses: actions/checkout@v4
-            # Downloads pinned Docker CLI, buildx, Lima and Colima into one directory under the runner
-            # user's home (removed again in the last step), starts the VM and smoke-tests the socket mount
-            # the suite relies on. Exports the engine's env to the job; it deliberately does not set
-            # `DOCKER_HOST` (see the script for why).
-            - name: Install a Docker engine (Colima, user space)
-              run: .github/scripts/macos-docker-engine.sh install
+            # Downloads the pinned pieces into one directory under the runner user's home (removed again
+            # in the last step), starts the VM and smoke-tests the socket and home mounts the suite relies
+            # on. Exports the engine's env (`CONTAINER_CLI`, `TMPDIR`, ...) to the job; it deliberately
+            # does not set `DOCKER_HOST` (see the script for why).
+            - name: Install a ${{ matrix.engine }} engine (Lima VM, user space)
+              run: .github/scripts/macos-container-engine.sh install ${{ matrix.engine }}
             # A previous job on this machine may have been cancelled or timed out mid-suite. The engine is
             # new, so there is nothing of ours left in it; this catches the suite's temp dirs and, above
             # all, fails with the holder named if 3333/3000 is taken by something that is not ours, rather
-            # than letting `docker run` fail deep in `beforeAll`.
+            # than letting the container start fail deep in `beforeAll`.
             - name: Clean up leftovers of earlier runs
               run: .github/scripts/e2e-host-cleanup.sh --require-free-ports
             - uses: pnpm/action-setup@v4
@@ -147,24 +160,22 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # Only this file for now - the smallest end-to-end exercise of the whole chain (build the
-            # runtime image, run it, push/build/call two Actors through apify-cli) on this executor. The
-            # browser-view and all-modes files are the candidates to add next; their fallback builds need
-            # amd64 emulation, which is Colima's `--vz-rosetta` switch in the install script.
-            - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
+            # Every e2e file, one after another, on this engine.
+            - run: pnpm run test:e2e
             - name: Dump runtime container logs on failure
               if: failure()
               run: |
-                  for c in $(docker ps -aq --filter name=actor-runtime-e2e); do
-                    docker logs --tail 300 "$c" || true
+                  cli=${CONTAINER_CLI:-docker}
+                  for c in $($cli ps -aq --filter name=actor-runtime-e2e); do
+                    $cli logs --tail 300 "$c" || true
                   done
             # Always, so the next job starts clean whatever happened here. The engine and everything in
             # it goes in the next step anyway; this one is for the suite's temp dirs on the host.
             - name: Clean up
               if: always()
               run: .github/scripts/e2e-host-cleanup.sh
-            # Stops and deletes the VM and removes the binaries, Colima's state, the isolated docker config
-            # and Lima's image cache - the machine is left as the job found it.
-            - name: Remove the Docker engine
+            # Stops and deletes the VM and removes the binaries, the engines' state, the isolated docker
+            # config and Lima's image cache - the machine is left as the job found it.
+            - name: Remove the container engine
               if: always()
-              run: .github/scripts/macos-docker-engine.sh teardown
+              run: .github/scripts/macos-container-engine.sh teardown

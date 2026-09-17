@@ -3,7 +3,7 @@
 # self-hosted macOS arm64 one in `ci.yml` - starts each job clean and leaves it clean. The hosted
 # runners are ephemeral and never need this; there `stopRuntimeContainer`'s `afterAll` is enough,
 # and the "Dump runtime container logs on failure" step relies on the container still being there.
-# On the macOS leg the engine itself is per-job (`macos-docker-engine.sh`), so the engine-side part
+# On the macOS leg the engine itself is per-job (`macos-container-engine.sh`), so the engine-side part
 # below finds little to do there; the temp dirs and the port check are what it is for on that runner.
 #
 # Scoped to what the suite and the runtime it drives create, nothing else on the machine:
