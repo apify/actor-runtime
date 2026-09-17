@@ -15,6 +15,7 @@ import { attachEventsWebSocket } from '../../../src/api/events-ws.js';
 import { resetLogsForTests, stopLogFlusher } from '../../../src/services/logs.js';
 import { resetEventsChannelForTests } from '../../../src/services/events-channel.js';
 import { resetMigrationsForTests } from '../../../src/services/migrations.js';
+import { resetGracefulAbortsForTests } from '../../../src/services/runs.js';
 import type {
 	BuildContext,
 	BuildOutcome,
@@ -479,6 +480,7 @@ export async function startTestServer(
 			resetLogsForTests();
 			resetEventsChannelForTests();
 			resetMigrationsForTests();
+			resetGracefulAbortsForTests();
 			await shutdownStorage();
 			resetStorageForTests();
 			resetRegistriesForTests();

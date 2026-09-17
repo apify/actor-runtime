@@ -9,7 +9,8 @@ runtime itself needs no outbound network access after the first build/push (see
 running them does.
 
 See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
-`storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`).
+`storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`, and `unsupported.md` for the platform
+behavior it deliberately leaves out).
 
 ## Quick start
 
@@ -241,6 +242,28 @@ account, using the same two repository secrets as
 `APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME` and `APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN`. They are
 synced into this repository's Actions secrets from the org's secret manager, so they are managed
 there rather than added by hand.
+
+### Deleting published tags
+
+Per-branch and per-commit tags pile up on Docker Hub as branches come and go. The **Delete Docker
+image tags** workflow (`.github/workflows/delete-image-tags.yml`) removes them: Actions -> Delete
+Docker image tags -> Run workflow, then give it the tags to delete - comma- or newline-separated,
+either exact tag names or shell-style globs matched against the repository's current tags
+(`claude-*`, `master-*`, `*` for everything deletable). The repository it deletes from is hardcoded
+to `apify/actor-runtime`, unlike the release workflow's target: it deletes, so it can only ever reach
+the one repository it is written for.
+
+`master`, `main` and `latest` are never deleted: a glob covering one of them skips it and says so, so
+the tags users pull cannot be removed from here. Every other tag in the repository can be.
+
+Runs are a dry run by default - they list what would go and delete nothing. Uncheck **dry_run** to
+delete for real. Either way the run summary lists the tags. It authenticates with the same two
+service-account secrets as the release workflow; the token needs delete permission on the repository,
+or each delete comes back 403.
+
+Deleting a tag only removes that tag. The manifest and layers stay until Docker Hub's own garbage
+collection reclaims them, and any other tag pointing at the same digest keeps working - so deleting
+`master-<sha>` does not break `master` when both point at the same build.
 
 ## Development
 

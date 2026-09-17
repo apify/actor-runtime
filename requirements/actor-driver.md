@@ -20,11 +20,13 @@
   issued while the record is still `READY` means no build or container is ever started; the record
   finalises as `ABORTED`.
 - Aborting a **build** genuinely cancels the in-flight Docker build, not just the record's status;
-  aborting a **run** stops the run's container.
+  aborting a **run** stops the run's container immediately.
 - On a successful build, the Actor's `taggedBuilds[<tag>]` is updated with the new build's id and
   number - stock `apify push` polls for exactly this field before returning.
 - Actor, build, and build-log details are kept in internal records that persist across runtime
   restarts (`storage.md`).
+- A build runs for the host's architecture; one whose base image has no manifest for it is retried
+  once for `linux/amd64`, the architecture the platform builds and runs on, with the reason logged.
 - **The Dockerfile to build is resolved from the Actor's pushed source**, not Docker's implicit default. `.actor/actor.json` is parsed as JSON5; an unparseable file fails the build with a "Could not parse .actor/actor.json" message. Resolution order, stopping at the first hit:
     1. the `dockerfile` field of `.actor/actor.json`, relative to `.actor/` - a path escaping the Actor root fails with "points outside the Actor root directory"; a non-string value fails with `"dockerfile" must be a string`; a value naming no pushed file (including empty) falls through instead of failing.
     2. `.actor/Dockerfile`

@@ -847,8 +847,8 @@
 			"method": "POST",
 			"path": "/v2/actor-runs/{runId}/abort",
 			"parameter": "gracefully",
-			"summary": "Graceful abort, with the platform\u2019s warning frames and grace period",
-			"description": "`POST /v2/actor-runs/{runId}/abort` accepts an optional `?gracefully=` boolean. Omitted or `false`: the run aborts immediately. `true` on a running run: the record moves to `ABORTING` at once, an `aborting` frame plus a `persistState {\"isMigrating\": false}` frame (in that order, matching the platform) are published on the run's events channel, and the container is stopped 30 seconds later - the request stays open until then. `true` on a run with no container (still `READY`, or already terminal) behaves as if omitted. A second abort arriving during an open window: another `?gracefully=true` joins that window and neither restarts it nor stops the container early; a non-graceful one escalates and stops the container at once."
+			"summary": "Graceful abort, with the platform’s warning frames and grace period",
+			"description": "`POST /v2/actor-runs/{runId}/abort` accepts an optional `?gracefully=` boolean. Omitted or `false`: the run aborts immediately. `true` on a running run: the record moves to `ABORTING` at once, an `aborting` frame plus a `persistState {\"isMigrating\": false}` frame (in that order, matching the platform) are published on the run's events channel, and the container is stopped 30 seconds later. The request responds as soon as the run is `ABORTING`, not when the window ends. The window ends as soon as the run's container exits, finalising the run `ABORTED` then. `true` on a run with no container (still `READY`, or already terminal) behaves as if omitted. A second abort arriving during an open window: another `?gracefully=true` joins that window and neither restarts it nor stops the container early; a non-graceful one cancels it and stops the container at once. An abort stops the container immediately: an Actor gets no wind-down time beyond the window above."
 		},
 		{
 			"method": "POST",

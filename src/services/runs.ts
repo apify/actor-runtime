@@ -248,6 +248,7 @@ export async function runInBackground(
 		// case the record is already terminal and there is genuinely nothing left to finalise, so the bare
 		// `return` below is correct. If the record simply vanished, same thing.
 		if (afterStart?.status === 'ABORTING') {
+			cancelGracefulAbort(record.id);
 			await driver.abortRun(record.id).catch(() => undefined);
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
@@ -340,6 +341,8 @@ export async function runInBackground(
 	if (!preStart || preStart.status !== 'RUNNING') {
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		if (preStart?.status === 'ABORTING') {
+			// A window armed before the container existed has nothing to stop; this branch finalizes the run.
+			cancelGracefulAbort(record.id);
 			await driver.abortRun(record.id).catch(() => undefined);
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
@@ -416,6 +419,12 @@ export async function runInBackground(
 			statusMessage,
 		});
 	} finally {
+		// The container is gone, so an open graceful-abort window has nothing left to wait out - the path an
+		// Actor that honours the `aborting` frame takes. The log is already flushed by both the success
+		// path above and the catch below, so a client seeing this terminal status can still read all of it.
+		if (cancelGracefulAbort(record.id)) {
+			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
+		}
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
 		clearRunRestartState(record.id);
@@ -432,14 +441,46 @@ function remainingTimeoutSecs(record: RunRecord): number {
 	return Math.max(1, Math.ceil(record.options.timeoutSecs - elapsedSecs));
 }
 
+/** Open graceful-abort windows, keyed by run id - same shape as `services/migrations.ts`'s
+ * `pendingMigrationStops`, so a window can always be cancelled. */
+const pendingGracefulAborts = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Arms the window and returns; nothing awaits it, so no caller (and no HTTP response) is held for it. */
+function armGracefulAbort(driver: Driver, runId: string): void {
+	const timer = setTimeout(() => {
+		pendingGracefulAborts.delete(runId);
+		void finishGracefulAbort(driver, runId).catch((error: unknown) => {
+			// Nothing is awaiting this, so an unlogged throw would leave the run stuck ABORTING, silently.
+			console.error(`run ${runId}: graceful abort window failed to finish the run`, error);
+		});
+	}, GRACEFUL_ABORT_WINDOW_MS);
+	pendingGracefulAborts.set(runId, timer);
+}
+
+async function finishGracefulAbort(driver: Driver, runId: string): Promise<void> {
+	await driver.abortRun(runId);
+	await transitionJobStatus(getRegistries().runs, runId, 'ABORTED', { finishedAt: new Date().toISOString() });
+}
+
+/** Ends an open window early, reporting whether there was one. The caller finalizes the run itself. */
+function cancelGracefulAbort(runId: string): boolean {
+	const timer = pendingGracefulAborts.get(runId);
+	if (timer === undefined) return false;
+	clearTimeout(timer);
+	pendingGracefulAborts.delete(runId);
+	return true;
+}
+
 /**
  * Stops the run and reports `ABORTED`. The record moves to `ABORTING` before `driver.abortRun` is called,
  * which is what makes this race-proof against `runInBackground`'s own completion write: an `ABORTING`
  * record only accepts `ABORTED` next, so whichever write lands first, the other is refused.
  *
  * `gracefully` on a `RUNNING` run publishes the platform's `aborting` + `persistState` frame pair and
- * waits `GRACEFUL_ABORT_WINDOW_MS` before stopping; other states take the immediate path. A second
- * concurrent graceful abort joins the window rather than restarting it - see the abort entry in `src/api/openapi/actor-runtime.json`'s `x-actor-runtime-platform-notes`.
+ * returns the `ABORTING` record straight away, leaving `GRACEFUL_ABORT_WINDOW_MS` to run in the
+ * background; other states take the immediate path. A second concurrent graceful abort joins the window,
+ * a hard one cancels it - see the abort entry in `src/api/openapi/actor-runtime.json`'s
+ * `x-actor-runtime-platform-notes`.
  *
  * Both flags come from `onBeforeTransition`, read inside the same mutex-serialized write that performs
  * the transition: a preceding `get()` could observe a stale status, and only the hook can tell "this call
@@ -465,11 +506,21 @@ export async function abortRun(driver: Driver, run: RunRecord, gracefully = fals
 		// a run with nobody connected still waits out the window and still gets stopped.
 		publishAborting(run.id);
 		publishPersistState(run.id, false);
-		await new Promise<void>((resolve) => setTimeout(resolve, GRACEFUL_ABORT_WINDOW_MS));
+		armGracefulAbort(driver, run.id);
+		return aborting;
 	}
 
+	// The hard path, including an escalation past someone else's open window - whose stop would otherwise
+	// land 30s from now on a container this call is about to kill.
+	cancelGracefulAbort(run.id);
 	await driver.abortRun(run.id);
 	return transitionJobStatus(runs, run.id, 'ABORTED', { finishedAt: new Date().toISOString() });
+}
+
+/** Test-only: no window may outlive the test that armed it and fire against the next one's storage. */
+export function resetGracefulAbortsForTests(): void {
+	for (const timer of pendingGracefulAborts.values()) clearTimeout(timer);
+	pendingGracefulAborts.clear();
 }
 
 export async function waitForRunFinish(runId: string, seconds: number): Promise<RunRecord | null> {

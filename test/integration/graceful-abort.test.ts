@@ -1,5 +1,6 @@
 /**
- * `?gracefully=` abort contract (the abort entry in `src/api/openapi/actor-runtime.json`'s `x-actor-runtime-platform-notes`,
+ * `?gracefully=` abort contract (the abort entry in `src/api/openapi/actor-runtime.json`'s
+ * `x-actor-runtime-platform-notes`,
  * `GRACEFUL_ABORT_WINDOW_MS = 30000`): the `aborting` frame published before the fixed wait,
  * `driver.abortRun` withheld until the window elapses, the omitted/`false` path staying byte-identical to
  * an immediate abort, best-effort behavior with nobody connected, the READY-state and already-terminal
@@ -24,7 +25,7 @@ import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import { abortRun, runInBackground } from '../../src/services/runs.js';
 import { subscribeEvents } from '../../src/services/events-channel.js';
-import { realDelay, waitForPendingTimer } from './helpers/fake-timers.js';
+import { realDelay } from './helpers/fake-timers.js';
 import type { Driver } from '../../src/driver/types.js';
 import type { ActorRecord, BuildRecord, JobStatus, RunRecord } from '../../src/storage/entities.js';
 
@@ -112,13 +113,8 @@ function neverStartDriver(): Driver & { abortRunCalls: string[]; abortBuildCalls
 
 /**
  * Real-time polling (never gated by a fake `setTimeout`) for a run's status as observed over a real HTTP
- * `GET`, via `apify-client`. Needed instead of `waitForPendingTimer` when the trigger being awaited is a
- * real HTTP round trip (`server.client.run(id).abort(...)`): `apify-client`'s own request pipeline (e.g.
- * its HTTP agent's keep-alive bookkeeping) can register an incidental `setTimeout` of its own well before
- * the server has actually processed the request, so "some fake timer now exists anywhere in this process"
- * is not a reliable proxy for "the server's own `ABORTING` write has landed" once a real client is in the
- * mix - unlike every other graceful-abort test in this file, which calls `abortRun` directly and has no
- * such incidental timer source to race against.
+ * `GET`, via `apify-client`. Used where the awaited status is one the background graceful-abort window
+ * writes, which no HTTP response of the caller's own is tied to any more.
  */
 async function pollForRunStatus(
 	server: TestServerHandle,
@@ -139,6 +135,22 @@ async function pollForRunStatus(
 	}
 }
 
+/** Polls the run record in real time until it reaches `status`: advancing the fake clock past the window
+ * only proves its timer fired, not that the real fs-storage write it kicks off has landed. */
+async function waitForRecordStatus(runId: string, status: JobStatus, timeoutMs = 2000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const current = await getRegistries().runs.get(runId);
+		if (current?.status === status) return;
+		if (Date.now() > deadline) {
+			throw new Error(
+				`timed out waiting for run ${runId} to reach status ${status} (last seen: ${current?.status})`,
+			);
+		}
+		await realDelay(5);
+	}
+}
+
 describe('graceful abort (?gracefully=) contract', () => {
 	let server: TestServerHandle;
 
@@ -146,7 +158,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 		await server.close();
 	});
 
-	describe('graceful abort (?gracefully= contract per the platform notes in the runtime API specification, GRACEFUL_ABORT_WINDOW_MS = 30000)', () => {
+	describe("graceful abort (?gracefully= contract per the abort entry in src/api/openapi/actor-runtime.json's x-actor-runtime-platform-notes, GRACEFUL_ABORT_WINDOW_MS = 30000)", () => {
 		afterEach(() => {
 			vi.useRealTimers();
 		});
@@ -194,7 +206,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 			await bg;
 		});
 
-		it('gracefully: true publishes exactly {"name":"aborting","data":{}} before driver.abortRun, moves the run to ABORTING immediately, and only calls driver.abortRun once the full 30000ms window has elapsed', async () => {
+		it('gracefully: true publishes exactly {"name":"aborting","data":{}} before driver.abortRun, returns the ABORTING record immediately rather than holding the caller for the window, and only calls driver.abortRun once the full 30000ms window has elapsed', async () => {
 			const driver = deferredRunDriver();
 			server = await startTestServer(driver);
 			const actor = await seedActor(server, 'graceful-true-actor');
@@ -217,13 +229,11 @@ describe('graceful abort (?gracefully=) contract', () => {
 			// itself, only on `setTimeout`'s own virtual schedule.
 			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-			const abortPromise = abortRun(driver, record, true);
+			// The specification's abort platform note: the call answers as soon as the record is ABORTING and
+			// never blocks its caller (and so never holds an HTTP response open) for the 30s.
+			const armed = await abortRun(driver, record, true);
+			expect(armed?.status).toBe('ABORTING');
 
-			// The specification's abort platform note: ABORTING lands immediately - observable well
-			// before the 30s window elapses - and the aborting frame is published before the wait, not
-			// after it. Waiting for the wait's own `setTimeout` to actually be scheduled is what proves both
-			// already happened, since both come strictly before it in `abortRun`'s own code.
-			await waitForPendingTimer();
 			const midWindow = await getRegistries().runs.get(record.id);
 			expect(midWindow?.status).toBe('ABORTING');
 			// The platform's graceful-abort frame pair, in this order, before the wait.
@@ -237,16 +247,43 @@ describe('graceful abort (?gracefully=) contract', () => {
 			await vi.advanceTimersByTimeAsync(29_999);
 			expect(driver.abortRunCalls).toEqual([]);
 
-			// At the window: now called.
+			// At the window: now called, and the background window writes the terminal status.
 			await vi.advanceTimersByTimeAsync(1);
 			expect(driver.abortRunCalls).toEqual([record.id]);
-
-			const aborted = await abortPromise;
-			expect(aborted?.status).toBe('ABORTED');
+			await waitForRecordStatus(record.id, 'ABORTED');
 
 			driver.resolveRun({ exitCode: 137, timedOut: false });
 			await bg;
 			unsubscribe();
+		});
+
+		it("ends the window early when the Actor's own container exits inside it: the run is finalized ABORTED there and then, never left ABORTING for the remaining seconds", async () => {
+			const driver = deferredRunDriver();
+			server = await startTestServer(driver);
+			const actor = await seedActor(server, 'graceful-early-exit-actor');
+			const build = await seedSucceededBuild(actor);
+			const record = bareRunRecord(actor, build);
+			await getRegistries().runs.set(record.id, record);
+
+			const bg = runInBackground(driver, actor, record, { apiBaseUrl: server.baseUrl, token: server.token });
+			await driver.started;
+
+			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+			const armed = await abortRun(driver, record, true);
+			expect(armed?.status).toBe('ABORTING');
+
+			// The Actor honours the `aborting` frame and exits one second in.
+			await vi.advanceTimersByTimeAsync(1_000);
+			driver.resolveRun({ exitCode: 137, timedOut: false });
+			await bg;
+
+			expect((await getRegistries().runs.get(record.id))?.status).toBe('ABORTED');
+
+			// And the cancelled window never fires afterwards.
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(driver.abortRunCalls).toEqual([]);
+			expect((await getRegistries().runs.get(record.id))?.status).toBe('ABORTED');
 		});
 
 		it('gracefully: true with nobody connected to the events socket is still best-effort - the abort request itself still succeeds and the container is still stopped after the window elapses', async () => {
@@ -262,12 +299,11 @@ describe('graceful abort (?gracefully=) contract', () => {
 			await driver.started;
 
 			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-			const abortPromise = abortRun(driver, record, true);
-			await waitForPendingTimer();
+			const armed = await abortRun(driver, record, true);
+			expect(armed?.status).toBe('ABORTING');
 			await vi.advanceTimersByTimeAsync(30_000);
-			const aborted = await abortPromise;
 
-			expect(aborted?.status).toBe('ABORTED');
+			await waitForRecordStatus(record.id, 'ABORTED');
 			expect(driver.abortRunCalls).toEqual([record.id]);
 
 			driver.resolveRun({ exitCode: 137, timedOut: false });
@@ -319,8 +355,8 @@ describe('graceful abort (?gracefully=) contract', () => {
 
 			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-			const firstAbort = abortRun(driver, record, true);
-			await waitForPendingTimer();
+			const firstResult = await abortRun(driver, record, true);
+			expect(firstResult?.status).toBe('ABORTING');
 			const midWindow = await getRegistries().runs.get(record.id);
 			expect(midWindow?.status).toBe('ABORTING');
 			expect(driver.abortRunCalls).toEqual([]);
@@ -330,8 +366,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 			// before ever touching the registry, so passing the first call's now-stale local object here
 			// (instead of a freshly re-fetched one) would let this call observe a different status than a
 			// genuinely concurrent second request actually would.
-			const secondAbort = abortRun(driver, midWindow!, true);
-			const secondResult = await secondAbort;
+			const secondResult = await abortRun(driver, midWindow!, true);
 
 			// The no-op join: the second call must not itself have started a window or called
 			// driver.abortRun - it returns the record exactly as it stood (still ABORTING), immediately,
@@ -347,17 +382,13 @@ describe('graceful abort (?gracefully=) contract', () => {
 			await vi.advanceTimersByTimeAsync(1);
 			expect(driver.abortRunCalls).toEqual([record.id]);
 
-			const firstResult = await firstAbort;
-			expect(firstResult?.status).toBe('ABORTED');
-
-			const final = await getRegistries().runs.get(record.id);
-			expect(final?.status).toBe('ABORTED');
+			await waitForRecordStatus(record.id, 'ABORTED');
 
 			driver.resolveRun({ exitCode: 137, timedOut: false });
 			await bg;
 		});
 
-		it("a second, hard (?gracefully=false) call arriving while a graceful window is still open is a deliberate escalation: it stops the container immediately, and the first caller's own pending window later resolves cleanly (no error, no double-write) once it elapses", async () => {
+		it('a second, hard (?gracefully=false) call arriving while a graceful window is still open is a deliberate escalation: it cancels that window and stops the container immediately, and no stop lands 30s later against a container it already killed', async () => {
 			const driver = deferredRunDriver();
 			server = await startTestServer(driver);
 			const actor = await seedActor(server, 'graceful-then-hard-actor');
@@ -370,8 +401,8 @@ describe('graceful abort (?gracefully=) contract', () => {
 
 			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-			const firstAbort = abortRun(driver, record, true);
-			await waitForPendingTimer();
+			const firstResult = await abortRun(driver, record, true);
+			expect(firstResult?.status).toBe('ABORTING');
 			const midWindow = await getRegistries().runs.get(record.id);
 			expect(midWindow?.status).toBe('ABORTING');
 			expect(driver.abortRunCalls).toEqual([]);
@@ -385,14 +416,9 @@ describe('graceful abort (?gracefully=) contract', () => {
 			const afterEscalation = await getRegistries().runs.get(record.id);
 			expect(afterEscalation?.status).toBe('ABORTED');
 
-			// The first caller's own window still elapses on its own schedule. Its `driver.abortRun` call
-			// is then just a harmless second no-op, and its final `-> ABORTED` write is refused (the
-			// record is already terminal) rather than erroring or clobbering anything - confirmed here by
-			// awaiting the first call's promise all the way through with no exception.
+			// The cancelled window never fires against a container this call already killed.
 			await vi.advanceTimersByTimeAsync(30_000);
-			const firstResult = await firstAbort;
-			expect(firstResult?.status).toBe('ABORTED');
-			expect(driver.abortRunCalls).toEqual([record.id, record.id]);
+			expect(driver.abortRunCalls).toEqual([record.id]);
 
 			const final = await getRegistries().runs.get(record.id);
 			expect(final?.status).toBe('ABORTED');
@@ -407,7 +433,7 @@ describe('graceful abort (?gracefully=) contract', () => {
 			vi.useRealTimers();
 		});
 
-		it("POST .../abort?gracefully=true (via apify-client, the actors-builds-runs.test.ts .abort() pattern) gets the full graceful contract: ABORTING immediately, the HTTP response itself only resolving after the 30s window, and the aborting frame emitted on the run's own events channel", async () => {
+		it("POST .../abort?gracefully=true (via apify-client, the actors-builds-runs.test.ts .abort() pattern) gets the full graceful contract: the HTTP response returns the run as ABORTING right away rather than being held for 30s, the aborting frame is emitted on the run's own events channel, and the container is stopped when the window elapses", async () => {
 			const driver = deferredRunDriver();
 			server = await startTestServer(driver);
 			const actor = await seedActor(server, 'graceful-http-actor');
@@ -430,43 +456,29 @@ describe('graceful abort (?gracefully=) contract', () => {
 			// `POST /v2/actor-runs/:runId/abort?gracefully=true`, exercising `api/routes/runs.ts`'s own
 			// `queryBoolean` parsing and its call into `abortRun` - never `abortRun` called directly, unlike
 			// every other graceful-abort test in the "graceful abort" section above.
-			const abortPromise = server.client.run(started.id).abort({ gracefully: true });
-
-			// The specification's abort platform note: ABORTING lands immediately - observable over
-			// the same real HTTP client, well before the HTTP response itself resolves. Polled in real time
-			// (not via `waitForPendingTimer`):
-			// `apify-client`'s own request pipeline can register an incidental `setTimeout` of its own before
-			// the server has actually processed anything, so "a fake timer now exists somewhere in this
-			// process" is not a reliable signal here the way it is for every other graceful-abort test in
-			// this file, none of which go through a real HTTP client.
-			await pollForRunStatus(server, started.id, 'ABORTING');
+			// The response itself carries the run in ABORTING and arrives without waiting out the window.
+			const armed = await server.client.run(started.id).abort({ gracefully: true });
+			expect(armed.status).toBe('ABORTING');
 			expect(frames).toEqual([
 				JSON.stringify({ name: 'aborting', data: {} }),
 				JSON.stringify({ name: 'persistState', data: { isMigrating: false } }),
 			]);
 			expect(driver.abortRunCalls).toEqual([]);
 
-			let responded = false;
-			void abortPromise.then(() => {
-				responded = true;
-			});
-
-			// Just under the window: the HTTP response is still being held open server-side.
+			// Just under the window: the response having already returned did not shorten the Actor's 30s.
 			await vi.advanceTimersByTimeAsync(29_999);
-			expect(responded).toBe(false);
 			expect(driver.abortRunCalls).toEqual([]);
 
-			// At the window: `driver.abortRun` fires and the HTTP response finally resolves.
+			// At the window: the container is stopped and the run reaches its terminal status.
 			await vi.advanceTimersByTimeAsync(1);
-			const aborted = await abortPromise;
-			expect(aborted.status).toBe('ABORTED');
 			expect(driver.abortRunCalls).toEqual([started.id]);
+			await pollForRunStatus(server, started.id, 'ABORTED');
 
 			driver.resolveRun({ exitCode: 137, timedOut: false });
 			unsubscribe();
 		});
 
-		it('POST .../abort with no gracefully parameter, over the same real HTTP round trip, still returns immediately with no wait (matches the specification\'s "omitted or false" graceful-abort behavior end to end, not just at the service layer)', async () => {
+		it('POST .../abort with no gracefully parameter, over the same real HTTP round trip, still returns immediately with no wait (matches the specification\'s "omitted, or false" graceful-abort behavior end to end, not just at the service layer)', async () => {
 			const driver = deferredRunDriver();
 			server = await startTestServer(driver);
 			const actor = await seedActor(server, 'immediate-http-actor');

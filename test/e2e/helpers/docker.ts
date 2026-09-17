@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 
+import { COMPATIBILITY_BUILD_PLATFORM, isMissingManifestForBuildPlatform } from '../../../src/driver/build-platform.js';
+
 /**
  * The container CLI the suite drives the host engine with - `docker` by default, `podman` via
  * `CONTAINER_CLI=podman`. Both accept the exact `build`/`pull`/`run`/`logs`/`rm`/`volume rm` invocations
@@ -49,7 +51,7 @@ export function pullBaseImages(): void {
 		'docker.io/apify/actor-python:3.13',
 		'docker.io/library/python:3.11-slim',
 	]) {
-		execFileSync(CONTAINER_CLI, ['pull', image], { stdio: 'inherit' });
+		pullImage(image);
 	}
 }
 
@@ -66,8 +68,23 @@ export const NO_WORKDIR_ACTOR_BASE_IMAGE = 'docker.io/library/busybox';
 /** `sample_actor_playwright_py/Dockerfile`'s base image. */
 export const PYTHON_PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-python-playwright:3.14-1.61.0';
 
+/** Pre-pull one base image, with the same fallback the runtime's builds have (`build-platform.ts`):
+ * an image with no build for the host's architecture is pulled for `linux/amd64`, which is what the
+ * build will use anyway. Every other pull failure is the suite's failure, as before. */
 export function pullImage(image: string): void {
-	execFileSync(CONTAINER_CLI, ['pull', image], { stdio: 'inherit' });
+	try {
+		execFileSync(CONTAINER_CLI, ['pull', image], { stdio: ['ignore', 'inherit', 'pipe'] });
+		return;
+	} catch (error) {
+		const stderr = (error as { stderr?: Buffer }).stderr?.toString() ?? '';
+		process.stderr.write(stderr);
+		if (!isMissingManifestForBuildPlatform(stderr)) throw error;
+		process.stdout.write(
+			`${image} has no build for this machine's architecture; pulling it for ` +
+				`${COMPATIBILITY_BUILD_PLATFORM}, as the runtime's own build fallback does.\n`,
+		);
+	}
+	execFileSync(CONTAINER_CLI, ['pull', '--platform', COMPATIBILITY_BUILD_PLATFORM, image], { stdio: 'inherit' });
 }
 
 export function startRuntimeContainer(tag: string, containerName: string): void {

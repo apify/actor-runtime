@@ -16,6 +16,7 @@ import {
 	podmanMajorVersion,
 } from '../../src/driver/docker-driver.js';
 import { stubDockerForRun } from './helpers/docker-stubs.js';
+import { RUNTIME_LOG_PREFIX } from '../../src/runtime-log.js';
 
 /**
  * A stub `dockerode`-shaped object covering only what `reconcileOrphans` calls - there is no Docker
@@ -384,6 +385,70 @@ describe('DockerDriver container removal passes { v: true } (actor-driver.md: "c
 	});
 });
 
+describe('DockerDriver.abortRun - how hard the container is stopped (actor-driver.md: "aborting a run kills the run\'s container immediately")', () => {
+	/** Starts a run so `runContainers` holds the stub container; the returned finisher ends it. */
+	async function startTrackedRun(stub: ReturnType<typeof stubDockerForRun>, driver: DockerDriver, runId: string) {
+		const outcomePromise = driver.startRun(
+			{ runId, imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		return async () => {
+			stub.triggerContainerExit(137);
+			stub.endLogStream();
+			await outcomePromise;
+		};
+	}
+
+	it("kills the container outright by default - never container.stop(), whose engine-side default spends 10s on a signal an Actor image's PID 1 ignores", async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const finish = await startTrackedRun(stub, driver, 'run-abort-hard');
+
+		await driver.abortRun('run-abort-hard');
+
+		expect(stub.container.kill).toHaveBeenCalledTimes(1);
+		expect(stub.container.stop).not.toHaveBeenCalled();
+		await finish();
+	});
+
+	it("passes an explicit graceSecs through as stop()'s own `t`, never leaving the wait to the engine default", async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const finish = await startTrackedRun(stub, driver, 'run-abort-grace');
+
+		await driver.abortRun('run-abort-grace', { graceSecs: 3 });
+
+		expect(stub.container.stop).toHaveBeenCalledWith({ t: 3 });
+		expect(stub.container.kill).not.toHaveBeenCalled();
+		await finish();
+	});
+
+	it('is a no-op for a run it holds no container for', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		await driver.abortRun('run-never-started');
+
+		expect(stub.container.kill).not.toHaveBeenCalled();
+		expect(stub.container.stop).not.toHaveBeenCalled();
+	});
+
+	it('swallows a kill rejection (a container that exited on its own answers 409) rather than failing the abort', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const finish = await startTrackedRun(stub, driver, 'run-abort-409');
+		stub.container.kill.mockRejectedValueOnce(new Error('(HTTP code 409) container is not running'));
+
+		await expect(driver.abortRun('run-abort-409')).resolves.toBeUndefined();
+		await finish();
+	});
+});
+
 describe('DockerDriver.startBuild - imageWorkingDirectory capture (actor-driver.md: "imageWorkingDirectory is captured by the driver itself")', () => {
 	/** A stub covering only what `startBuild` calls: `buildImage`, `modem.followProgress` (invoking its
 	 * `onFinished` callback synchronously, as a successful build with no progress lines), and `getImage`
@@ -586,6 +651,135 @@ describe('DockerDriver.startBuild - dockerfile option (the resolved path is hand
 		});
 
 		expect(entryNames).toEqual(['.actor/Dockerfile']);
+	});
+});
+
+describe('DockerDriver.startBuild - amd64 fallback (a base image published only for linux/amd64 cannot be built on an arm64 host at all)', () => {
+	const ARM64_MANIFEST_FAILURE =
+		'no matching manifest for linux/arm64/v8 in the manifest list entries: no match for platform in manifest: not found';
+
+	/** A stub whose n-th build fails with `failures[n]` as an `error` line in the build stream (how the
+	 * daemon reports a base image it could not pull), and succeeds once the list runs out. */
+	function stubDockerForBuildAttempts(failures: Array<string | undefined>) {
+		let attempt = 0;
+		const followProgress = vi.fn(
+			(
+				_stream: NodeJS.ReadableStream,
+				onFinished: (err: Error | null, res: Array<{ error?: string }>) => void,
+			) => {
+				const failure = failures[attempt++];
+				onFinished(null, failure ? [{ error: failure }] : []);
+			},
+		);
+		const buildImage = vi.fn(async () => new PassThrough());
+		const getImage = vi.fn(() => ({ inspect: async () => ({ Config: { WorkingDir: '/usr/src/app' } }) }));
+		const docker = { buildImage, modem: { followProgress }, getImage } as unknown as Docker;
+		return { docker, buildImage };
+	}
+
+	const buildContext = (buildId: string) => ({
+		buildId,
+		actorName: 'my-playwright-actor-py',
+		sourceFiles: [
+			{
+				name: 'Dockerfile',
+				format: 'TEXT' as const,
+				content: 'FROM docker.io/apify/actor-python-playwright:3.14-1.61.0\n',
+			},
+		],
+		useCache: true,
+		timeoutSecs: 60,
+		dockerfilePath: 'Dockerfile',
+	});
+
+	it('rebuilds for linux/amd64, the platform the Apify platform builds on, and the build succeeds', async () => {
+		const stub = stubDockerForBuildAttempts([ARM64_MANIFEST_FAILURE]);
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const logged: string[] = [];
+
+		const outcome = await driver.startBuild(buildContext('build-arm64-fallback'), (chunk) => logged.push(chunk));
+
+		expect(outcome.imageWorkingDirectory).toBe('/usr/src/app');
+		expect(stub.buildImage).toHaveBeenCalledTimes(2);
+		const [, firstOptions] = stub.buildImage.mock.calls[0]!;
+		const [, secondOptions] = stub.buildImage.mock.calls[1]!;
+		expect(firstOptions).not.toHaveProperty('platform');
+		expect(secondOptions).toMatchObject({ platform: 'linux/amd64', dockerfile: 'Dockerfile' });
+		expect(logged.join('')).toContain(RUNTIME_LOG_PREFIX);
+		expect(logged.join('')).toContain('Retrying the build for linux/amd64');
+	});
+
+	it("builds a fresh tar for the retry - a tar stream is consumed once, so reusing the first attempt's would send an empty context", async () => {
+		const stub = stubDockerForBuildAttempts([ARM64_MANIFEST_FAILURE]);
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		await driver.startBuild(buildContext('build-arm64-fallback-tar'), () => {});
+
+		const [firstTarball] = stub.buildImage.mock.calls[0]!;
+		const [secondTarball] = stub.buildImage.mock.calls[1]!;
+		expect(secondTarball).not.toBe(firstTarball);
+		const extract = tar.extract();
+		const entryNames: string[] = [];
+		await new Promise<void>((resolve, reject) => {
+			extract.on('entry', (header, entryStream, next) => {
+				entryNames.push(header.name);
+				entryStream.resume();
+				next();
+			});
+			extract.on('finish', resolve);
+			extract.on('error', reject);
+			(secondTarball as NodeJS.ReadableStream).pipe(extract);
+		});
+		expect(entryNames).toEqual(['Dockerfile']);
+	});
+
+	it("reports the retry's own failure, never a third attempt, when linux/amd64 fails too (an engine with no emulation available)", async () => {
+		const stub = stubDockerForBuildAttempts([ARM64_MANIFEST_FAILURE, 'exec /bin/sh: exec format error']);
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		await expect(driver.startBuild(buildContext('build-arm64-no-emulation'), () => {})).rejects.toThrow(
+			'exec format error',
+		);
+		expect(stub.buildImage).toHaveBeenCalledTimes(2);
+	});
+
+	it('never retries an ordinary build failure', async () => {
+		const stub = stubDockerForBuildAttempts(["The command '/bin/sh -c npm ci' returned a non-zero code: 1"]);
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		await expect(driver.startBuild(buildContext('build-ordinary-failure'), () => {})).rejects.toThrow(
+			'returned a non-zero code: 1',
+		);
+		expect(stub.buildImage).toHaveBeenCalledTimes(1);
+	});
+
+	it('never retries after an abort: an aborted build stays aborted rather than starting a second build the caller already cancelled', async () => {
+		let finish: ((res: Array<{ error?: string }>) => void) | undefined;
+		const followProgress = vi.fn(
+			(
+				_stream: NodeJS.ReadableStream,
+				onFinished: (err: Error | null, res: Array<{ error?: string }>) => void,
+			) => {
+				finish = (res) => onFinished(null, res);
+			},
+		);
+		const buildImage = vi.fn(async () => new PassThrough());
+		const docker = { buildImage, modem: { followProgress } } as unknown as Docker;
+		const driver = new DockerDriver(docker);
+		driver.available = true;
+
+		const outcome = driver.startBuild(buildContext('build-aborted'), () => {});
+		await vi.waitFor(() => expect(finish).toBeDefined());
+		await driver.abortBuild('build-aborted');
+		// What the destroyed request surfaces as - on an arm64 host, the very error the fallback looks for.
+		finish!([{ error: ARM64_MANIFEST_FAILURE }]);
+
+		await expect(outcome).rejects.toThrow(ARM64_MANIFEST_FAILURE);
+		expect(buildImage).toHaveBeenCalledTimes(1);
 	});
 });
 

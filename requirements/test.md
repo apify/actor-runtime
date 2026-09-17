@@ -25,6 +25,8 @@
   against both the oldest and the newest supported Podman.
 - The sample Actors crawl a live site (`https://crawlee.dev/` by default), so the e2e suite also requires outbound network access from Actor containers. This is separate from the runtime's own offline capability (see the offline notes in `system.md` and `cli.md`).
 - CI must pre-pull the sample Actors' base images (`apify/actor-node:24`, `apify/actor-python:3.13`, and `python:3.11-slim` for `sample_actor_crawler`) before running the e2e suite, so push/call assertion timing is not dominated by first-time image pulls. The browser-view e2e test pre-pulls the two Playwright samples' base images itself.
+- Pre-pulling carries the same fallback the runtime's builds do (`actor-driver.md`); every other pull
+  failure still fails the suite.
 
 ## Actor full dev loop
 

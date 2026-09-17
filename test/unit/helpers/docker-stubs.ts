@@ -33,7 +33,8 @@ export function stubDockerForRun() {
 		logs: vi.fn(async () => rawLogStream),
 		wait: vi.fn(async () => waitPromise),
 		remove: vi.fn(async (_options?: Record<string, unknown>) => undefined),
-		stop: vi.fn(async () => undefined),
+		stop: vi.fn(async (_options?: { t?: number }) => undefined),
+		kill: vi.fn(async () => undefined),
 		putArchive: vi.fn(async (_file: unknown, _options: unknown) => undefined),
 		// `preserveHiddenEntrypoint` reads a file out of the image through a created container; an empty
 		// archive by default, tests that exercise it supply their own.

@@ -62,6 +62,7 @@
 
 - The system is a development tool for developing actors.
 - The system is not a production system for hosting actors.
+- The user-facing platform behavior the system does not support or emulate is listed in `unsupported.md`.
 
 # Scale
 

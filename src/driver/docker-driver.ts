@@ -19,8 +19,11 @@
  * the in-flight HTTP request to the daemon, and `followProgress`'s stream then emits `error`/`close`
  * (`dockerode/lib/buildkit.js`'s `onStreamError`), so `startBuild`'s promise settles instead of hanging
  * or silently ignoring the abort. One `AbortController` is kept per in-flight build, keyed by build id,
- * so `abortBuild` can call `.abort()` on the live one. Runs are cancelled the same way as before -
- * `container.stop()` - since there is no HTTP request to abort there.
+ * so `abortBuild` can call `.abort()` on the live one. Runs have no HTTP request to abort and are
+ * cancelled at the container instead (`abortRun`).
+ *
+ * Host architecture: a build runs for the host's own, except that one whose base image has no manifest
+ * for it is retried once for `linux/amd64` under the engine's emulation (`build-platform.ts`).
  *
  * Engine neutrality: everything here goes through the Docker Engine API, which Podman also serves
  * (`podman system service` / the `podman.socket` unit), so the same driver runs Actors on Docker and on
@@ -54,11 +57,17 @@ import {
 } from '../config.js';
 import { CPU_PERIOD_US, cpuQuotaFor, dedicatedCpusFor } from '../resources.js';
 import { normalizeEntryName } from './tar-entry-name.js';
+import {
+	COMPATIBILITY_BUILD_PLATFORM,
+	compatibilityBuildNotice,
+	isMissingManifestForBuildPlatform,
+} from './build-platform.js';
 import { formatRuntimeLog } from '../runtime-log.js';
 import type { SourceFile } from '../storage/entities.js';
 import {
 	DebugPortInUseError,
 	DriverTimedOutError,
+	type AbortRunOptions,
 	type BrowserViewerHandle,
 	type BrowserViewerTarget,
 	type BuildContext,
@@ -915,7 +924,6 @@ export class DockerDriver implements Driver {
 		}
 
 		const imageTag = `actor-runtime/${ctx.actorName}:${ctx.buildId}`.toLowerCase();
-		const tarball = buildTarball(ctx.sourceFiles);
 
 		const controller = new AbortController();
 		this.buildControllers.set(ctx.buildId, controller);
@@ -924,28 +932,44 @@ export class DockerDriver implements Driver {
 			controller.abort();
 		}, ctx.timeoutSecs * 1000);
 
-		const cleanup = (): void => {
+		try {
+			return await this.buildImageOnce(ctx, imageTag, controller.signal, onLog);
+		} catch (error) {
+			// Never after an abort or a timeout, and never twice - the second attempt names its platform, so
+			// the same failure again is genuine.
+			const failure = this.asTimedOutOrOriginal(ctx, error as Error);
+			if (controller.signal.aborted || !isMissingManifestForBuildPlatform(failure.message)) throw failure;
+			onLog(formatRuntimeLog(compatibilityBuildNotice(failure.message)));
+			return await this.buildImageOnce(ctx, imageTag, controller.signal, onLog, COMPATIBILITY_BUILD_PLATFORM);
+		} finally {
 			clearTimeout(timeoutTimer);
 			this.buildControllers.delete(ctx.buildId);
-		};
-		// Consumed exactly once, however the build ends (success, `startBuild`'s own throw below, or the
-		// `followProgress` callback) - whichever site notices the flag first wins and reports TIMED-OUT.
-		const asTimedOutOrOriginal = (error: Error): Error =>
-			this.timedOutBuilds.delete(ctx.buildId)
-				? new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`)
-				: error;
+			// Dropped for the paths that never look at it (a build that succeeded after its timeout fired),
+			// so it cannot leak into a later build with the same id.
+			this.timedOutBuilds.delete(ctx.buildId);
+		}
+	}
 
+	/** One `docker build` attempt. The tar is rebuilt per attempt (a tar stream is consumed once), and
+	 * `platform` is left off entirely for the host-native one. */
+	private async buildImageOnce(
+		ctx: BuildContext,
+		imageTag: string,
+		abortSignal: AbortSignal,
+		onLog: (chunk: string) => void,
+		platform?: string,
+	): Promise<BuildOutcome> {
 		let stream: NodeJS.ReadableStream;
 		try {
-			stream = await this.docker.buildImage(tarball, {
+			stream = await this.docker.buildImage(buildTarball(ctx.sourceFiles), {
 				t: imageTag,
 				nocache: !ctx.useCache,
 				dockerfile: ctx.dockerfilePath,
-				abortSignal: controller.signal,
+				abortSignal,
+				...(platform ? { platform } : {}),
 			});
 		} catch (error) {
-			cleanup();
-			throw asTimedOutOrOriginal(error as Error);
+			throw this.asTimedOutOrOriginal(ctx, error as Error);
 		}
 
 		return new Promise<BuildOutcome>((resolve, reject) => {
@@ -956,7 +980,6 @@ export class DockerDriver implements Driver {
 				// never awaits its result - `resolve`/`reject` below settle the outer Promise whenever this
 				// async function actually gets there.
 				async (err: Error | null, res: Array<{ stream?: string; error?: string; aux?: { ID?: string } }>) => {
-					cleanup();
 					if (this.timedOutBuilds.delete(ctx.buildId)) {
 						reject(new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`));
 						return;
@@ -980,6 +1003,14 @@ export class DockerDriver implements Driver {
 				},
 			);
 		});
+	}
+
+	/** The timeout flag is consumed exactly once, however a build attempt ends - whichever site notices it
+	 * first reports TIMED-OUT instead of whatever error the cancelled build produced. */
+	private asTimedOutOrOriginal(ctx: BuildContext, error: Error): Error {
+		return this.timedOutBuilds.delete(ctx.buildId)
+			? new DriverTimedOutError(`Build exceeded its ${ctx.timeoutSecs}s timeout`)
+			: error;
 	}
 
 	/** `.Config.WorkingDir` of the image just built, via `dockerode`, never a shelled-out
@@ -1543,10 +1574,17 @@ export class DockerDriver implements Driver {
 		return (stat.mode & GO_MODE_DIR) !== 0 ? { ok: true } : { ok: false, reason: 'not-a-directory' };
 	}
 
-	async abortRun(runId: string): Promise<void> {
+	/** `graceSecs` is always passed to the engine explicitly, never left to its 10s default
+	 * (`AbortRunOptions`). A container that already exited answers 304/409, swallowed like every other
+	 * stop failure here. */
+	async abortRun(runId: string, { graceSecs = 0 }: AbortRunOptions = {}): Promise<void> {
 		const container = this.runContainers.get(runId);
 		if (!container) return;
-		await container.stop().catch(() => undefined);
+		if (graceSecs <= 0) {
+			await container.kill().catch(() => undefined);
+			return;
+		}
+		await container.stop({ t: graceSecs }).catch(() => undefined);
 	}
 
 	/** Imports the bundled sidecar rootfs (`docker import`, no network) once per process; an image already
