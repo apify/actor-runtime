@@ -143,6 +143,11 @@ so before enabling it on someone's behalf. A relayed response carries `x-actor-r
 
 - `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
   The `v2/` prefix and the leading slash are both optional.
+- `apify api GET /actor-runtime` prints this runtime's own OpenAPI document - every `/actor-runtime/*`
+  endpoint above, and what it adds to the platform endpoints it extends. No token needed, and the real
+  Apify platform has no such endpoint, so a `404` there means you are talking to the platform rather
+  than to a runtime. `http://localhost:3333/actor-runtime/openapi.json` serves it unenveloped, for
+  OpenAPI tooling.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
 - The console at `http://localhost:3000` shows the same objects, plus the dev-folder form, the
   Migrate button and the browser view.
