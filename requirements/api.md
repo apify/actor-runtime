@@ -218,21 +218,13 @@
 - Omitted or `false`: the run aborts immediately.
 - `true` on a running run: the record moves to `ABORTING` at once, an `aborting` frame plus a
   `persistState {"isMigrating": false}` frame (in that order, matching the platform) are published on
-  the run's events channel, and the container is stopped 30 seconds later. The request does **not** stay
-  open for those 30 seconds - it responds as soon as the record is `ABORTING`, with the run in that
-  status, and the window runs in the background; this is what the platform's own abort endpoint does
-  (it flips the record to `ABORTING` and leaves the countdown to the worker).
-- The window ends early, with the run finalised `ABORTED` there and then, as soon as the Actor's own
-  container exits inside it - an Actor that honours the `aborting` frame is never made to wait out the
-  remaining seconds.
+  the run's events channel, and the container is stopped 30 seconds later. The request responds as soon
+  as the run is `ABORTING`, not when the window ends.
+- The window ends as soon as the run's container exits, finalising the run `ABORTED` then.
 - `true` on a run with no container (still `READY`, or already terminal): behaves as if omitted.
 - A second abort arriving during an open window: another `?gracefully=true` joins that window and neither
   restarts it nor stops the container early; a non-graceful one cancels it and stops the container at once.
-- Every stop an abort issues against a run's container - a hard abort, and a graceful window elapsing
-  alike - is an immediate `SIGKILL`, never the engine's default 10-second stop grace: an Actor image's
-  PID 1 is the Actor itself, which installs no handler for the stop signal, so that grace is time the
-  Actor spends ignoring a signal before being killed anyway. The Actor's chance to wind down is the
-  graceful window above, not the engine's.
+- An abort stops the container immediately: an Actor gets no wind-down time beyond the window above.
 
 ## Migration emulation (`POST /actor-runtime/migrate/:runId`) and reboot
 

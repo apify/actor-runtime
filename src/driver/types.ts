@@ -141,23 +141,11 @@ export class DebugPortInUseError extends Error {
 	}
 }
 
-/**
- * How hard `Driver.abortRun` stops the run's container.
- *
- * `graceSecs: 0` - the default, and what every abort takes - is an immediate `SIGKILL`, matching the
- * platform's own "Aborts the Actor immediately". A positive value sends the container's stop signal
- * first and only kills it that many seconds later, for a caller that genuinely wants the Actor's own
- * process to get a moment first.
- *
- * The engine's own default grace (10s) is deliberately never used. An Actor image's PID 1 is the Actor
- * itself (`node`/`python`, or the Playwright images' Xvfb wrapper), and a PID 1 with no handler
- * installed for a signal has that signal ignored by the kernel - so those 10 seconds are spent being
- * ignored and the container is `SIGKILL`ed at the end of them anyway. Every second of it is pure delay
- * between a user's abort and the Actor actually stopping.
- */
+/** How hard `Driver.abortRun` stops the run's container. The engine's own default grace is never used:
+ * an Actor image's PID 1 is the Actor itself, which installs no handler for the stop signal, so that
+ * grace is spent ignoring it before the `SIGKILL` lands anyway. */
 export interface AbortRunOptions {
-	/** Seconds between the container's stop signal and `SIGKILL`. `0` (the default) skips straight to
-	 * `SIGKILL`. */
+	/** Seconds between the stop signal and `SIGKILL`. `0` (the default) kills outright. */
 	graceSecs?: number;
 }
 

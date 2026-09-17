@@ -20,8 +20,7 @@
   issued while the record is still `READY` means no build or container is ever started; the record
   finalises as `ABORTED`.
 - Aborting a **build** genuinely cancels the in-flight Docker build, not just the record's status;
-  aborting a **run** kills the run's container immediately (`SIGKILL`), never leaving it to the engine's
-  default stop grace - see `api.md`'s "Graceful abort" for where an Actor does get time to wind down.
+  aborting a **run** stops the run's container immediately.
 - On a successful build, the Actor's `taggedBuilds[<tag>]` is updated with the new build's id and
   number - stock `apify push` polls for exactly this field before returning.
 - Actor, build, and build-log details are kept in internal records that persist across runtime

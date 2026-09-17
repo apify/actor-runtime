@@ -386,8 +386,7 @@ describe('DockerDriver container removal passes { v: true } (actor-driver.md: "c
 });
 
 describe('DockerDriver.abortRun - how hard the container is stopped (actor-driver.md: "aborting a run kills the run\'s container immediately")', () => {
-	/** Starts a run through the driver so `runContainers` holds the stub container, and returns a
-	 * finisher the test calls once it has asserted on the abort. */
+	/** Starts a run so `runContainers` holds the stub container; the returned finisher ends it. */
 	async function startTrackedRun(stub: ReturnType<typeof stubDockerForRun>, driver: DockerDriver, runId: string) {
 		const outcomePromise = driver.startRun(
 			{ runId, imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
@@ -401,7 +400,7 @@ describe('DockerDriver.abortRun - how hard the container is stopped (actor-drive
 		};
 	}
 
-	it("kills the container outright by default - never container.stop(), whose engine-side default would spend 10s on a signal an Actor image's PID 1 ignores", async () => {
+	it("kills the container outright by default - never container.stop(), whose engine-side default spends 10s on a signal an Actor image's PID 1 ignores", async () => {
 		const stub = stubDockerForRun();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;
@@ -414,7 +413,7 @@ describe('DockerDriver.abortRun - how hard the container is stopped (actor-drive
 		await finish();
 	});
 
-	it("passes an explicit graceSecs through as stop()'s own `t`, so the wait is the caller's number and never the engine default", async () => {
+	it("passes an explicit graceSecs through as stop()'s own `t`, never leaving the wait to the engine default", async () => {
 		const stub = stubDockerForRun();
 		const driver = new DockerDriver(stub.docker);
 		driver.available = true;

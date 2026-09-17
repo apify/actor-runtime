@@ -341,8 +341,7 @@ export async function runInBackground(
 	if (!preStart || preStart.status !== 'RUNNING') {
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		if (preStart?.status === 'ABORTING') {
-			// An abort that landed while this run was RUNNING but before its container existed may have
-			// armed a window; it has no container to stop and this branch finalizes the run itself.
+			// A window armed before the container existed has nothing to stop; this branch finalizes the run.
 			cancelGracefulAbort(record.id);
 			await driver.abortRun(record.id).catch(() => undefined);
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
@@ -420,12 +419,9 @@ export async function runInBackground(
 			statusMessage,
 		});
 	} finally {
-		// The container is gone, so an open graceful-abort window has nothing left to wait out: finalize
-		// the run now instead of leaving it ABORTING (and `apify call` blocked) for the rest of the 30s.
-		// This is the path an Actor that actually honours the `aborting` frame takes - the one case where
-		// waiting out the full window punishes the well-behaved Actor. The log is already flushed by both
-		// the success path above and the catch below, so the invariant that a client seeing a terminal
-		// status can read the complete log still holds.
+		// The container is gone, so an open graceful-abort window has nothing left to wait out - the path an
+		// Actor that honours the `aborting` frame takes. The log is already flushed by both the success
+		// path above and the catch below, so a client seeing this terminal status can still read all of it.
 		if (cancelGracefulAbort(record.id)) {
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
@@ -445,25 +441,16 @@ function remainingTimeoutSecs(record: RunRecord): number {
 	return Math.max(1, Math.ceil(record.options.timeoutSecs - elapsedSecs));
 }
 
-/**
- * Open graceful-abort windows, keyed by run id - the same shape (and for the same reason) as
- * `services/migrations.ts`'s `pendingMigrationStops`: a window that nothing can cancel is a window that
- * keeps a run `ABORTING` long after there is anything left to wait for.
- */
+/** Open graceful-abort windows, keyed by run id - same shape as `services/migrations.ts`'s
+ * `pendingMigrationStops`, so a window can always be cancelled. */
 const pendingGracefulAborts = new Map<string, ReturnType<typeof setTimeout>>();
 
-/**
- * Arms the window `?gracefully=true` promises the Actor. Deliberately not awaited by the caller: the
- * platform's own abort endpoint answers as soon as the record is `ABORTING` and lets the worker run the
- * countdown (`apify-core`'s `killActJob`), so holding the HTTP response open for 30s here would be the
- * runtime being slower than the thing it emulates.
- */
+/** Arms the window and returns; nothing awaits it, so no caller (and no HTTP response) is held for it. */
 function armGracefulAbort(driver: Driver, runId: string): void {
 	const timer = setTimeout(() => {
 		pendingGracefulAborts.delete(runId);
 		void finishGracefulAbort(driver, runId).catch((error: unknown) => {
-			// Nothing is awaiting this any more, so an unlogged throw here would be invisible - and would
-			// leave the run stuck `ABORTING` with no second chance at finalizing it.
+			// Nothing is awaiting this, so an unlogged throw would leave the run stuck ABORTING, silently.
 			console.error(`run ${runId}: graceful abort window failed to finish the run`, error);
 		});
 	}, GRACEFUL_ABORT_WINDOW_MS);
@@ -475,12 +462,7 @@ async function finishGracefulAbort(driver: Driver, runId: string): Promise<void>
 	await transitionJobStatus(getRegistries().runs, runId, 'ABORTED', { finishedAt: new Date().toISOString() });
 }
 
-/**
- * Ends an open graceful-abort window early, returning whether there was one. The two things that end a
- * window before it elapses are an escalating hard abort (which stops the container itself, right now)
- * and the Actor's own container exiting inside the window - in both cases the countdown has nothing
- * left to count and the caller finalizes the run instead.
- */
+/** Ends an open window early, reporting whether there was one. The caller finalizes the run itself. */
 function cancelGracefulAbort(runId: string): boolean {
 	const timer = pendingGracefulAborts.get(runId);
 	if (timer === undefined) return false;
@@ -494,11 +476,10 @@ function cancelGracefulAbort(runId: string): boolean {
  * which is what makes this race-proof against `runInBackground`'s own completion write: an `ABORTING`
  * record only accepts `ABORTED` next, so whichever write lands first, the other is refused.
  *
- * `gracefully` on a `RUNNING` run publishes the platform's `aborting` + `persistState` frame pair, arms
- * `GRACEFUL_ABORT_WINDOW_MS` and returns the `ABORTING` record straight away - the window itself runs in
- * the background (`armGracefulAbort`). Other states take the immediate path. A second concurrent graceful
- * abort joins the window rather than restarting it; a hard one cancels it and stops the container at once
- * - see `requirements/api.md`.
+ * `gracefully` on a `RUNNING` run publishes the platform's `aborting` + `persistState` frame pair and
+ * returns the `ABORTING` record straight away, leaving `GRACEFUL_ABORT_WINDOW_MS` to run in the
+ * background; other states take the immediate path. A second concurrent graceful abort joins the window,
+ * a hard one cancels it - see `requirements/api.md`.
  *
  * Both flags come from `onBeforeTransition`, read inside the same mutex-serialized write that performs
  * the transition: a preceding `get()` could observe a stale status, and only the hook can tell "this call
@@ -528,15 +509,14 @@ export async function abortRun(driver: Driver, run: RunRecord, gracefully = fals
 		return aborting;
 	}
 
-	// The hard path, including a deliberate escalation past someone else's open window: that window's own
-	// stop would land 30s from now on a container this call is about to kill, so drop it first.
+	// The hard path, including an escalation past someone else's open window - whose stop would otherwise
+	// land 30s from now on a container this call is about to kill.
 	cancelGracefulAbort(run.id);
 	await driver.abortRun(run.id);
 	return transitionJobStatus(runs, run.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 }
 
-/** Test-only, mirroring `services/migrations.ts`'s own reset: no window may outlive the test that armed
- * it and fire against the next one's storage. */
+/** Test-only: no window may outlive the test that armed it and fire against the next one's storage. */
 export function resetGracefulAbortsForTests(): void {
 	for (const timer of pendingGracefulAborts.values()) clearTimeout(timer);
 	pendingGracefulAborts.clear();
