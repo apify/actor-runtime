@@ -178,6 +178,15 @@ function removeContainerAndDataVolume(containerName: string): void {
 	}
 }
 
+/** Ids of the engine's dangling (unattached) volumes - through `CONTAINER_CLI`, like every other engine
+ * call here. A hardcoded `docker` would count the wrong daemon's volumes on a Podman host (or, with no
+ * `docker` binary at all, as on the macOS Podman leg, fail with ENOENT). */
+export function danglingVolumeIds(): string[] {
+	return execFileSync(CONTAINER_CLI, ['volume', 'ls', '-q', '-f', 'dangling=true'], { encoding: 'utf8' })
+		.split('\n')
+		.filter((line) => line.trim() !== '');
+}
+
 export async function waitForHttpOk(url: string, timeoutMs = 60_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	let lastError: unknown;
