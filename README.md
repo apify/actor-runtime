@@ -238,9 +238,13 @@ the one repository it is written for.
 the tags users pull cannot be removed from here. Every other tag in the repository can be.
 
 Runs are a dry run by default - they list what would go and delete nothing. Uncheck **dry_run** to
-delete for real. Either way the run summary lists the tags. It authenticates with the same two
-service-account secrets as the release workflow; the token needs delete permission on the repository,
-or each delete comes back 403.
+delete for real. Either way the run summary lists the tags.
+
+It authenticates with the same two service-account secrets as the release workflow, but needs more of
+the token than releasing does: the Docker Hub token must carry the **Read, Write, Delete** scope. A
+Read & Write push token authenticates and lists tags fine and then fails every delete with a 403, so
+that is the first thing to check when a run comes back `HTTP 403` - the run prints Docker Hub's own
+reason alongside it.
 
 Deleting a tag only removes that tag. The manifest and layers stay until Docker Hub's own garbage
 collection reclaims them, and any other tag pointing at the same digest keeps working - so deleting

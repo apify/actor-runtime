@@ -37,8 +37,9 @@ jobs:
             # Same credentials, same failure mode as `release.yml`: fail up front with the fix named,
             # rather than after a successful login-less API call returns an unhelpful 401. They are the
             # Apify service account's, synced into this repository's Actions secrets by the org's secret
-            # manager - a missing value is fixed there, not by adding a secret here by hand. The token
-            # needs delete permission on the repository; a read/write-only PAT gets 403 per tag.
+            # manager - a missing value is fixed there, not by adding a secret here by hand. Deleting needs
+            # a token with the Read, Write, Delete scope: a Read & Write push token authenticates and lists
+            # fine, then gets 403 on every delete.
             - name: Check Docker Hub credentials are configured
               env:
                   DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
@@ -73,14 +74,20 @@ jobs:
                   # one of them (`*`, `m*`) skips it rather than failing the run.
                   protected=(latest master main)
 
-                  token=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" '{username: $u, password: $p}' \
-                    | curl -sS -X POST "$api/users/login" -H 'Content-Type: application/json' -d @- \
-                    | jq -r '.token // empty')
+                  # `/v2/auth/token` is Docker's documented authentication route; `/v2/users/login`, which
+                  # the examples in the wild still use, is deprecated. The access token it returns expires
+                  # after 10 minutes, so this is a function: a long delete run re-authenticates on 401.
+                  authenticate() {
+                    jq -n --arg id "$DOCKERHUB_USERNAME" --arg secret "$DOCKERHUB_TOKEN" '{identifier: $id, secret: $secret}' \
+                      | curl -sS -X POST "$api/auth/token" -H 'Content-Type: application/json' -d @- \
+                      | jq -r '.access_token // empty'
+                  }
+                  token=$(authenticate)
                   if [ -z "$token" ]; then
-                    echo "::error::Docker Hub login failed for '$DOCKERHUB_USERNAME'. Check the token is valid and not expired."
+                    echo "::error::Docker Hub authentication failed for '$DOCKERHUB_USERNAME'. Check the token is valid and not expired."
                     exit 1
                   fi
-                  # Keep the JWT out of the log even if a later curl is run with -v or an error echoes it.
+                  # Keep the token out of the log even if a later curl is run with -v or an error echoes it.
                   echo "::add-mask::$token"
 
                   # Every existing tag, one per line. `next` is followed rather than counting pages, so a
@@ -88,7 +95,7 @@ jobs:
                   existing=$(mktemp)
                   url="$api/repositories/$IMAGE/tags?page_size=100"
                   while [ -n "$url" ] && [ "$url" != "null" ]; do
-                    page=$(curl -sS -f -H "Authorization: JWT $token" "$url") || {
+                    page=$(curl -sS -f -H "Authorization: Bearer $token" "$url") || {
                       echo "::error::Could not list tags of '$IMAGE'. Does the repository exist and is it visible to '$DOCKERHUB_USERNAME'?"
                       exit 1
                     }
@@ -161,11 +168,21 @@ jobs:
 
                   # Deleting keeps going after a failure so one 403 does not hide the state of the rest;
                   # the run still fails at the end.
+                  # Tag deletion is not in Docker's published API spec - `/v2/repositories/.../tags/<tag>/`
+                  # is the long-standing internal route the Hub UI and every tool in the wild use.
                   deleted=()
                   failed=()
+                  body=$(mktemp)
                   for tag in "${targets[@]}"; do
-                    status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
-                      -H "Authorization: JWT $token" "$api/repositories/$IMAGE/tags/$tag/" || echo 000)
+                    status=$(curl -sS -o "$body" -w '%{http_code}' -X DELETE \
+                      -H "Authorization: Bearer $token" "$api/repositories/$IMAGE/tags/$tag/" || echo 000)
+                    # The access token lives 10 minutes; a run with many tags can outlive it.
+                    if [ "$status" = "401" ]; then
+                      token=$(authenticate)
+                      echo "::add-mask::$token"
+                      status=$(curl -sS -o "$body" -w '%{http_code}' -X DELETE \
+                        -H "Authorization: Bearer $token" "$api/repositories/$IMAGE/tags/$tag/" || echo 000)
+                    fi
                     case "$status" in
                       # 204 is the delete; 404 means it is already gone, which is the requested end state.
                       204|404)
@@ -173,11 +190,21 @@ jobs:
                         deleted+=("$tag")
                         ;;
                       *)
-                        echo "::error::Could not delete '$IMAGE:$tag' (HTTP $status). A 403 usually means the token lacks delete permission on the repository."
+                        # Docker Hub's own wording is the only thing that distinguishes a token whose scope
+                        # lacks delete from one it refuses to delete with at all, so never swallow it.
+                        detail=$(jq -r '[.detail, .message, .errinfo.message] | map(select(. != null and . != "")) | first // empty' < "$body" 2>/dev/null || true)
+                        [ -z "$detail" ] && detail=$(tr -d '\n' < "$body" | cut -c1-300)
+                        echo "::error::Could not delete '$IMAGE:$tag' (HTTP $status): ${detail:-<empty response>}"
                         failed+=("$tag")
                         ;;
                     esac
                   done
+                  if [ ${#failed[@]} -gt 0 ]; then
+                    echo "::error::Deleting needs a Docker Hub token with the Read, Write, Delete scope." \
+                      "A Read & Write push token - what releasing needs - authenticates and lists fine, then" \
+                      "gets 403 on every delete. Check the scope of APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN in" \
+                      "the org's secret manager."
+                  fi
 
                   {
                     echo "### Deleted ${#deleted[@]} tag(s) from \`$IMAGE\`"
