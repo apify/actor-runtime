@@ -87,6 +87,26 @@ export function pullImage(image: string): void {
 	execFileSync(CONTAINER_CLI, ['pull', '--platform', COMPATIBILITY_BUILD_PLATFORM, image], { stdio: 'inherit' });
 }
 
+/**
+ * `--security-opt label=disable` for the runtime container on a Podman host with SELinux enforcing
+ * (Fedora; the Fedora-based VM of Podman Desktop / `podman machine` on macOS and Windows): without it,
+ * SELinux keeps the container from the engine's socket bind-mounted into it - README's "Running with
+ * Podman" documents the same flag for users. Docker hosts and Podman hosts without SELinux get nothing
+ * extra, so the suite there runs the documented command verbatim, as before.
+ */
+function engineSecurityOptions(): string[] {
+	if (CONTAINER_CLI !== 'podman') return [];
+	try {
+		const enabled = execFileSync(CONTAINER_CLI, ['info', '--format', '{{.Host.Security.SELinuxEnabled}}'], {
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore'],
+		}).trim();
+		return enabled === 'true' ? ['--security-opt', 'label=disable'] : [];
+	} catch {
+		return [];
+	}
+}
+
 export function startRuntimeContainer(tag: string, containerName: string): void {
 	// A previous run that died before its `afterAll` (killed vitest, a CI job cancelled or timed out on a
 	// persistent self-hosted runner) leaves a container of this name, and with it the fixed host ports
@@ -116,6 +136,7 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 			`${hostEngineSocketPath()}:${RUNTIME_SOCKET_PATH}`,
 			'-v',
 			`${containerName}-data:/data`,
+			...engineSecurityOptions(),
 			tag,
 		],
 		{ stdio: 'inherit' },
