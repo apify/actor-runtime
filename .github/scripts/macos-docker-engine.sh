@@ -31,6 +31,10 @@
 #             `install` failed halfway or never ran
 set -euo pipefail
 
+# The two entry points are `engine_install` / `engine_teardown`, not `install` / `teardown`: a bash
+# function named `install` shadows /usr/bin/install, so the `install -m 0755` copies below would call
+# the function itself - endless recursion, re-downloading on every round, until bash segfaults. The
+# copies also say `command install` so that can never come back with a rename.
 DOCKER_VERSION=29.8.1
 BUILDX_VERSION=v0.37.1
 LIMA_VERSION=2.2.0
@@ -67,7 +71,7 @@ sha_for() {
 	awk -v name="$2" '{ f = $2; sub(/^\*/, "", f); if (f == name) { print $1; exit } }' "$1"
 }
 
-install() {
+engine_install() {
 	[ "$(uname -s)" = Darwin ] || die "This script is for macOS; this is $(uname -s)."
 	[ "$(uname -m)" = arm64 ] || die "This script is for Apple Silicon (arm64); this is $(uname -m)."
 	local macos_major
@@ -84,7 +88,7 @@ install() {
 	# the daemon it will talk to is the pinned one Colima brings, not this tarball's concern.
 	fetch "https://download.docker.com/mac/static/stable/aarch64/docker-$DOCKER_VERSION.tgz" "$dl/docker.tgz"
 	tar -xzf "$dl/docker.tgz" -C "$dl"
-	install -m 0755 "$dl/docker/docker" "$bin_dir/docker"
+	command install -m 0755 "$dl/docker/docker" "$bin_dir/docker"
 	echo "::endgroup::"
 
 	echo "::group::Install buildx $BUILDX_VERSION"
@@ -93,7 +97,7 @@ install() {
 	fetch "$buildx_base/$buildx_asset" "$dl/$buildx_asset"
 	fetch "$buildx_base/checksums.txt" "$dl/buildx-checksums.txt"
 	verify "$dl/$buildx_asset" "$(sha_for "$dl/buildx-checksums.txt" "$buildx_asset")"
-	install -m 0755 "$dl/$buildx_asset" "$DOCKER_CONFIG/cli-plugins/docker-buildx"
+	command install -m 0755 "$dl/$buildx_asset" "$DOCKER_CONFIG/cli-plugins/docker-buildx"
 	echo "::endgroup::"
 
 	echo "::group::Install Lima $LIMA_VERSION"
@@ -114,7 +118,7 @@ install() {
 	fetch "$colima_base/$colima_asset" "$dl/$colima_asset"
 	fetch "$colima_base/$colima_asset.sha256sum" "$dl/$colima_asset.sha256sum"
 	verify "$dl/$colima_asset" "$(cut -d' ' -f1 "$dl/$colima_asset.sha256sum")"
-	install -m 0755 "$dl/$colima_asset" "$bin_dir/colima"
+	command install -m 0755 "$dl/$colima_asset" "$bin_dir/colima"
 	echo "::endgroup::"
 
 	rm -rf "$dl"
@@ -172,7 +176,7 @@ install() {
 	echo "Docker engine ready under $engine_dir."
 }
 
-teardown() {
+engine_teardown() {
 	if command -v colima >/dev/null 2>&1 && [ -d "$COLIMA_HOME" ]; then
 		colima stop --force 2>/dev/null || true
 		colima delete --force 2>/dev/null || true
@@ -190,8 +194,8 @@ teardown() {
 }
 
 case "${1:-}" in
-	install) install ;;
-	teardown) teardown ;;
+	install) engine_install ;;
+	teardown) engine_teardown ;;
 	*)
 		echo "Usage: $0 install | teardown" >&2
 		exit 2
