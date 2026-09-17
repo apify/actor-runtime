@@ -6,7 +6,7 @@
 
 - CI (GitHub Actions) runs on every pull request and on pushes to the main branches: build, lint, format check, and all test layers, with the mandatory CLI-only e2e suite below executing against a real Docker daemon. A missing daemon fails the CI job - the e2e suite never silently skips.
 - CI runs each e2e file as its own job, in parallel; locally the files run one after another (each starts a runtime container on the fixed ports).
-- Beside the hosted Linux runners (Docker and Podman, x86_64 and arm64), CI runs the Actor dev-loop e2e file on a self-hosted macOS arm64 runner with Docker Desktop - the setup most developers use the runtime from. That runner is a persistent machine, so the job removes everything the suite leaves behind (its runtime container and volume, the Actor containers and images the runtime built, its temp dirs) both before and after the test, and it never runs for pull requests from forks.
+- Beside the hosted Linux runners (Docker and Podman, x86_64 and arm64), CI runs the Actor dev-loop e2e file on a self-hosted macOS arm64 runner - the platform most developers use the runtime from. That runner is a clean, persistent Mac with no container engine of its own, so the job installs one for itself in user space (Colima's Docker VM plus the Docker CLI, pinned and checksum-verified, no sudo), runs the test, then removes everything the suite left behind (its temp dirs, and the engine with every container, image and volume in it), leaving the machine as it found it. The job never runs for pull requests from forks.
 
 # Mandatory end-to-end tests
 
