@@ -19,8 +19,8 @@
  * the in-flight HTTP request to the daemon, and `followProgress`'s stream then emits `error`/`close`
  * (`dockerode/lib/buildkit.js`'s `onStreamError`), so `startBuild`'s promise settles instead of hanging
  * or silently ignoring the abort. One `AbortController` is kept per in-flight build, keyed by build id,
- * so `abortBuild` can call `.abort()` on the live one. Runs are cancelled the same way as before -
- * `container.stop()` - since there is no HTTP request to abort there.
+ * so `abortBuild` can call `.abort()` on the live one. Runs have no HTTP request to abort and are
+ * cancelled at the container instead (`abortRun`).
  *
  * Host architecture: a build runs for the host's own, except that one whose base image has no manifest
  * for it is retried once for `linux/amd64` under the engine's emulation (`build-platform.ts`).
@@ -67,6 +67,7 @@ import type { SourceFile } from '../storage/entities.js';
 import {
 	DebugPortInUseError,
 	DriverTimedOutError,
+	type AbortRunOptions,
 	type BrowserViewerHandle,
 	type BrowserViewerTarget,
 	type BuildContext,
@@ -1573,10 +1574,17 @@ export class DockerDriver implements Driver {
 		return (stat.mode & GO_MODE_DIR) !== 0 ? { ok: true } : { ok: false, reason: 'not-a-directory' };
 	}
 
-	async abortRun(runId: string): Promise<void> {
+	/** `graceSecs` is always passed to the engine explicitly, never left to its 10s default
+	 * (`AbortRunOptions`). A container that already exited answers 304/409, swallowed like every other
+	 * stop failure here. */
+	async abortRun(runId: string, { graceSecs = 0 }: AbortRunOptions = {}): Promise<void> {
 		const container = this.runContainers.get(runId);
 		if (!container) return;
-		await container.stop().catch(() => undefined);
+		if (graceSecs <= 0) {
+			await container.kill().catch(() => undefined);
+			return;
+		}
+		await container.stop({ t: graceSecs }).catch(() => undefined);
 	}
 
 	/** Imports the bundled sidecar rootfs (`docker import`, no network) once per process; an image already

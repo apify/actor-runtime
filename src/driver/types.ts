@@ -141,6 +141,14 @@ export class DebugPortInUseError extends Error {
 	}
 }
 
+/** How hard `Driver.abortRun` stops the run's container. The engine's own default grace is never used:
+ * an Actor image's PID 1 is the Actor itself, which installs no handler for the stop signal, so that
+ * grace is spent ignoring it before the `SIGKILL` lands anyway. */
+export interface AbortRunOptions {
+	/** Seconds between the stop signal and `SIGKILL`. `0` (the default) kills outright. */
+	graceSecs?: number;
+}
+
 /**
  * The Docker driver's surface. `available` reflects whether the host Docker socket was reachable at
  * startup - when it is not (this sandbox has none), builds and runs fail fast with a clear status
@@ -166,7 +174,7 @@ export interface Driver {
 		onLog: (chunk: string) => void,
 		onSample?: (sample: RunResourceSample) => void,
 	): Promise<RunOutcome>;
-	abortRun(runId: string): Promise<void>;
+	abortRun(runId: string, options?: AbortRunOptions): Promise<void>;
 
 	/** Startup reconciliation: any run container this process no longer tracks is removed. Build
 	 * records have no container of their own to reconcile (see `DockerDriver.reconcileOrphans`'s doc

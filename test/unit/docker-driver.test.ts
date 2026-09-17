@@ -385,6 +385,70 @@ describe('DockerDriver container removal passes { v: true } (actor-driver.md: "c
 	});
 });
 
+describe('DockerDriver.abortRun - how hard the container is stopped (actor-driver.md: "aborting a run kills the run\'s container immediately")', () => {
+	/** Starts a run so `runContainers` holds the stub container; the returned finisher ends it. */
+	async function startTrackedRun(stub: ReturnType<typeof stubDockerForRun>, driver: DockerDriver, runId: string) {
+		const outcomePromise = driver.startRun(
+			{ runId, imageId: 'fake-image', env: {}, memoryMbytes: 128, timeoutSecs: 60 },
+			() => {},
+		);
+		await new Promise((resolve) => setImmediate(resolve));
+		return async () => {
+			stub.triggerContainerExit(137);
+			stub.endLogStream();
+			await outcomePromise;
+		};
+	}
+
+	it("kills the container outright by default - never container.stop(), whose engine-side default spends 10s on a signal an Actor image's PID 1 ignores", async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const finish = await startTrackedRun(stub, driver, 'run-abort-hard');
+
+		await driver.abortRun('run-abort-hard');
+
+		expect(stub.container.kill).toHaveBeenCalledTimes(1);
+		expect(stub.container.stop).not.toHaveBeenCalled();
+		await finish();
+	});
+
+	it("passes an explicit graceSecs through as stop()'s own `t`, never leaving the wait to the engine default", async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const finish = await startTrackedRun(stub, driver, 'run-abort-grace');
+
+		await driver.abortRun('run-abort-grace', { graceSecs: 3 });
+
+		expect(stub.container.stop).toHaveBeenCalledWith({ t: 3 });
+		expect(stub.container.kill).not.toHaveBeenCalled();
+		await finish();
+	});
+
+	it('is a no-op for a run it holds no container for', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+
+		await driver.abortRun('run-never-started');
+
+		expect(stub.container.kill).not.toHaveBeenCalled();
+		expect(stub.container.stop).not.toHaveBeenCalled();
+	});
+
+	it('swallows a kill rejection (a container that exited on its own answers 409) rather than failing the abort', async () => {
+		const stub = stubDockerForRun();
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		const finish = await startTrackedRun(stub, driver, 'run-abort-409');
+		stub.container.kill.mockRejectedValueOnce(new Error('(HTTP code 409) container is not running'));
+
+		await expect(driver.abortRun('run-abort-409')).resolves.toBeUndefined();
+		await finish();
+	});
+});
+
 describe('DockerDriver.startBuild - imageWorkingDirectory capture (actor-driver.md: "imageWorkingDirectory is captured by the driver itself")', () => {
 	/** A stub covering only what `startBuild` calls: `buildImage`, `modem.followProgress` (invoking its
 	 * `onFinished` callback synchronously, as a successful build with no progress lines), and `getImage`
