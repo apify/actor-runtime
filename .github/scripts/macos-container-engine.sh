@@ -150,24 +150,31 @@ smoke_tests() {
 	local cli=$1 sock=$2
 	echo "::group::Check the engine"
 	"$cli" version
-	"$cli" info --format 'Arch={{.Host.Arch}} OS={{.Host.Distribution.Distribution}}' 2>/dev/null ||
+	if [ "$cli" = podman ]; then
+		"$cli" info --format 'Arch={{.Host.Arch}} OS={{.Host.Distribution.Distribution}} {{.Host.Distribution.Version}}'
+	else
 		"$cli" info --format 'Arch={{.Architecture}} OS={{.OperatingSystem}} Server={{.ServerVersion}}'
+	fi
 	# What the suite's `startRuntimeContainer` adds on a Podman host with SELinux enforcing (Fedora, as
 	# Lima's Podman template and Podman Desktop's machine both are), and what README's "Running with
 	# Podman" tells users to add: without it SELinux keeps a container from the socket mounted into it.
-	local -a secopt=()
+	# A plain string, expanded unquoted below: macOS's bash 3.2 treats an empty array expansion as an
+	# unbound variable under `set -u`.
+	local secopt=
 	if [ "$cli" = podman ] && [ "$("$cli" info --format '{{.Host.Security.SELinuxEnabled}}' 2>/dev/null)" = true ]; then
 		echo "SELinux is enabled on the engine host; containers that mount the socket get --security-opt label=disable."
-		secopt=(--security-opt label=disable)
+		secopt="--security-opt label=disable"
 	fi
 	# The mount the runtime container gets: the daemon's own socket, reachable from inside a container.
-	"$cli" run --rm "${secopt[@]}" -v "$sock:/var/run/docker.sock" docker.io/library/busybox test -S /var/run/docker.sock ||
+	# shellcheck disable=SC2086
+	"$cli" run --rm $secopt -v "$sock:/var/run/docker.sock" docker.io/library/busybox test -S /var/run/docker.sock ||
 		die "$sock is not a socket inside a container on this engine; the runtime container needs it to be."
 	# A host directory under $HOME, bind-mounted by its host path - what the dev-folder files do.
 	mkdir -p "$tmp_dir"
 	local marker="$tmp_dir/.mount-probe"
 	echo ok > "$marker"
-	"$cli" run --rm "${secopt[@]}" -v "$tmp_dir:/probe" docker.io/library/busybox cat /probe/.mount-probe >/dev/null ||
+	# shellcheck disable=SC2086
+	"$cli" run --rm $secopt -v "$tmp_dir:/probe" docker.io/library/busybox cat /probe/.mount-probe >/dev/null ||
 		die "$tmp_dir is not visible inside the VM by its host path; the dev-folder e2e files need \$HOME shared into the VM."
 	rm -f "$marker"
 	# amd64 emulation, for the browser-view files. A warning, not a failure: only those files need it,
