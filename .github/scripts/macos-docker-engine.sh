@@ -11,11 +11,16 @@
 #   - Lima + Colima - Colima runs the Docker daemon inside a Linux VM on Apple's Virtualization.framework
 #     (`--vm-type vz`, macOS 13+), the engine most Docker-Desktop-less Mac developers use
 #
-# All of it lives under one directory, `$E2E_ENGINE_DIR` (default `$RUNNER_TEMP/actor-runtime-e2e-engine`):
-# the binaries, Colima's state (`COLIMA_HOME`, which also places Lima's `LIMA_HOME` under it) and an
-# isolated `DOCKER_CONFIG` for the docker context and the plugin. `teardown` deletes the VM and that
-# directory, plus Lima's image download cache in `~/Library/Caches`, leaving the machine as it was found.
-# The runner user's own `~/.docker`, `~/.colima` and `~/.lima` are never touched.
+# All of it lives under one directory, `$E2E_ENGINE_DIR` (default `$HOME/.actor-runtime-e2e`): the
+# binaries, Colima's state (`COLIMA_HOME`, which also places Lima's `LIMA_HOME` under it) and an isolated
+# `DOCKER_CONFIG` for the docker context and the plugin. `teardown` deletes the VM and that directory,
+# plus Lima's image download cache in `~/Library/Caches`, leaving the machine as it was found. The
+# runner user's own `~/.docker`, `~/.colima` and `~/.lima` are never touched.
+#
+# The directory is deliberately short and directly under `$HOME`, not under `$RUNNER_TEMP`: Lima puts
+# unix sockets in the instance dir (`<LIMA_HOME>/colima/ssh.sock.<16 digits>`), and macOS caps a
+# socket path at 104 characters - the runner's `_work/_temp/...` path pushed that to 112 and Lima
+# refused to start.
 #
 # Why no `DOCKER_HOST`: the suite mounts `hostEngineSocketPath()` into the runtime container, and with
 # no `DOCKER_HOST` that is `/var/run/docker.sock` - which inside Colima's VM, where the container runs,
@@ -40,7 +45,7 @@ BUILDX_VERSION=v0.37.1
 LIMA_VERSION=2.2.0
 COLIMA_VERSION=v0.10.3
 
-engine_dir=${E2E_ENGINE_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/actor-runtime-e2e-engine}
+engine_dir=${E2E_ENGINE_DIR:-$HOME/.actor-runtime-e2e}
 engine_dir=${engine_dir%/}
 bin_dir=$engine_dir/bin
 lima_bin_dir=$engine_dir/lima/bin
@@ -126,6 +131,19 @@ engine_install() {
 
 	rm -rf "$dl"
 
+	# Exported before the VM start, not after: the workflow's later steps (the log dump on failure,
+	# `teardown`) need `docker` and `colima` on their PATH even when the start below fails.
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		{
+			echo "E2E_ENGINE_DIR=$engine_dir"
+			echo "COLIMA_HOME=$COLIMA_HOME"
+			echo "DOCKER_CONFIG=$DOCKER_CONFIG"
+		} >> "$GITHUB_ENV"
+	fi
+	if [ -n "${GITHUB_PATH:-}" ]; then
+		printf '%s\n' "$bin_dir" "$lima_bin_dir" >> "$GITHUB_PATH"
+	fi
+
 	echo "::group::Start the Docker VM"
 	# Half the machine, with a floor: the runtime image build (tsc, pip) and two Actor builds run in here,
 	# and Colima's own defaults (2 CPUs, 2 GiB) are tight for that.
@@ -165,17 +183,6 @@ engine_install() {
 		test -S /var/run/docker.sock ||
 		die "/var/run/docker.sock is not a socket inside a container on this engine; the runtime container needs it to be."
 	echo "::endgroup::"
-
-	if [ -n "${GITHUB_ENV:-}" ]; then
-		{
-			echo "E2E_ENGINE_DIR=$engine_dir"
-			echo "COLIMA_HOME=$COLIMA_HOME"
-			echo "DOCKER_CONFIG=$DOCKER_CONFIG"
-		} >> "$GITHUB_ENV"
-	fi
-	if [ -n "${GITHUB_PATH:-}" ]; then
-		printf '%s\n' "$bin_dir" "$lima_bin_dir" >> "$GITHUB_PATH"
-	fi
 	echo "Docker engine ready under $engine_dir."
 }
 

@@ -129,9 +129,10 @@ jobs:
         timeout-minutes: 45
         steps:
             - uses: actions/checkout@v4
-            # Downloads pinned Docker CLI, buildx, Lima and Colima into the job's temp dir, starts the VM
-            # and smoke-tests the socket mount the suite relies on. Exports the engine's env to the job;
-            # it deliberately does not set `DOCKER_HOST` (see the script for why).
+            # Downloads pinned Docker CLI, buildx, Lima and Colima into one directory under the runner
+            # user's home (removed again in the last step), starts the VM and smoke-tests the socket mount
+            # the suite relies on. Exports the engine's env to the job; it deliberately does not set
+            # `DOCKER_HOST` (see the script for why).
             - name: Install a Docker engine (Colima, user space)
               run: .github/scripts/macos-docker-engine.sh install
             # A previous job on this machine may have been cancelled or timed out mid-suite. The engine is
