@@ -6,6 +6,7 @@
 
 - CI (GitHub Actions) runs on every pull request and on pushes to the main branches: build, lint, format check, and all test layers, with the mandatory CLI-only e2e suite below executing against a real Docker daemon. A missing daemon fails the CI job - the e2e suite never silently skips.
 - CI runs each e2e file as its own job, in parallel; locally the files run one after another (each starts a runtime container on the fixed ports).
+- Beside the hosted Linux runners (Docker and Podman, x86_64 and arm64), CI runs the whole e2e suite on a self-hosted macOS arm64 runner - the platform most developers use the runtime from - once against Docker and once against Podman, each engine in a Linux VM with the host's home directory shared into it, the way Docker Desktop and Podman Desktop work on a Mac. That runner is a clean, persistent Mac with no container engine of its own, so each job installs one for itself in user space (Lima's VM plus Colima and the Docker CLI, or Lima's Podman template plus the podman remote client; pinned and checksum-verified, no sudo), logs it into Docker Hub with the repository's service-account secrets so the per-job image pulls count against the account rather than the machine's anonymous per-IP limit, runs the suite, then removes everything it left behind (its temp dirs, and the engine with every container, image and volume in it), leaving the machine as it found it. The job never runs for pull requests from forks.
 
 # Mandatory end-to-end tests
 

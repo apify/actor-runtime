@@ -87,7 +87,32 @@ export function pullImage(image: string): void {
 	execFileSync(CONTAINER_CLI, ['pull', '--platform', COMPATIBILITY_BUILD_PLATFORM, image], { stdio: 'inherit' });
 }
 
+/**
+ * `--security-opt label=disable` for the runtime container on a Podman host with SELinux enforcing
+ * (Fedora; the Fedora-based VM of Podman Desktop / `podman machine` on macOS and Windows): without it,
+ * SELinux keeps the container from the engine's socket bind-mounted into it - README's "Running with
+ * Podman" documents the same flag for users. Docker hosts and Podman hosts without SELinux get nothing
+ * extra, so the suite there runs the documented command verbatim, as before.
+ */
+function engineSecurityOptions(): string[] {
+	if (CONTAINER_CLI !== 'podman') return [];
+	try {
+		const enabled = execFileSync(CONTAINER_CLI, ['info', '--format', '{{.Host.Security.SELinuxEnabled}}'], {
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore'],
+		}).trim();
+		return enabled === 'true' ? ['--security-opt', 'label=disable'] : [];
+	} catch {
+		return [];
+	}
+}
+
 export function startRuntimeContainer(tag: string, containerName: string): void {
+	// A previous run that died before its `afterAll` (killed vitest, a CI job cancelled or timed out on a
+	// persistent self-hosted runner) leaves a container of this name, and with it the fixed host ports
+	// below, in place; `docker run` would then fail with "name is already in use" / "port is already
+	// allocated". The name is this suite's own, so removing whatever holds it is always the right call.
+	removeContainerAndDataVolume(containerName);
 	execFileSync(
 		CONTAINER_CLI,
 		[
@@ -111,6 +136,7 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 			`${hostEngineSocketPath()}:${RUNTIME_SOCKET_PATH}`,
 			'-v',
 			`${containerName}-data:/data`,
+			...engineSecurityOptions(),
 			tag,
 		],
 		{ stdio: 'inherit' },
@@ -135,6 +161,11 @@ export function stopRuntimeContainer(containerName: string): void {
 		// best-effort: the container may already be gone (never started, already removed) - diagnostics
 		// only, never a reason to skip the cleanup below.
 	}
+	removeContainerAndDataVolume(containerName);
+}
+
+/** Force-removes the runtime container and its `<name>-data` volume; a no-op when neither exists. */
+function removeContainerAndDataVolume(containerName: string): void {
 	try {
 		execFileSync(CONTAINER_CLI, ['rm', '-f', containerName], { stdio: 'ignore' });
 	} catch {
@@ -145,6 +176,15 @@ export function stopRuntimeContainer(containerName: string): void {
 	} catch {
 		// best-effort cleanup
 	}
+}
+
+/** Ids of the engine's dangling (unattached) volumes - through `CONTAINER_CLI`, like every other engine
+ * call here. A hardcoded `docker` would count the wrong daemon's volumes on a Podman host (or, with no
+ * `docker` binary at all, as on the macOS Podman leg, fail with ENOENT). */
+export function danglingVolumeIds(): string[] {
+	return execFileSync(CONTAINER_CLI, ['volume', 'ls', '-q', '-f', 'dangling=true'], { encoding: 'utf8' })
+		.split('\n')
+		.filter((line) => line.trim() !== '');
 }
 
 export async function waitForHttpOk(url: string, timeoutMs = 60_000): Promise<void> {

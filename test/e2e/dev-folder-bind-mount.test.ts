@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
 	buildRuntimeImage,
+	danglingVolumeIds,
 	isDockerAvailable,
 	pullBaseImages,
 	startRuntimeContainer,
@@ -432,10 +433,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			// the only thing exercising anonymous volumes against this daemon in a CI run, so a stable count
 			// across repeated runs is sufficient evidence the driver's `{ v: true }` cleanup (not some
 			// unrelated daemon-wide accumulation) is what's being measured.
-			const countDanglingVolumes = (): number =>
-				execFileSync('docker', ['volume', 'ls', '-q', '-f', 'dangling=true'], { encoding: 'utf8' })
-					.split('\n')
-					.filter((line) => line.trim().length > 0).length;
+			const countDanglingVolumes = (): number => danglingVolumeIds().length;
 
 			const before = countDanglingVolumes();
 			for (let i = 0; i < 3; i++) {

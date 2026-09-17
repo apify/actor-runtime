@@ -63,6 +63,11 @@ sudo podman run --rm -p 3333:3333 -p 3000:3000 \
   actor-runtime
 ```
 
+On a host where SELinux is enforcing - Fedora, and the Fedora-based VM behind Podman Desktop /
+`podman machine` on macOS and Windows - add `--security-opt label=disable` to that `podman run`:
+SELinux otherwise keeps the runtime container from the engine's socket mounted into it, and the
+runtime reports the engine as unavailable.
+
 Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
 (`systemctl --user enable --now podman.socket`); mount that path and drop the `sudo`. Rootless Docker
 works the same way with its `$XDG_RUNTIME_DIR/docker.sock`. The socket can also be mounted at any other
