@@ -88,6 +88,11 @@ export function pullImage(image: string): void {
 }
 
 export function startRuntimeContainer(tag: string, containerName: string): void {
+	// A previous run that died before its `afterAll` (killed vitest, a CI job cancelled or timed out on a
+	// persistent self-hosted runner) leaves a container of this name, and with it the fixed host ports
+	// below, in place; `docker run` would then fail with "name is already in use" / "port is already
+	// allocated". The name is this suite's own, so removing whatever holds it is always the right call.
+	removeContainerAndDataVolume(containerName);
 	execFileSync(
 		CONTAINER_CLI,
 		[
@@ -135,6 +140,11 @@ export function stopRuntimeContainer(containerName: string): void {
 		// best-effort: the container may already be gone (never started, already removed) - diagnostics
 		// only, never a reason to skip the cleanup below.
 	}
+	removeContainerAndDataVolume(containerName);
+}
+
+/** Force-removes the runtime container and its `<name>-data` volume; a no-op when neither exists. */
+function removeContainerAndDataVolume(containerName: string): void {
 	try {
 		execFileSync(CONTAINER_CLI, ['rm', '-f', containerName], { stdio: 'ignore' });
 	} catch {
