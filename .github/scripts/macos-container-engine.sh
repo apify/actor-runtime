@@ -385,7 +385,14 @@ engine_install() {
 	macos_major=$(sw_vers -productVersion | cut -d. -f1)
 	[ "$macos_major" -ge 13 ] || die "Lima's vz driver needs macOS 13 or newer; this is $(sw_vers -productVersion)."
 
-	rm -rf "$engine_dir"
+	# A previous job that died without its teardown step (the runner losing contact with GitHub
+	# mid-suite leaves the job's later steps unrun) leaves its VM running and its host agent holding the
+	# forwarded ports. Stop and delete all of that first, with the binaries it left behind, rather than
+	# `rm -rf` the directory from under a live VM.
+	if [ -d "$engine_dir" ]; then
+		echo "Found a leftover engine under $engine_dir; removing it first."
+		engine_teardown
+	fi
 	mkdir -p "$bin_dir" "$DOCKER_CONFIG/cli-plugins" "$COLIMA_HOME" "$tmp_dir"
 	local dl=$engine_dir/downloads
 	mkdir -p "$dl"
