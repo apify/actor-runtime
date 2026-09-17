@@ -39,6 +39,13 @@
 # emulation registered in the VM (`tonistiigi/binfmt` for Docker, `qemu-user-static` for Podman),
 # which is slow but works. Installing Rosetta is attempted once; it may need admin rights.
 #
+# Docker Hub: each job starts from an empty engine and pulls every base image again, and Docker Hub's
+# anonymous pull limit is per IP - a day of runs on one Mac exhausts it ("toomanyrequests"). With
+# `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` in the environment (the workflow passes the same repository
+# secrets `release.yml` publishes with), both CLIs log in so pulls count against the account instead;
+# the credentials land in the isolated `DOCKER_CONFIG` / `REGISTRY_AUTH_FILE` under the engine dir,
+# never in the runner user's own config, and go with the teardown. Missing credentials only warn.
+#
 # Why no `DOCKER_HOST`: the suite mounts `hostEngineSocketPath()` into the runtime container, and with
 # no `DOCKER_HOST` that is `/var/run/docker.sock` (docker) or `/run/podman/podman.sock` (podman) -
 # which inside the VM, where the container runs, IS the daemon's socket. The host-side forwarded
@@ -72,6 +79,7 @@ lima_bin_dir=$engine_dir/lima/bin
 tmp_dir=$engine_dir/tmp
 export COLIMA_HOME=$engine_dir/colima
 export DOCKER_CONFIG=$engine_dir/docker-config
+export REGISTRY_AUTH_FILE=$engine_dir/podman-auth.json
 # Lima home for the standalone (podman) instance. Colima ignores it and uses `$COLIMA_HOME/_lima`.
 podman_lima_home=$engine_dir/limahome
 PODMAN_INSTANCE=podman
@@ -143,6 +151,20 @@ ensure_rosetta() {
 	rosetta=
 }
 
+# registry_login <cli>: authenticated Docker Hub pulls, when the workflow provides credentials.
+registry_login() {
+	local cli=$1
+	if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+		warn "No Docker Hub credentials (DOCKERHUB_USERNAME / DOCKERHUB_TOKEN); pulls are anonymous and count against this Mac's IP-based rate limit."
+		return 0
+	fi
+	# docker: into $DOCKER_CONFIG/config.json. podman: into $REGISTRY_AUTH_FILE (exported to the job by
+	# `export_env`), which the remote client also hands to the VM's daemon for its pulls.
+	printf '%s' "$DOCKERHUB_TOKEN" | "$cli" login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin ||
+		die "Docker Hub login failed for '$DOCKERHUB_USERNAME'."
+	echo "Logged in to Docker Hub as $DOCKERHUB_USERNAME."
+}
+
 # smoke_tests <cli> <daemon-socket-path-inside-the-vm>: the exact things the suite relies on, proven
 # before it spends minutes building images, so an engine that cannot do them fails here, with a
 # message that says which.
@@ -196,6 +218,7 @@ export_env() {
 			echo "E2E_ENGINE_DIR=$engine_dir"
 			echo "COLIMA_HOME=$COLIMA_HOME"
 			echo "DOCKER_CONFIG=$DOCKER_CONFIG"
+			echo "REGISTRY_AUTH_FILE=$REGISTRY_AUTH_FILE"
 			echo "TMPDIR=$tmp_dir"
 			printf '%s\n' "$@"
 		} >> "$GITHUB_ENV"
@@ -274,6 +297,7 @@ install_docker() {
 	colima status
 	[ "$(docker context show)" = colima ] || die "Colima did not activate its docker context (current: $(docker context show))."
 	docker buildx version
+	registry_login docker
 	if [ -z "$rosetta" ]; then
 		# QEMU user-mode handlers for foreign architectures, registered in the VM's kernel (binfmt_misc).
 		docker run --privileged --rm docker.io/tonistiigi/binfmt --install amd64 ||
@@ -336,6 +360,7 @@ install_podman() {
 		sleep 1
 	done
 	podman info >/dev/null || die "podman cannot reach the VM's API socket through $sock."
+	registry_login podman
 	# For reading a failed socket smoke test below: the socket's SELinux label and the enforcing mode.
 	limactl shell "$PODMAN_INSTANCE" -- sh -c 'getenforce; ls -laZ /run/podman/' || true
 	if [ -z "$rosetta" ]; then

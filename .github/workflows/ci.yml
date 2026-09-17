@@ -146,7 +146,15 @@ jobs:
             # in the last step), starts the VM and smoke-tests the socket and home mounts the suite relies
             # on. Exports the engine's env (`CONTAINER_CLI`, `TMPDIR`, ...) to the job; it deliberately
             # does not set `DOCKER_HOST` (see the script for why).
+            # The Docker Hub credentials are the Apify service account's, the same repository secrets
+            # `release.yml` publishes with: every job here starts from an empty engine and pulls every base
+            # image again, and Docker Hub's anonymous limit is per IP, which one Mac exhausts in a day of
+            # runs. Logged in, pulls count against the account. Absent (a fork has no secrets, and the job
+            # does not run for forks anyway), the script warns and pulls anonymously.
             - name: Install a ${{ matrix.engine }} engine (Lima VM, user space)
+              env:
+                  DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
+                  DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
               run: .github/scripts/macos-container-engine.sh install ${{ matrix.engine }}
             # A previous job on this machine may have been cancelled or timed out mid-suite. The engine is
             # new, so there is nothing of ours left in it; this catches the suite's temp dirs and, above
