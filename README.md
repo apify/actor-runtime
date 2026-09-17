@@ -9,7 +9,8 @@ runtime itself needs no outbound network access after the first build/push (see
 running them does.
 
 See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
-`storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`).
+`storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`, and `unsupported.md` for the platform
+behavior it deliberately leaves out).
 
 ## Quick start
 
