@@ -61,6 +61,7 @@ fetch() {
 
 # verify <file> <expected-sha256>
 verify() {
+	[ -n "$2" ] || die "No published checksum found for $1 - the release's checksum list does not name this asset."
 	local actual
 	actual=$(shasum -a 256 "$1" | cut -d' ' -f1)
 	[ "$actual" = "$2" ] || die "Checksum mismatch for $1: expected $2, got $actual"
@@ -95,7 +96,9 @@ engine_install() {
 	local buildx_asset="buildx-$BUILDX_VERSION.darwin-arm64"
 	local buildx_base="https://github.com/docker/buildx/releases/download/$BUILDX_VERSION"
 	fetch "$buildx_base/$buildx_asset" "$dl/$buildx_asset"
-	fetch "$buildx_base/checksums.txt" "$dl/buildx-checksums.txt"
+	# `checksums-signed.txt`, not `checksums.txt`: buildx code-signs its darwin and windows binaries after
+	# the main list is written, so only the signed list names them.
+	fetch "$buildx_base/checksums-signed.txt" "$dl/buildx-checksums.txt"
 	verify "$dl/$buildx_asset" "$(sha_for "$dl/buildx-checksums.txt" "$buildx_asset")"
 	command install -m 0755 "$dl/$buildx_asset" "$DOCKER_CONFIG/cli-plugins/docker-buildx"
 	echo "::endgroup::"
