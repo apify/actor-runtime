@@ -54,6 +54,7 @@
         - v2/actors/:actorId/builds
         - v2/actors/:actorId/builds/default
         - v2/actors/:actorId/runs
+        - v2/actors/:actorId/runs/last, and every sub-path under it (see "Last-run shortcuts" below)
         - v2/actors/:actorId/versions
         - v2/actors/:actorId/versions/:versionNumber
     - Builds
@@ -121,6 +122,58 @@
       `404`.
 - All endpoints from the specification that do not have implementation must return response `501 Not Implemented`
 - All endpoints not present in specification must return `404 Not Found` - **except** the `/actor-runtime/*`
+
+# Last-run shortcuts (`v2/actors/:actorId/runs/last`)
+
+- `v2/actors/:actorId/runs/last` and every sub-path under it - `/log`, `/dataset/*`, `/key-value-store/*`,
+  `/request-queue/*`, `/abort`, `/reboot`, `/metamorph` - resolve the Actor (the same id / name /
+  `username~name` forms as everywhere), pick the caller's newest run of it by `startedAt`, and then answer
+  exactly as the same request against that run's own endpoint would: `GET .../runs/last` is
+  `GET v2/actor-runs/:runId`, `.../runs/last/dataset/items` is `v2/datasets/:defaultDatasetId/items`,
+  `.../runs/last/key-value-store/records/:key` is `v2/key-value-stores/:defaultKeyValueStoreId/records/:key`,
+  `.../runs/last/request-queue/...` is `v2/request-queues/:defaultRequestQueueId/...`, `.../runs/last/log` is
+  `v2/logs/:runId`, and `POST .../runs/last/abort` (`/reboot`, `/metamorph`) is `POST v2/actor-runs/:runId/abort`
+  (`/reboot`, `/metamorph`) - for every HTTP method the target accepts, with the request body and the query
+  string carried over unchanged. This matches the platform, where these are internal re-dispatches onto the
+  run routes (apify-core's `routeToLastRunRoutes`), not separate implementations. Only the sub-paths listed
+  here exist; anything else under `runs/last` is `404` `not-found`, even a real run endpoint the platform
+  has no last-run form for (`/resurrect`). The bare form is `GET`-only, like the platform's
+  `v2/actors/:actorId/runs/:runId` it is served from - any other method is `404` `not-found`, never a
+  shortcut to `DELETE v2/actor-runs/:runId`.
+- `?status=` and `?origin=` narrow the pick, with the platform's own vocabularies: `status` is one of
+  `READY`, `RUNNING`, `SUCCEEDED`, `FAILED`, `TIMING-OUT`, `TIMED-OUT`, `ABORTING`, `ABORTED`; `origin` one
+  of `DEVELOPMENT`, `WEB`, `API`, `SCHEDULER`, `TEST`, `WEBHOOK`, `ACTOR`, `CLI`, `STANDBY`, `CI`, `MCP`,
+  `APIFY_AI`. Any other value (or a repeated parameter) is `400` `invalid-request`, decided before the Actor
+  is looked up. A valid value no local run has (every run this runtime starts is origin `API`; `TIMING-OUT`
+  never occurs here) simply finds no run. Both parameters stay in the query string handed to the target
+  route, which ignores them - as on the platform.
+- Errors, in the order they are decided: an unknown Actor is `404` `record-not-found`; then no matching run
+  is `404` `record-not-found`; then a sub-path with no last-run form (above) is `404` `not-found`; then the
+  target route answers, its own errors included - `501` `not-implemented` where the target itself is `501`
+  here (`.../runs/last/key-value-store/records`, `.../runs/last/metamorph`), `403` `job-finished` for
+  `/reboot` on a finished run, `record-not-found` for a record key the run's store does not have, and so on.
+- `v2/actor-tasks/:taskId/runs/last*` (tasks are not emulated) and the legacy `v2/acts/...` alias are not
+  implemented (`unsupported.md`).
+
+## Source consistency with the upstream fallback
+
+The Actor decides where a `runs/last` request is answered, as a whole - the pick, the run's storages and its
+log are never split between this runtime and the platform:
+
+- **An Actor that exists locally pins the request to this runtime.** Its newest run, storages and log are
+  local, and every miss decided after the Actor was found - no run yet, no run in the requested status, no
+  such record key, a `404`/`501` sub-path - is the local error, with no relay and no marker headers,
+  whatever the two toggles below say. The platform cannot know a local run's id, so a relay could never
+  answer about the resource the caller meant; it could only forward the token and answer about some
+  unrelated platform object.
+- **An Actor unknown here is a `record-not-found` miss for the whole request.** With
+  `fallbackNotFoundEnabled` on, the caller's _original_ request - `v2/actors/:actorId/runs/last/...`, method,
+  body and query string intact, never a rewritten run or storage URL - is relayed once, and the platform
+  resolves the Actor, its last run and the sub-resource itself; nothing local is consulted for any of them.
+  With the toggle off, or on any non-`2xx` from the platform, the local `404` `record-not-found` stands
+  (the fail-closed guarantee below). `fallbackUnimplementedEnabled` never applies to this miss.
+- A `400` `invalid-request` for a bad `?status=`/`?origin=` is decided before the Actor is looked up and is
+  never relayed, for a local and an unknown Actor alike.
 
 # Actor runtime API
 
@@ -304,6 +357,10 @@ This runtime emulates that observable experience on demand:
   different or runtime-internal credential, and never sent at all for a request this runtime didn't
   authenticate. Enabling either toggle therefore means the caller's own Apify token reaches the
   configured `upstreamBaseUrl` on every eligible request; this is the risk being opted into.
+- **Never splits one request between the two sources**: a request whose identity this runtime has already
+  resolved locally never relays, whatever it misses on afterwards - see "Source consistency with the
+  upstream fallback" under "Last-run shortcuts" above, the one route family where a single request
+  resolves several records in turn.
 - **Never enriches a call that already succeeds locally**: a collection/list endpoint (e.g.
   `GET /v2/datasets`) that already returns `200` from local data never consults either toggle and never
   gains platform objects. Fallback only ever resolves an otherwise-failing request; it does not make a

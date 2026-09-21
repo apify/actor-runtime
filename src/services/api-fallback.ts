@@ -19,6 +19,13 @@ import type { Request, Response } from 'express';
 
 import { upstreamApiBaseUrl } from './identity-resolution.js';
 
+declare module 'express-serve-static-core' {
+	interface Request {
+		/** Set only by `pinRequestToLocal` below; read only by `attemptFallback`. */
+		pinnedToLocal?: true;
+	}
+}
+
 export interface ApiFallbackState {
 	fallbackUnimplementedEnabled: boolean;
 	fallbackNotFoundEnabled: boolean;
@@ -46,6 +53,21 @@ export function setApiFallbackState(patch: Partial<ApiFallbackState>): ApiFallba
  * `resetUsersForTests` convention. Never call this from runtime code. */
 export function resetApiFallbackStateForTests(): void {
 	state = defaultState();
+}
+
+/**
+ * Pins `req` to this runtime for the rest of its life: from here on `attemptFallback` declines it,
+ * whatever local miss it later produces and whatever the toggles say. For a request whose *identity*
+ * this runtime has already resolved locally - `api.md`'s source-consistency rule for the last-run
+ * shortcuts (`api/routes/last-run.ts`), where the Actor is resolved first and everything decided after
+ * it (the newest run, its storages, its log) must then come from the same place. The platform cannot
+ * know a local run's id, so relaying a later miss on such a request (no run yet, no such record key, an
+ * unimplemented sub-path) could never answer about the resource the caller meant - it could only forward
+ * the token and answer about some unrelated platform object. Never unset: nothing that happens later
+ * in the request can make its source undecided again.
+ */
+export function pinRequestToLocal(req: Request): void {
+	req.pinnedToLocal = true;
 }
 
 /** No retries, and short enough that a hanging upstream never leaves the caller waiting indefinitely -
@@ -122,8 +144,10 @@ export interface LocalError {
  * never eligible, or eligible but abandoned - either way the original local error is still the caller's
  * to send.
  *
- * Eligibility, in order: the local error's `type` must map to a trigger (above) and that trigger's
- * toggle must be on; the request must be under `/v2/*`, excluding `/v2/actor-runtime/*`; the request
+ * Eligibility, in order: the request must not be pinned to this runtime (`pinRequestToLocal` above -
+ * its source was decided locally before the miss happened); the local error's `type` must map to a
+ * trigger (above) and that trigger's toggle must be on; the request must be under `/v2/*`, excluding
+ * `/v2/actor-runtime/*`; the request
  * must be authenticated (`req.user` - every `/v2/*` request, off-spec paths included, passes `auth()`
  * before reaching either seam, so this only ever fails for a request this runtime never authenticated at
  * all, e.g. one outside `/v2` entirely). All HTTP methods are eligible once these hold, writes included.
@@ -154,6 +178,7 @@ export interface LocalError {
  */
 export async function attemptFallback(req: Request, res: Response, localError: LocalError): Promise<boolean> {
 	if (res.headersSent) return false;
+	if (req.pinnedToLocal) return false;
 
 	const trigger = triggerForErrorType(localError.type);
 	if (!trigger) return false;

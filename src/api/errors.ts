@@ -22,6 +22,17 @@ export function invalidRequest(message: string): ApiError {
 }
 
 /**
+ * The same `404` `not-found` `server.ts`'s catch-all answers for a path no router matched at all
+ * (`api.md`'s "501 vs 404"), for the one route that matches a whole path *family* and has to make that
+ * call itself for a sub-path the Apify API has no endpoint at (`routes/last-run.ts`). Deliberately not
+ * `record-not-found`: nothing was looked up and missed, the URL itself names no endpoint - and the two
+ * are gated by different fallback toggles.
+ */
+export function endpointNotFound(message: string): ApiError {
+	return new ApiError(404, 'not-found', message);
+}
+
+/**
  * Matches the real Apify platform exactly: `DELETE /v2/actor-runs/:runId` on a non-terminal run is
  * rejected rather than aborted-then-deleted (the public API answers 400 `cannot-remove-running-run`),
  * so this runtime does the same instead of silently leaking the run's container.
