@@ -85,11 +85,11 @@ export function createApiServer(deps: ApiServerDeps): Express {
 	mountActors(v2, deps);
 	mountBuilds(v2, deps);
 	mountRuns(v2, deps);
-	mountDatasets(v2);
+	mountDatasets(v2, deps);
 	mountKeyValueStores(v2);
 	mountRequestQueues(v2);
 	mountLogs(v2);
-	mountRunStorageAliases(v2);
+	mountRunStorageAliases(v2, deps);
 
 	app.use('/v2', v2);
 

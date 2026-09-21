@@ -3,10 +3,18 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
-import { cannotRemoveRunningRun, jobAlreadyFinished, recordNotFound } from '../errors.js';
-import { h, paginationParams, queryBoolean } from '../handler.js';
+import {
+	cannotChargeApifyEvent,
+	cannotChargeNonPayPerEventActor,
+	cannotRemoveRunningRun,
+	invalidRequest,
+	jobAlreadyFinished,
+	recordNotFound,
+} from '../errors.js';
+import { h, jsonBody, paginationParams, queryBoolean } from '../handler.js';
 import { abortRun, deleteRun, getOwnedRun, listOwnedRuns } from '../../services/runs.js';
 import { rebootRun } from '../../services/migrations.js';
+import { chargeEvent, MAX_CHARGE_COUNT } from '../../services/charging.js';
 import { isTerminalJobStatus } from '../../services/job-status.js';
 import { runDto } from '../dto/actors.js';
 import type { ApiServerDeps } from '../server.js';
@@ -78,5 +86,43 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actor-runs/:runId/log',
 		h(async (req, res) => serveLog(req, res, req.params.runId as string)),
+	);
+
+	// The platform's pay-per-event charge endpoint (`api.md`'s "Pay-per-event charging"), the call both
+	// SDKs' `Actor.charge()` and `apify actor charge` make. Body `{ eventName, count? }` plus the
+	// `idempotency-key` header the platform requires (apify-client always sends one). Owner-scoped like
+	// every other run route; the platform additionally insists on the run's own scoped token, which this
+	// runtime has no equivalent of (every run shares its owner's token).
+	router.post(
+		'/actor-runs/:runId/charge',
+		h(async (req, res) => {
+			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
+			if (!run) throw recordNotFound();
+
+			const body = jsonBody<{ eventName?: unknown; count?: unknown }>(req);
+			if (typeof body.eventName !== 'string' || body.eventName === '') {
+				throw invalidRequest('"eventName" must be a non-empty string');
+			}
+			const count = body.count ?? 1;
+			if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > MAX_CHARGE_COUNT) {
+				throw invalidRequest(`"count" must be an integer between 1 and ${MAX_CHARGE_COUNT}`);
+			}
+			const idempotencyKey = req.header('idempotency-key');
+			if (!idempotencyKey) throw invalidRequest('The "idempotency-key" header is required');
+
+			const result = await chargeEvent(deps.driver, run, { eventName: body.eventName, count, idempotencyKey });
+			switch (result.kind) {
+				case 'apify-event':
+					throw cannotChargeApifyEvent(body.eventName);
+				case 'not-pay-per-event':
+					throw cannotChargeNonPayPerEventActor();
+				case 'unknown-event':
+					throw recordNotFound(`Pricing for the event ${body.eventName}`);
+				case 'charged':
+				case 'replayed':
+					// The platform answers a bare `{}` here, not a `{ data }` envelope (`api.md`).
+					res.status(result.status).json({});
+			}
+		}),
 	);
 }

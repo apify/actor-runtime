@@ -17,7 +17,7 @@
 - `DELETE /v2/actor-builds/:buildId` and `DELETE /v2/actor-runs/:runId` on a **non-terminal** build/run
   are rejected, not aborted-then-deleted: `400` with error type `deleting-unfinished-build` (builds) or
   `cannot-remove-running-run` (runs), matching the Apify platform.
-- Three endpoints are exceptions to the `{data}` envelope:
+- Four endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
     - `GET /v2/datasets/:datasetId/items` (and its `actor-runs/:runId/dataset/items` alias): the body is
@@ -25,6 +25,8 @@
       `x-apify-pagination-*` response headers, matching apify-client-js's pagination handling.
     - `GET /actor-runtime/events/:runId`: a websocket upgrade, not a JSON response at all - see "Actor
       runtime API" below.
+    - `POST /v2/actor-runs/:runId/charge`: a bare `{}` with status `201`, matching the platform - see
+      "Pay-per-event charging" below.
 - `*At` timestamp fields are ISO-8601 strings.
 - Log content matches the Apify platform's log format: every log line starts with an ISO-8601 UTC
   timestamp with millisecond precision followed by a space (`2026-08-31T09:13:25.123Z `), exactly one
@@ -66,6 +68,7 @@
         - v2/actor-runs/:runId
         - v2/actor-runs/:runId/abort
         - v2/actor-runs/:runId/reboot
+        - v2/actor-runs/:runId/charge
         - v2/actor-runs/:runId/log
     - Datasets
         - v2/datasets
@@ -121,6 +124,50 @@
       `404`.
 - All endpoints from the specification that do not have implementation must return response `501 Not Implemented`
 - All endpoints not present in specification must return `404 Not Found` - **except** the `/actor-runtime/*`
+
+# Pay-per-event charging
+
+The platform's pay-per-event (PPE) model is emulated end to end (`actor-driver.md`'s "Pay-per-event
+pricing" section describes the behaviour; this section is the API surface).
+
+- **`pricingInfos` on the Actor** - `POST /v2/actors` and `PUT /v2/actors/:actorId` accept the platform's
+  own `pricingInfos` array, and every Actor object returns it (`[]` for an Actor without pricing). The
+  array replaces the stored one whole; `[]` clears it. Only the `FREE` and `PAY_PER_EVENT` models are
+  accepted - any other `pricingModel`, an unknown field, a missing `eventTitle`, an event with neither or
+  both of `eventPriceUsd`/`eventTieredPricingUsd`, a tiered price without a `BRONZE` tier, or a malformed
+  value is `400` `invalid-request` with a message naming the spot, and nothing is stored. `createdAt` and
+  `startedAt` default to the time of the call, `apifyMarginPercentage` to `0`, `eventDescription` to `""`;
+  the stored (and returned) entries always carry all of them. Events with the `apify-` prefix are
+  accepted, so the platform's synthetic events can be priced locally.
+- **`POST /v2/actors/:actorId/runs?maxTotalChargeUsd=<number>`** - the platform's cost cap for a
+  pay-per-event run, stored as `options.maxTotalChargeUsd` and forwarded into the container as
+  `ACTOR_MAX_TOTAL_CHARGE_USD`. `0` means no cap, as on the platform; a negative value is `400`
+  `invalid-request`; omitted means the field is absent from the run object and no cap applies.
+- **The run object** (`GET /v2/actor-runs/:runId`, the list endpoints, and every response that returns
+  a run) carries, on a run of an Actor that had a pricing in effect when the run was created:
+  `pricingInfo` (resolved: the platform's shape, with every tiered event price collapsed to the `BRONZE`
+  tier's `eventPriceUsd`), `chargedEventCounts` (every priced event, `apify-actor-start` pre-charged when
+  priced), `eventUsage` (per event, `{ eventTitle, eventTotalUsd }`), and `chargingStoppedAt` once the
+  cap was reached. A run of an Actor without pricing has none of these fields. The `usage`/`usageUsd`/
+  `usageTotalUsd`/`stats` fields are documented under "Run usage estimate" in `actor-driver.md`.
+- **`POST /v2/actor-runs/:runId/charge`** - the platform's charge endpoint, the call both SDKs'
+  `Actor.charge()` and `apify actor charge` make. Owner-scoped like every run route (the platform's extra
+  "only the run's own token" rule has no local equivalent - every run shares its owner's token).
+    - **Body**: `{ "eventName": string, "count"?: integer }`, `count` defaulting to `1`, in `1..10000000`.
+    - **Header**: `idempotency-key` is required (apify-client always sends one). The same key on the same
+      run within three minutes replays the first call's response without charging again.
+    - **Response**: `201` with a bare `{}` (no `{data}` envelope), matching the platform.
+    - **Errors**, in the platform's order of checks: `400` `invalid-request` (malformed body, missing
+      header), `405` `cannot-charge-apify-event` (an `apify-` prefixed event - the runtime charges those
+      itself), `405` `cannot-charge-non-pay-per-event-actor` (the run's pricing is not `PAY_PER_EVENT`),
+      `404` `record-not-found` (an event the run's pricing does not define, message
+      `Pricing for the event <name>`; also an unknown or foreign run). A refused call changes nothing.
+    - Charging a finished run is allowed, as on the platform; only the cap's abort is skipped for it.
+- **Reaching the cap** - after every charge (and every default-dataset push, `actor-driver.md`), the run's
+  chargeable total is compared with `options.maxTotalChargeUsd`; at or above it, `chargingStoppedAt` is set
+  once, the run's log says why, and a `RUNNING` run is aborted the same way `?gracefully=true` does (the
+  `aborting`/`persistState` frames, then the 30-second window), with the reason as its `statusMessage`.
+  Later charges are still recorded and never trigger a second abort.
 
 # Actor runtime API
 

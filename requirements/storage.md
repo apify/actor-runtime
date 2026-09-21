@@ -61,6 +61,9 @@
           Same rules as `localDebug`: set only through its endpoint or console form, never bumping `modifiedAt`.
         - Neither `localDevFolder`, `localDebug`, `localBrowserView`, nor any build's
           `imageWorkingDirectory` is ever exposed on the public `/v2` API.
+        - `pricingInfos` - **optional**, the platform's own field (`actor-driver.md`'s "Pay-per-event
+          pricing"), set through `POST`/`PUT /v2/actors` or the console's pricing form and always stored
+          fully normalized (`services/pricing.ts`). Unlike the `local*` fields it _is_ exposed on `/v2`.
 - The system stores Actor runs in dedicated key-value store called `__RUNS__`:
     - `key` is the id of the Actor run `runId`
     - `value` is the metadata of the Actor
@@ -74,6 +77,12 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
           Never exposed on the emulated `/v2` run object.
         - `localBrowserView` - **optional**, specific to this one run: `{ interactive, vncHost, vncPort }`,
           the run's browser view once it is up. Absent otherwise. Never exposed on the emulated `/v2` run object.
+        - `pricingInfo`, `chargedEventCounts`, `chargingStoppedAt`, `options.maxTotalChargeUsd` -
+          **optional**, the platform's own pay-per-event fields (`actor-driver.md`), all exposed on `/v2`.
+          `pricingInfo` is resolved once at run creation and never rewritten.
+        - `stats` - the restart bookkeeping, `inputBodyLen`, and - written once the run has ended - the
+          final resource telemetry (`memAvgBytes`, `memMaxBytes`, `memCurrentBytes`, `cpuAvgUsage`,
+          `cpuMaxUsage`, `cpuCurrentUsage`). The live figures are in-memory only while the run is going.
 - The system stores Actor builds in dedicated key-value store called `__BUILDS__`:
     - `key` is the id of the Actor build (`buildId`)
     - `value` is the metadata of the Actor
@@ -120,4 +129,5 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
 5. **`hadMultipleClients` is always `false`; `stats` fields are zeroed** on every storage type.
    Dataset options `fields`/`omit`/`clean`/`skipHidden`/`skipEmpty`/`unwind` are applied after paging,
    so `total` always counts unfiltered items.
-6. One runtime process per data directory; no usage/billing fields.
+6. One runtime process per data directory. A run's usage fields are an estimate covering compute units and
+   pay-per-event charges only (`actor-driver.md`'s "Run usage estimate"); nothing is ever billed.

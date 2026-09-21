@@ -16,6 +16,7 @@ import { resetLogsForTests, stopLogFlusher } from '../../../src/services/logs.js
 import { resetEventsChannelForTests } from '../../../src/services/events-channel.js';
 import { resetMigrationsForTests } from '../../../src/services/migrations.js';
 import { resetGracefulAbortsForTests } from '../../../src/services/runs.js';
+import { resetChargingForTests } from '../../../src/services/charging.js';
 import type {
 	BuildContext,
 	BuildOutcome,
@@ -358,6 +359,8 @@ export interface StartCall {
 	ctx: RunContext;
 	resolve(outcome: RunOutcome): void;
 	reject(error: Error): void;
+	/** The run's own `onSample` callback, so a test can simulate sampler ticks (see `MultiRunDriver.emitSample`). */
+	onSample?: (sample: RunResourceSample) => void;
 }
 
 /** Unlike `deferredRunDriver`/`multiRunDriver`, every `startRun` call gets its own deferred outcome -
@@ -390,9 +393,9 @@ export function restartTrackingDriver(): RestartTrackingDriver {
 			throw new Error('not used by this stub');
 		},
 		async abortBuild() {},
-		async startRun(ctx) {
+		async startRun(ctx, _onLog, onSample) {
 			return new Promise<RunOutcome>((resolve, reject) => {
-				startCalls.push({ ctx, resolve, reject });
+				startCalls.push({ ctx, resolve, reject, onSample });
 				notify();
 			});
 		},
@@ -481,6 +484,7 @@ export async function startTestServer(
 			resetEventsChannelForTests();
 			resetMigrationsForTests();
 			resetGracefulAbortsForTests();
+			resetChargingForTests();
 			await shutdownStorage();
 			resetStorageForTests();
 			resetRegistriesForTests();

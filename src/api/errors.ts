@@ -47,3 +47,23 @@ export function jobAlreadyFinished(): ApiError {
 export function deletingUnfinishedBuild(): ApiError {
 	return new ApiError(400, 'deleting-unfinished-build', 'Deleting unfinished build while running is not allowed');
 }
+
+/** Matches the platform's `cannot-charge-non-pay-per-event-actor` (HTTP 405): `POST .../charge` against a
+ * run whose pricing is not pay-per-event. */
+export function cannotChargeNonPayPerEventActor(): ApiError {
+	return new ApiError(
+		405,
+		'cannot-charge-non-pay-per-event-actor',
+		'You cannot charge events for an Actor that is not paid per event.',
+	);
+}
+
+/** Matches the platform's `cannot-charge-apify-event` (HTTP 405): the `apify-` prefixed synthetic events
+ * are charged by the platform itself, never through the charge endpoint. */
+export function cannotChargeApifyEvent(eventName: string): ApiError {
+	return new ApiError(
+		405,
+		'cannot-charge-apify-event',
+		`Event "${eventName}" is system event and cannot be charged.`,
+	);
+}

@@ -1,6 +1,7 @@
 import { generateId } from '../storage/ids.js';
-import type { ActorRecord, ActorVersionRecord } from '../storage/entities.js';
+import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
+import { validatePricingInfos } from './pricing.js';
 
 /** The tag a build/run resolves to when the caller names none. `api/routes/actors.ts` and
  * `services/runs.ts` both import this instead of declaring their own `'latest'` literal. */
@@ -10,6 +11,8 @@ export interface CreateActorInput {
 	name: string;
 	title?: string;
 	versions?: ActorVersionRecord[];
+	/** Already validated by `services/pricing.ts: validatePricingInfos` - the route does that. */
+	pricingInfos?: ActorPricingInfoRecord[];
 }
 
 export async function createActor(userId: string, input: CreateActorInput): Promise<ActorRecord> {
@@ -23,6 +26,7 @@ export async function createActor(userId: string, input: CreateActorInput): Prom
 		modifiedAt: now,
 		versions: input.versions ?? [],
 		taggedBuilds: {},
+		...(input.pricingInfos ? { pricingInfos: input.pricingInfos } : {}),
 	};
 	await getRegistries().actors.set(record.id, record);
 	return record;
@@ -110,4 +114,20 @@ export function findVersion(actor: ActorRecord, versionNumber: string): ActorVer
 /** Record a successful build against its tag - stock `apify push` polls `taggedBuilds[<tag>]`. */
 export function recordTaggedBuild(actor: ActorRecord, tag: string, buildId: string, buildNumber: string): ActorRecord {
 	return { ...actor, taggedBuilds: { ...actor.taggedBuilds, [tag]: { buildId, buildNumber } } };
+}
+
+export type SetActorPricingResult = { kind: 'ok'; actor: ActorRecord } | { kind: 'invalid'; message: string };
+
+/**
+ * The single validate-and-persist path for an Actor's `pricingInfos`, shared by `PUT /v2/actors/:actorId`
+ * (`api/routes/actors.ts`) and the console's pricing form (`console/server.ts`), so the two surfaces
+ * accept and reject exactly the same inputs. Replaces the stored array whole; an empty array clears it.
+ * Goes through `updateActor` deliberately - unlike the `local*` toggles, pricing is a real Actor field the
+ * platform itself exposes, so bumping `modifiedAt` is right.
+ */
+export async function setActorPricingInfos(actor: ActorRecord, raw: unknown): Promise<SetActorPricingResult> {
+	const result = validatePricingInfos(raw);
+	if (result.kind === 'invalid') return result;
+	const updated = await updateActor(actor.id, (current) => ({ ...current, pricingInfos: result.pricingInfos }));
+	return { kind: 'ok', actor: updated ?? { ...actor, pricingInfos: result.pricingInfos } };
 }

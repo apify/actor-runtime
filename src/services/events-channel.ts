@@ -20,8 +20,27 @@ interface RunEventsState {
 	sampleCount: number;
 	cpuUsageSum: number;
 	cpuUsageMax: number;
+	cpuUsageCurrent: number;
 	memoryUsageSum: number;
+	/** The observed peak - unlike the `systemInfo` frame's `memMaxBytes`, which is the configured limit. */
+	memoryUsageMax: number;
+	memoryUsageCurrent: number;
 	terminal: boolean;
+}
+
+/**
+ * The running figures behind a run's `systemInfo` frames, in the platform's `Run.stats` vocabulary
+ * (`actor-driver.md`'s "Run usage estimate"). Read live by `api/dto/actors.ts: runDto` while the run is
+ * going, and copied onto the run record once it ends (`services/runs.ts`), since this state is in-memory
+ * only. `memMaxBytes` here is the observed peak, as on the platform's run object.
+ */
+export interface RunTelemetrySnapshot {
+	memAvgBytes: number;
+	memMaxBytes: number;
+	memCurrentBytes: number;
+	cpuAvgUsage: number;
+	cpuMaxUsage: number;
+	cpuCurrentUsage: number;
 }
 
 const live = new Map<string, RunEventsState>();
@@ -34,7 +53,10 @@ function getOrCreate(runId: string): RunEventsState {
 			sampleCount: 0,
 			cpuUsageSum: 0,
 			cpuUsageMax: 0,
+			cpuUsageCurrent: 0,
 			memoryUsageSum: 0,
+			memoryUsageMax: 0,
+			memoryUsageCurrent: 0,
 			terminal: false,
 		};
 		live.set(runId, state);
@@ -57,7 +79,10 @@ export function publishSystemInfo(runId: string, sample: RunResourceSample, gran
 	state.sampleCount += 1;
 	state.cpuUsageSum += sample.cpuPercentOfOneCore;
 	state.cpuUsageMax = Math.max(state.cpuUsageMax, sample.cpuPercentOfOneCore);
+	state.cpuUsageCurrent = sample.cpuPercentOfOneCore;
 	state.memoryUsageSum += sample.memoryBytes;
+	state.memoryUsageMax = Math.max(state.memoryUsageMax, sample.memoryBytes);
+	state.memoryUsageCurrent = sample.memoryBytes;
 
 	const grantedCores = dedicatedCpusFor(grant.memoryMbytes);
 	const usedCores = sample.cpuPercentOfOneCore / 100;
@@ -74,6 +99,22 @@ export function publishSystemInfo(runId: string, sample: RunResourceSample, gran
 		createdAt: sample.at.toISOString(),
 	};
 	broadcast(state, JSON.stringify({ name: 'systemInfo', data: payload }));
+}
+
+/** The run's telemetry so far, or `undefined` for a run that has not produced a single sample (never
+ * started a container, or a driver without a sampler) - there are no figures to report then, and a
+ * zero-filled snapshot would be indistinguishable from a genuinely idle run. */
+export function getRunTelemetry(runId: string): RunTelemetrySnapshot | undefined {
+	const state = live.get(runId);
+	if (!state || state.sampleCount === 0) return undefined;
+	return {
+		memAvgBytes: state.memoryUsageSum / state.sampleCount,
+		memMaxBytes: state.memoryUsageMax,
+		memCurrentBytes: state.memoryUsageCurrent,
+		cpuAvgUsage: state.cpuUsageSum / state.sampleCount,
+		cpuMaxUsage: state.cpuUsageMax,
+		cpuCurrentUsage: state.cpuUsageCurrent,
+	};
 }
 
 /** Publishes `{"name":"aborting","data":{}}` - both SDKs define this event as carrying no data. */

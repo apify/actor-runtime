@@ -6,10 +6,10 @@
 - The console has no login of its own, so with multiple users it lists and shows every user's objects
   rather than scoping to one - the API's own endpoints stay strictly scoped to the calling token's user
   (`storage.md`'s "Users" section).
-- The console is unauthenticated. Every route is a read except the console's only five writes: the
-  dev-folder form, the debug-mode form, the browser-view form, the run detail view's Migrate button, and
-  the Settings form (all below).
-- All five of those writes reject a submission that identifies itself as cross-site (via the
+- The console is unauthenticated. Every route is a read except the console's only six writes: the
+  pricing form, the dev-folder form, the debug-mode form, the browser-view form, the run detail view's
+  Migrate button, and the Settings form (all below).
+- All six of those writes reject a submission that identifies itself as cross-site (via the
   `Sec-Fetch-Site` header) with a plain `403`; a submission that does not is unaffected.
 - There are three types of objects: key-value store, dataset, request queue.
     - For each object type there must be exactly one widget for inspection.
@@ -44,6 +44,28 @@
   link to its viewer page (below). Absent for other runs; never in the emulated `/v2` run object.
 - Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself.
 - The console accepts the real Apify Console's URL shapes (as printed by stock apify-cli, e.g. `/actors/:actorId/runs/:runId`, `/storage/datasets/:id`) via redirects to its own pages.
+
+## Pricing form (Actor detail view)
+
+- The Actor detail view shows the pricing in effect now (`actor-driver.md`'s "Pay-per-event pricing"):
+  that the Actor is free, or the pricing model and, for pay-per-event, one row per event with its title,
+  the price the runtime resolves it to (the `BRONZE` tier's for a tiered price, and the view says so) and
+  whether it is one-time.
+- A form on the same view carries the whole `pricingInfos` array as JSON, prefilled with the stored value.
+  Submitting it replaces the Actor's pricing with exactly `PUT /v2/actors/:actorId`'s behaviour and
+  validation (`api.md`): for any given array, the form and the API produce the same outcome. `[]` (or an
+  empty field) makes the Actor free again.
+- A submission that is not valid JSON, or fails the shared validation, redirects back to the same detail
+  page with the message shown inline, and the stored pricing is unchanged.
+
+## Usage and cost (run detail view)
+
+- The run detail view shows the run's usage estimate (`actor-driver.md`'s "Run usage estimate"): run time,
+  compute units and their cost, the sampled memory and CPU figures, and `usageTotalUsd`; for a pay-per-event
+  run also the events' total, the cap (and when it was reached), and a table of every priced event with its
+  charged count, unit price and total. The view states that the figures are an estimate priced at the lowest
+  paid tier and which usage is not metered.
+- The runs list has a `usageTotalUsd` column with the same figure the run object reports.
 
 ## Local dev-folder registration form (Actor detail view)
 

@@ -1,4 +1,7 @@
 import type { ActorRecord, BuildRecord, RunRecord } from '../../storage/entities.js';
+import { getRunTelemetry } from '../../services/events-channel.js';
+import { isTerminalJobStatus } from '../../services/job-status.js';
+import { computeRunUsage } from '../../services/run-usage.js';
 
 /** Matches `services/actors.ts`'s `DEFAULT_BUILD_TAG` - backfilled here only for run records that
  * predate `options.build` (directly-seeded test fixtures); every real run always has it set already. */
@@ -21,6 +24,8 @@ export function actorDto(actor: ActorRecord, username: string) {
 		versions: actor.versions,
 		defaultRunOptions: { build: 'latest', timeoutSecs: 300, memoryMbytes: 1024 },
 		deploymentKey: actor.id,
+		// The platform's own field, verbatim as stored (already normalized by `services/pricing.ts`).
+		pricingInfos: actor.pricingInfos ?? [],
 		taggedBuilds: Object.fromEntries(
 			Object.entries(actor.taggedBuilds).map(([tag, info]) => [
 				tag,
@@ -50,6 +55,8 @@ export function buildDto(build: BuildRecord) {
 }
 
 export function runDto(run: RunRecord) {
+	// Live figures for a run still going, the persisted ones once it has ended (`services/run-usage.ts`).
+	const usage = computeRunUsage(run, isTerminalJobStatus(run.status) ? undefined : getRunTelemetry(run.id));
 	return {
 		id: run.id,
 		userId: run.userId,
@@ -74,16 +81,26 @@ export function runDto(run: RunRecord) {
 			memoryMbytes: run.options.memoryMbytes,
 			timeoutSecs: run.options.timeoutSecs,
 			diskMbytes: run.options.diskMbytes ?? run.options.memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
+			// Only when a cap was given - the platform omits the field on a run without one.
+			...(run.options.maxTotalChargeUsd !== undefined
+				? { maxTotalChargeUsd: run.options.maxTotalChargeUsd }
+				: {}),
 		},
 		generalAccess: run.generalAccess ?? 'FOLLOW_USER_SETTING',
 		meta: run.meta,
-		// The platform's restart-bookkeeping stats (see `RunRecord.stats`); zeros backfill old fixtures.
-		stats: {
-			migrationCount: run.stats?.migrationCount ?? 0,
-			rebootCount: run.stats?.rebootCount ?? 0,
-			restartCount: run.stats?.restartCount ?? 0,
-			resurrectCount: run.stats?.resurrectCount ?? 0,
-		},
+		// The platform's `stats`: restart bookkeeping plus the usage estimate's figures (`actor-driver.md`).
+		stats: usage.stats,
+		// The cost estimate (`actor-driver.md`'s "Run usage estimate") - compute units only, priced at the
+		// lowest paid subscription tier, plus the pay-per-event totals on a PAY_PER_EVENT run.
+		usage: usage.usage,
+		usageUsd: usage.usageUsd,
+		usageTotalUsd: usage.usageTotalUsd,
+		...(usage.eventUsage ? { eventUsage: usage.eventUsage } : {}),
+		// Pay-per-event state the SDKs' charging managers read (`services/charging.ts`); absent on a run of
+		// an Actor without pricing, exactly like the platform's run object.
+		...(run.pricingInfo ? { pricingInfo: run.pricingInfo } : {}),
+		...(run.chargedEventCounts ? { chargedEventCounts: run.chargedEventCounts } : {}),
+		...(run.chargingStoppedAt ? { chargingStoppedAt: run.chargingStoppedAt } : {}),
 		statusMessage: run.statusMessage,
 		containerUrl: undefined,
 	};

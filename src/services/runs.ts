@@ -21,6 +21,9 @@ import { browserViewLogLine, describeBrowserViewerStartFailure } from './browser
 import { dedicatedCpusFor } from '../resources.js';
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
 import { formatRuntimeLogLines, type RuntimeLogLine } from '../runtime-log.js';
+import { getRunTelemetry } from './events-channel.js';
+import { initialChargedEventCounts, resolveRunPricingInfo } from './pricing.js';
+import { registerDefaultDatasetForCharging, unregisterDefaultDatasetForCharging } from './charging.js';
 
 const DEFAULT_MEMORY_MBYTES = 1024;
 const DEFAULT_TIMEOUT_SECS = 300;
@@ -71,6 +74,8 @@ export interface StartRunOptions {
 	build?: string;
 	/** `false` skips the registered dev folder for this run only (`?devFolder=false`). */
 	devFolder?: boolean;
+	/** The caller's cost cap for a pay-per-event run (`?maxTotalChargeUsd=`); absent means no cap. */
+	maxTotalChargeUsd?: number;
 	proxyPassword?: string;
 	apiBaseUrl: string;
 	token: string;
@@ -132,6 +137,13 @@ function buildEnv(
 		APIFY_DEDICATED_CPUS: String(dedicatedCpusFor(run.options.memoryMbytes)),
 	};
 	if (options.proxyPassword) env.APIFY_PROXY_PASSWORD = options.proxyPassword;
+	// The one pay-per-event var the platform sets that the SDKs read at startup. Deliberately NOT
+	// `APIFY_ACTOR_PRICING_INFO`/`APIFY_CHARGED_ACTOR_EVENT_COUNTS`: with both present the SDKs skip their
+	// `GET /v2/actor-runs/:runId` fetch, and after a migration restart (same env, new container) the
+	// counts baked in at run start would be stale. Absent, both SDKs fetch the run object, always fresh.
+	if (run.options.maxTotalChargeUsd !== undefined) {
+		env.ACTOR_MAX_TOTAL_CHARGE_USD = String(run.options.maxTotalChargeUsd);
+	}
 	return env;
 }
 
@@ -155,6 +167,9 @@ export async function startRun(
 	}
 
 	const memoryMbytes = options.memoryMbytes ?? DEFAULT_MEMORY_MBYTES;
+	// Resolved once, here: a pricing change on the Actor never reprices a run already created.
+	const pricingInfo = resolveRunPricingInfo(actor.pricingInfos);
+	const chargedEventCounts = initialChargedEventCounts(pricingInfo, memoryMbytes);
 	const record: RunRecord = {
 		id: generateId(),
 		userId: actor.userId,
@@ -171,16 +186,26 @@ export async function startRun(
 			memoryMbytes,
 			timeoutSecs: options.timeoutSecs ?? DEFAULT_TIMEOUT_SECS,
 			diskMbytes: memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
+			...(options.maxTotalChargeUsd !== undefined ? { maxTotalChargeUsd: options.maxTotalChargeUsd } : {}),
 		},
 		meta: { origin: 'API' },
 		// Same zeros the platform writes at run creation (see `RunRecord.stats`).
-		stats: { migrationCount: 0, rebootCount: 0, restartCount: 0, resurrectCount: 0 },
+		stats: {
+			migrationCount: 0,
+			rebootCount: 0,
+			restartCount: 0,
+			resurrectCount: 0,
+			inputBodyLen: options.input?.body.length ?? 0,
+		},
+		...(pricingInfo ? { pricingInfo } : {}),
+		...(chargedEventCounts ? { chargedEventCounts } : {}),
 		// The real platform's run-creation default (`RUN_GENERAL_ACCESS.FOLLOW_USER_SETTING` from the
 		// public `@apify/consts`) - this runtime has no per-user "make runs public by default" setting to
 		// follow, so every run gets this fixed default.
 		generalAccess: 'FOLLOW_USER_SETTING',
 	};
 	await runs.set(record.id, record);
+	registerDefaultDatasetForCharging(record);
 
 	void runInBackground(driver, actor, record, options).catch(async (error: unknown) => {
 		// Every *expected* failure mode inside `runInBackground` is already caught internally and mapped
@@ -425,6 +450,10 @@ export async function runInBackground(
 		if (cancelGracefulAbort(record.id)) {
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
+		// The telemetry accumulators are in-memory only; the finished run keeps its final figures on the
+		// record so `GET /v2/actor-runs/:runId` still reports them after a restart (`services/run-usage.ts`).
+		await persistRunTelemetry(record.id);
+		unregisterDefaultDatasetForCharging(record);
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
 		clearRunRestartState(record.id);
@@ -433,6 +462,17 @@ export async function runInBackground(
 		// exact flag, mirroring `api/routes/logs.ts`'s `?stream=true` handling of `isLogTerminal`).
 		markEventsTerminal(record.id);
 	}
+}
+
+/** Copies the run's in-memory telemetry (`events-channel.ts`) onto its record's `stats`. A plain update,
+ * not a status transition: the run is already terminal by the time this runs, and this must never touch
+ * its status. A run that never produced a sample has nothing to persist. */
+async function persistRunTelemetry(runId: string): Promise<void> {
+	const telemetry = getRunTelemetry(runId);
+	if (!telemetry) return;
+	await getRegistries().runs.update(runId, (current) =>
+		current ? { ...current, stats: { ...current.stats, ...telemetry } } : current,
+	);
 }
 
 /** Clamped to at least 1s so a run migrated at the edge of its budget still starts and times out. */
@@ -485,12 +525,20 @@ function cancelGracefulAbort(runId: string): boolean {
  * the transition: a preceding `get()` could observe a stale status, and only the hook can tell "this call
  * wrote ABORTING" apart from "it was already ABORTING".
  */
-export async function abortRun(driver: Driver, run: RunRecord, gracefully = false): Promise<RunRecord | null> {
+export async function abortRun(
+	driver: Driver,
+	run: RunRecord,
+	gracefully = false,
+	statusMessage?: string,
+): Promise<RunRecord | null> {
 	if (isTerminalJobStatus(run.status)) return run;
 	const { runs } = getRegistries();
 	let wasRunning = false;
 	let alreadyAborting = false;
-	const aborting = await transitionJobStatus(runs, run.id, 'ABORTING', {}, (current) => {
+	// `statusMessage` names the reason for a runtime-initiated abort (the pay-per-event cost cap,
+	// `services/charging.ts`); a caller-requested abort carries none, as on the platform.
+	const patch: Partial<RunRecord> = statusMessage === undefined ? {} : { statusMessage };
+	const aborting = await transitionJobStatus(runs, run.id, 'ABORTING', patch, (current) => {
 		wasRunning = current?.status === 'RUNNING';
 		alreadyAborting = current?.status === 'ABORTING';
 	});
