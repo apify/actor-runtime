@@ -39,42 +39,11 @@
 
 # Storage id encoding
 
-- `:datasetId`, `:storeId` and `:queueId` accept the storage's real id, or a **named reference** in
-  exactly the forms the Apify platform accepts (apify-core's `parseResourceName` and its
-  `ResourceIdGetter` middleware), on every route that takes the id - reads and writes alike:
-    - `username~name` - the storage named `name` owned by that user. Usernames match
-      case-insensitively.
-    - `userId~name` - a prefix of exactly 17 alphanumeric characters is a user **id**, never a
-      username (the platform forbids usernames of that shape so this is unambiguous).
-    - `~name` - an empty prefix means the caller's own storage of that name.
-    - `username/name` - the platform's canonical separator is `/`; apify-client rewrites it to `~`
-      before sending because it cannot travel in a path segment, and the runtime accepts it too when
-      it arrives percent-encoded (`%2F`). `/` is checked before `~`, like the platform.
-- **A bare name without a separator is an id, never a name**, exactly like the platform:
-  `GET /v2/datasets/my-dataset` is `404` `record-not-found` unless a storage with the _id_
-  `my-dataset` exists. This is deliberately unlike `:actorId` above, where the platform (and this
-  runtime) also accept the plain Actor name.
-- Names match **case-insensitively**, and are unique per user and storage type case-insensitively,
-  matching the platform's `nameLowerCase` rule: `POST /v2/datasets?name=Foo` when the caller already
-  has a dataset `foo` returns that existing dataset (with its original casing) instead of minting a
-  second one, and `~Foo`, `~foo` and `~FOO` all address it. Types never cross - `~x` on
-  `/v2/key-value-stores` never resolves to a dataset named `x`.
-- **Error responses**:
-    - An empty name (`username~`, `~`, `userId~`) is `400` `invalid-request` with the platform's own
-      message, `Resource name parameter cannot be empty`. Never eligible for the upstream fallback
-      below (`invalid-request` is not a fallback trigger).
-    - Every other unresolvable reference is `404` `record-not-found`: a name the caller has no storage
-      of that type under, an unknown username, and - because every API response is a restricted view of
-      the caller's own resources (`storage.md`'s Users section) - any reference whose owner is not the
-      caller, by username or by id, even when that other local user does have a storage of that name.
-      The runtime never reads another user's storages to answer the caller.
-- **Works together with the upstream fallback** ("Upstream fallback" below): that `record-not-found`
-  is the `fallbackNotFoundEnabled` trigger, so with the toggle on, a named reference the runtime
-  cannot satisfy locally - `GET /v2/datasets/apify~some-public-dataset/items`, or the caller's own
-  `~name` that only exists on the platform - is relayed to the platform byte-for-byte (path and query
-  intact), where the platform's own name resolution and access rules decide for the caller's real
-  token. A reference that _does_ resolve locally never consults the upstream, and a relay that fails
-  reproduces the local `record-not-found` unchanged (the fail-closed guarantee below).
+- `:datasetId`, `:storeId` and `:queueId` accept `~name` (the caller's own), `username~name` or
+  `userId~name` in place of the id, on every route; a bare name without a separator is an id, not a name.
+- Names and usernames match case-insensitively; a name is unique per owner and storage type.
+- An empty name is `400` `invalid-request`; anything else that does not resolve - another user's storage
+  included - is `404` `record-not-found`, and is relayed when `fallbackNotFoundEnabled` is on.
 
 # 501 vs 404
 
