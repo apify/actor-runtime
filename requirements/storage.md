@@ -3,7 +3,7 @@
 - All storage contents live on disk under the mounted data directory and survive a runtime restart (`system.md`).
 - **Nothing is ever purged**: opening or reusing a dataset, key-value store, or request queue never deletes existing data, and no environment variable - whether set on the runtime itself or inside an Actor container - can enable purging.
 - **A restart releases dangling request hand-outs immediately**: after a crash-and-restart, requests that were handed out and never resolved become available again at once, with no wall-clock lock expiry to wait out.
-- Every runtime resource id is a 17-character Apify-style id. A storage's human-facing display `name` is metadata, settable via `PUT`, and independent of the id the storage is addressed by.
+- Every runtime resource id is a 17-character Apify-style id. A storage's human-facing display `name` is metadata, settable via `PUT`, and independent of the id the storage is addressed by - but a named storage is _also_ addressable by that name, as `~name`, `username~name` or `userId~name` in place of the id, with the platform's rules (`api.md`'s "Storage id encoding"). Names are unique per owner and storage type **case-insensitively**, like the platform's `nameLowerCase`: a create with a differently-cased existing name returns the existing storage.
 
 ## Request queues
 

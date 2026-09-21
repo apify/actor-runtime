@@ -596,6 +596,100 @@ describe('api-fallback: eligibility, relay, and fail-closed behaviour', () => {
 				await stub.close();
 			}
 		});
+
+		// Storage addressing by name (`api.md`'s "Storage id encoding") and the fallback are designed to
+		// work together: a `username~name` the runtime has no local storage for is a plain
+		// `record-not-found`, so with this toggle on it is relayed byte-for-byte and the *platform* decides
+		// what that reference means for the caller's real token - e.g. someone else's public dataset.
+		describe('storage references by username~name', () => {
+			it("relays another user's `username~name` reference (a local miss) with the URL intact, so the platform resolves the name", async () => {
+				const stub = await startStubUpstream(fixedOkResponse('named-storage-marker'));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const res = await call('get', '/v2/datasets/apify~some-public-dataset/items?clean=true&limit=5');
+					expect(res.status).toBe(200);
+					expect(res.data).toEqual({ fromUpstream: true, marker: 'named-storage-marker' });
+					expect(res.headers['x-actor-runtime-fallback-trigger']).toBe('record-not-found');
+					expect(stub.hitCount()).toBe(1);
+					expect(stub.requests()[0]?.url).toBe(
+						'/v2/datasets/apify~some-public-dataset/items?clean=true&limit=5',
+					);
+
+					// Same for a key-value-store record and a request-queue head - every storage type's
+					// routes resolve the reference the same way.
+					await call('get', '/v2/key-value-stores/apify~some-store/records/OUTPUT');
+					await call('get', '/v2/request-queues/00000000000000009~some-queue/head');
+					expect(stub.requests().map((r) => r.url)).toEqual([
+						'/v2/datasets/apify~some-public-dataset/items?clean=true&limit=5',
+						'/v2/key-value-stores/apify~some-store/records/OUTPUT',
+						'/v2/request-queues/00000000000000009~some-queue/head',
+					]);
+				} finally {
+					await stub.close();
+				}
+			});
+
+			it("relays the caller's own `~name` / `username~name` only when no local storage has that name - a local hit never consults the upstream", async () => {
+				const stub = await startStubUpstream(fixedOkResponse('should-not-be-hit-for-local'));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const me = await server.client.user('me').get();
+					const local = await server.client.datasets().getOrCreate('exists-locally');
+					await server.client.dataset(local.id).pushItems([{ local: true }]);
+
+					const own = await call('get', '/v2/datasets/~exists-locally/items');
+					expect(own.status).toBe(200);
+					expect(own.data).toEqual([{ local: true }]);
+					expect(own.headers['x-actor-runtime-fallback']).toBeUndefined();
+
+					const byUsername = await call('get', `/v2/datasets/${me.username}~exists-locally`);
+					expect(byUsername.status).toBe(200);
+					expect(byUsername.data.data.id).toBe(local.id);
+					expect(byUsername.headers['x-actor-runtime-fallback']).toBeUndefined();
+					expect(stub.hitCount()).toBe(0);
+
+					// The same caller's *missing* name does go upstream - the platform may well have it.
+					const missing = await call('get', '/v2/datasets/~only-on-the-platform');
+					expect(missing.status).toBe(200);
+					expect(missing.headers['x-actor-runtime-fallback-trigger']).toBe('record-not-found');
+					expect(stub.hitCount()).toBe(1);
+					expect(stub.requests()[0]?.url).toBe('/v2/datasets/~only-on-the-platform');
+				} finally {
+					await stub.close();
+				}
+			});
+
+			it("does NOT relay an empty-name reference - that is the platform's own 400 invalid-request, never a fallback trigger", async () => {
+				const stub = await startStubUpstream(fixedOkResponse('should-not-be-hit'));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const res = await call('get', '/v2/datasets/apify~');
+					expect(res.status).toBe(400);
+					expect(res.data.error.type).toBe('invalid-request');
+					expect(res.headers['x-actor-runtime-fallback']).toBeUndefined();
+					expect(stub.hitCount()).toBe(0);
+				} finally {
+					await stub.close();
+				}
+			});
+
+			it('fails closed like any other relay: a non-2xx from the platform for the named reference reproduces the local record-not-found', async () => {
+				const stub = await startStubUpstream(() => ({
+					status: 404,
+					body: { error: { type: 'record-not-found' } },
+				}));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const res = await call('get', '/v2/datasets/apify~nope');
+					expect(res.status).toBe(404);
+					expect(res.data.error.type).toBe('record-not-found');
+					expect(res.headers['x-actor-runtime-fallback']).toBeUndefined();
+					expect(stub.hitCount()).toBe(1);
+				} finally {
+					await stub.close();
+				}
+			});
+		});
 	});
 
 	describe('both toggles on', () => {

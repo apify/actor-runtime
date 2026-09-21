@@ -5,31 +5,43 @@
  * live, because `KeyValueStore` has no `getInfo()` of its own.
  */
 import { generateId } from '../storage/ids.js';
-import type { StorageRecord, StorageType } from '../storage/entities.js';
+import type { StorageRecord, StorageType, UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { openDataset, openKeyValueStore, openRequestQueue } from '../storage/open.js';
 import { closeRequestQueueBuffer } from '../storage/request-queue/registry.js';
 import { KeyedMutex } from '../storage/mutex.js';
+import type { StorageOwnerReference, StorageReference } from './storage-reference.js';
 
 /**
  * Serialises the lookup-then-create critical section in `createStorage` per `user:type:name`, so two
  * concurrent `getOrCreate(name)` calls can never both pass the "not found" check before either has
  * written its record. Unnamed creates never look anything up (a fresh id can never collide), so they
- * skip the mutex entirely.
+ * skip the mutex entirely. Keyed by the *lower-cased* name, since that is what `findOwnedStorageByName`
+ * matches on - `Foo` and `foo` are the same critical section, not two.
  */
 const createByNameMutex = new KeyedMutex();
+
+/** The one place a storage name is normalised for comparison - the platform keeps a `nameLowerCase`
+ * next to every storage's `name` and both its uniqueness index and its `username~name` lookup use
+ * that, never the display casing (apify-core's `ResourceIdGetter.getResourceIdFromName`). */
+function normalizeName(name: string): string {
+	return name.toLowerCase();
+}
 
 /**
  * Idempotent by `name`, matching apify-client-js's `getOrCreate(name)` contract: a bare
  * `POST .../datasets?name=X` relies on the *server* deduplicating by name (the client itself does no
  * dedup - `resource_collection_client.ts:41-49`). When `name` is given and a storage of this type with
- * that name already exists for the user, that existing record is returned unchanged rather than
- * minting a new storage. The lookup-plus-create is serialised per `user:type:name` (see
+ * that name already exists for the user - compared case-insensitively, the platform's own uniqueness
+ * rule (`normalizeName`) - that existing record is returned unchanged, with its original casing, rather
+ * than minting a new storage. The lookup-plus-create is serialised per `user:type:name` (see
  * `createByNameMutex`) so two concurrent calls with the same name can never both mint a record.
  */
 export async function createStorage(userId: string, type: StorageType, name?: string): Promise<StorageRecord> {
 	if (name) {
-		return createByNameMutex.run(`${userId}:${type}:${name}`, () => createStorageRecord(userId, type, name));
+		return createByNameMutex.run(`${userId}:${type}:${normalizeName(name)}`, () =>
+			createStorageRecord(userId, type, name),
+		);
 	}
 	return createStorageRecord(userId, type, undefined);
 }
@@ -81,13 +93,53 @@ export async function getStorageById(id: string, type: StorageType): Promise<Sto
 	return record;
 }
 
+/** Case-insensitive, like the platform (`normalizeName`): `~My-Store` and `~my-store` are the same
+ * storage, and `getOrCreate('My-Store')` after `getOrCreate('my-store')` returns the existing one. */
 export async function findOwnedStorageByName(
 	userId: string,
 	type: StorageType,
 	name: string,
 ): Promise<StorageRecord | null> {
+	const wanted = normalizeName(name);
 	const owned = await listOwnedStorages(userId, type);
-	return owned.find((s) => s.name === name) ?? null;
+	return owned.find((s) => s.name !== undefined && normalizeName(s.name) === wanted) ?? null;
+}
+
+/**
+ * Resolves a parsed `:datasetId`/`:storeId`/`:queueId` reference (`services/storage-reference.ts`) to
+ * the caller's storage record, or `null` - the API layer's `record-not-found`. An id reference is
+ * `getOwnedStorage`; a named one is `findOwnedStorageByName` under the owner the reference names,
+ * with the platform's owner rules (apify-core's `ResourceIdGetter`): `~name` is the caller, a 17-char
+ * alphanumeric prefix is a user id, anything else a username matched case-insensitively.
+ *
+ * Every API response is a restricted view of the caller's own resources (`storage.md`'s Users section),
+ * so an owner that is not the caller - another local user's username or id, a username nobody here
+ * has, the platform's `apify~...` - resolves to `null` without any registry access at all: it can never
+ * name a storage the caller may see, exactly the outcome a real multi-user platform gives for someone
+ * else's private storage. That `null` is also what hands such a reference to the `fallbackNotFoundEnabled`
+ * upstream relay (`services/api-fallback.ts`) unchanged, where the platform decides what `apify~name`
+ * means for the caller's real token - public storages included. Nothing here ever reads another user's
+ * storages to answer the caller.
+ */
+export async function resolveOwnedStorage(
+	user: UserRecord,
+	reference: Exclude<StorageReference, { kind: 'empty-name' }>,
+	type: StorageType,
+): Promise<StorageRecord | null> {
+	if (reference.kind === 'id') return getOwnedStorage(user.id, reference.id, type);
+	if (!isCaller(user, reference.owner)) return null;
+	return findOwnedStorageByName(user.id, type, reference.name);
+}
+
+function isCaller(user: UserRecord, owner: StorageOwnerReference): boolean {
+	switch (owner.by) {
+		case 'self':
+			return true;
+		case 'userId':
+			return owner.userId === user.id;
+		case 'username':
+			return owner.username.toLowerCase() === user.username.toLowerCase();
+	}
 }
 
 export async function touchStorage(id: string): Promise<void> {
