@@ -57,8 +57,7 @@ export async function getActorById(id: string): Promise<ActorRecord | null> {
 	return getRegistries().actors.get(id);
 }
 
-/** Case-insensitive, like the platform's `nameLowerCase` (`normalizeName`), and shared by both forms
- * `resolveOwnedActor` accepts below. */
+/** Case-insensitive, like the platform (`normalizeName`). */
 export async function findOwnedActorByName(userId: string, name: string): Promise<ActorRecord | null> {
 	const wanted = normalizeName(name);
 	const owned = await listOwnedActors(userId);
@@ -66,15 +65,9 @@ export async function findOwnedActorByName(userId: string, name: string): Promis
 }
 
 /**
- * Resolves a parsed `:actorId` reference (`services/resource-reference.ts`) to the caller's Actor, or
- * `null` - the API layer's `record-not-found`. The named forms (`~name`, `username~name`,
- * `userId~name`) work exactly as they do for storages, under the same restricted view
- * (`isCallerOwner`).
- *
- * The one Actor-specific rule, and the only place this differs from `resolveOwnedStorage`: a bare
- * segment with no separator is tried as an id **and then as a name**, because the platform accepts a
- * plain Actor name there too - which is how stock `apify push` finds an existing Actor by name before
- * an id has ever been minted.
+ * The one rule Actors do not share with storages: a bare segment is tried as an id and then as a name,
+ * because the platform accepts a plain Actor name there too - that is how `apify push` finds an
+ * existing Actor before an id has ever been minted.
  */
 export async function resolveOwnedActor(user: UserRecord, reference: ResolvableReference): Promise<ActorRecord | null> {
 	if (reference.kind === 'id') {

@@ -597,10 +597,9 @@ describe('api-fallback: eligibility, relay, and fail-closed behaviour', () => {
 			}
 		});
 
-		// Storage addressing by name (`api.md`'s "Resource id encoding") and the fallback are designed to
-		// work together: a `username~name` the runtime has no local storage for is a plain
-		// `record-not-found`, so with this toggle on it is relayed byte-for-byte and the *platform* decides
-		// what that reference means for the caller's real token - e.g. someone else's public dataset.
+		// A `username~name` with no local storage behind it is a plain `record-not-found`, so the platform
+		// gets to decide what the reference means for the caller's real token - someone else's public
+		// dataset, say.
 		describe('storage references by username~name', () => {
 			it("relays another user's `username~name` reference (a local miss) with the URL intact, so the platform resolves the name", async () => {
 				const stub = await startStubUpstream(fixedOkResponse('named-storage-marker'));

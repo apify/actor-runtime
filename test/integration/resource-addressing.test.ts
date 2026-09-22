@@ -1,11 +1,6 @@
 /**
- * Addressing by name (`api.md`'s "Resource id encoding"): `~name`, `username~name` and `userId~name` in
- * place of the id, for Actors and all three storage types alike, on every route that takes one - with
- * the platform's own rules (apify-core's `ResourceIdGetter`): names and usernames match
- * case-insensitively, an empty name is `400 invalid-request`, and a reference to any owner other than
- * the caller is `404 record-not-found` (the restricted view - see `test/integration/api-fallback.test.ts`
- * for how that same `404` then feeds the upstream relay). A bare segment is an id everywhere except
- * `:actorId`, which also accepts a plain Actor name.
+ * Addressing by name over HTTP, for Actors and all three storage types (`api.md`'s "Resource id
+ * encoding"). How the resulting `404` feeds the upstream relay is covered in `api-fallback.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApifyClient } from 'apify-client';

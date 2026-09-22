@@ -1,8 +1,5 @@
-/**
- * `services/resource-reference.ts` against the platform's own rules (apify-core's `parseResourceName` +
- * `ResourceIdGetter`, `api.md`'s "Resource id encoding") - every form an `:actorId`/`:datasetId`/
- * `:storeId`/`:queueId` segment can take, what each one means, and which owner is the caller.
- */
+/** Every form a resource segment can take, and which owner counts as the caller (`api.md`'s
+ * "Resource id encoding"). */
 import { describe, expect, it } from 'vitest';
 
 import { isCallerOwner, parseResourceReference } from '../../src/services/resource-reference.js';
