@@ -4,6 +4,7 @@ import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
 import { recordNotFound } from '../errors.js';
+import { resolveStorageParam } from '../resolve-reference.js';
 import {
 	h,
 	jsonBody,
@@ -15,14 +16,7 @@ import {
 	queryString,
 } from '../handler.js';
 import { openDataset } from '../../storage/open.js';
-import {
-	createStorage,
-	getOwnedStorage,
-	listOwnedStorages,
-	renameStorage,
-	dropStorage,
-	touchStorage,
-} from '../../services/storages.js';
+import { createStorage, listOwnedStorages, renameStorage, dropStorage, touchStorage } from '../../services/storages.js';
 import { applyDatasetProjection, type DatasetItem } from '../../services/dataset-projection.js';
 import { datasetDto } from '../dto/storages.js';
 import type { StorageRecord } from '../../storage/entities.js';
@@ -137,7 +131,7 @@ export function mountDatasets(router: Router): void {
 	router.put(
 		'/datasets/:datasetId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset');
+			const record = await resolveStorageParam(req, 'datasetId', 'dataset');
 			if (!record) throw recordNotFound();
 			const body = jsonBody<{ name?: string }>(req);
 			const updated = body.name ? await renameStorage(record.id, body.name) : record;
@@ -149,7 +143,7 @@ export function mountDatasets(router: Router): void {
 	router.delete(
 		'/datasets/:datasetId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset');
+			const record = await resolveStorageParam(req, 'datasetId', 'dataset');
 			// Matches the real platform and this API's own documented contract (api.md's response
 			// envelopes section): a missing id 404s with `record-not-found`, the same as every other
 			// resource's DELETE - the public API answers `record-not-found` for a missing storage id on
@@ -161,6 +155,6 @@ export function mountDatasets(router: Router): void {
 	);
 
 	mountDatasetOperations(router, '/datasets/:datasetId', async (req) =>
-		getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset'),
+		resolveStorageParam(req, 'datasetId', 'dataset'),
 	);
 }

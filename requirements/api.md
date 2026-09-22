@@ -34,11 +34,15 @@
   timestamp per line regardless of how the output was chunked when produced. Apify clients' log
   redirection (e.g. `Actor.call` in the SDKs) relies on this prefix to recognize log messages.
 
-# Actor id encoding
+# Resource id encoding
 
-- `:actorId` accepts the real id, the plain Actor `name`, or `username~name` (a literal `/` in a
-  client-supplied identifier is rewritten to `~` by apify-client-js before the request is sent). This
-  is how stock `apify push` finds an existing Actor by name before an id has ever been minted.
+- `:actorId`, `:datasetId`, `:storeId` and `:queueId` accept `~name` (the caller's own),
+  `username~name` or `userId~name` in place of the id, on every route.
+- A bare segment without a separator is an id, except `:actorId`, which also accepts a plain Actor name
+  (what `apify push` looks up before an id exists).
+- Names and usernames match case-insensitively; an empty name is `400` `invalid-request`, and anything
+  else that does not resolve - another user's resource included - is `404` `record-not-found`, relayed
+  when `fallbackNotFoundEnabled` is on.
 
 # 501 vs 404
 

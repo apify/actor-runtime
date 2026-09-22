@@ -574,7 +574,7 @@
 				"name": "actorId",
 				"in": "path",
 				"required": true,
-				"description": "The Actor's id, its plain `name`, or `username~name` - the same forms every other endpoint on this API accepts.",
+				"description": "The Actor's id, its plain `name`, or a `~name` (the caller's own), `username~name` or `userId~name` reference - the same forms every other endpoint on this API accepts. Names and usernames match case-insensitively. An empty name is `400` `invalid-request`; anything else that does not resolve, another user's Actor included, is `404` `record-not-found`.",
 				"schema": {
 					"type": "string"
 				}

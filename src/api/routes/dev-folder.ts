@@ -9,15 +9,15 @@
  * only one of the two mounts ever matches a given request, that `auth()` still runs exactly once per
  * request either way.
  *
- * Canonical body is a JSON string: `'"/abs/path"'` to set, `'""'` to clear (`api.md`). A JSON value that
- * parses but isn't a string is rejected the same way a malformed body is.
+ * Canonical body is a JSON string: `'"/abs/path"'` to set, `'""'` to clear (the `setActorDevFolder`
+ * operation in `src/api/openapi/actor-runtime.json`). A JSON value that parses but isn't a string is
+ * rejected the same way a malformed body is.
  *
- * Ownership-scoped like every other Actor write on this API port: `resolveOwnedActor`, so a caller can
+ * Ownership-scoped like every other Actor write on this API port: `resolveActorParam`, so a caller can
  * only ever register a dev folder for their own Actor.
  */
 import type { Router } from 'express';
 
-import { requireUser } from '../auth.js';
 import { sendData } from '../envelope.js';
 import { ApiError, invalidRequest, recordNotFound } from '../errors.js';
 import { h, jsonBody } from '../handler.js';
@@ -27,7 +27,7 @@ import {
 	setDevFolder,
 	type SetDevFolderResult,
 } from '../../services/dev-folder.js';
-import { resolveOwnedActor } from '../../services/actors.js';
+import { resolveActorParam } from '../resolve-reference.js';
 import type { ApiServerDeps } from '../server.js';
 
 /** Maps a non-`ok` `SetDevFolderResult` to the `ApiError` this route throws - the HTTP status and API
@@ -59,8 +59,7 @@ export function mountDevFolder(router: Router, deps: ApiServerDeps): void {
 	router.post(
 		'/dev-folder/:actorId',
 		h(async (req, res) => {
-			const user = requireUser(req);
-			const actor = await resolveOwnedActor(user.id, req.params.actorId as string, user.username);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 
 			const raw = jsonBody<unknown>(req);

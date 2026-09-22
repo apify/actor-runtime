@@ -12,9 +12,9 @@ import {
 	deleteActor,
 	findVersion,
 	listOwnedActors,
-	resolveOwnedActor,
 	updateActor,
 } from '../../services/actors.js';
+import { resolveActorParam } from '../resolve-reference.js';
 import {
 	listOwnedBuilds,
 	resolveTaggedBuild,
@@ -57,11 +57,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actors/:actorId',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			sendData(res, actorDto(actor, requireUser(req).username));
 		}),
@@ -70,11 +66,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.put(
 		'/actors/:actorId',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const body = jsonBody<{ name?: string; title?: string }>(req);
 			const updated = await updateActor(actor.id, (current) => ({
@@ -89,11 +81,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.delete(
 		'/actors/:actorId',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			// Matches the real platform: DELETE of a missing Actor 404s the same as GET (api.md's
 			// "applies uniformly to every DELETE").
 			if (!actor) throw recordNotFound();
@@ -105,11 +93,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actors/:actorId/versions',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			sendPaginated(res, actor.versions, paginationParams(req));
 		}),
@@ -118,11 +102,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.post(
 		'/actors/:actorId/versions',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const body = jsonBody<ActorVersionRecord>(req);
 			if (!body.versionNumber) throw invalidRequest('"versionNumber" is required');
@@ -141,11 +121,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actors/:actorId/versions/:versionNumber',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const version = findVersion(actor, req.params.versionNumber as string);
 			if (!version) throw recordNotFound();
@@ -156,11 +132,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.put(
 		'/actors/:actorId/versions/:versionNumber',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const existing = findVersion(actor, req.params.versionNumber as string);
 			if (!existing) throw recordNotFound();
@@ -180,11 +152,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.delete(
 		'/actors/:actorId/versions/:versionNumber',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			// Matches the real platform: a missing Actor and a missing version both 404, never a silent 204.
 			if (!actor) throw recordNotFound();
 			if (!findVersion(actor, req.params.versionNumber as string)) throw recordNotFound();
@@ -199,11 +167,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actors/:actorId/builds',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const builds = await listOwnedBuilds(requireUser(req).id, actor.id);
 			const sorted = sortByTimestamp(builds, (build) => build.startedAt);
@@ -215,11 +179,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.post(
 		'/actors/:actorId/builds',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const versionNumber = queryString(req, 'version');
 			if (!versionNumber) throw invalidRequest('"version" query parameter is required');
@@ -241,11 +201,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actors/:actorId/builds/default',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const tagged = actor.taggedBuilds[DEFAULT_TAG];
 			if (!tagged) throw recordNotFound('Actor has no default build yet');
@@ -259,11 +215,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/actors/:actorId/runs',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const runs = await listOwnedRuns(requireUser(req).id, actor.id);
 			const sorted = sortByTimestamp(runs, (run) => run.startedAt);
@@ -275,11 +227,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.post(
 		'/actors/:actorId/runs',
 		h(async (req, res) => {
-			const actor = await resolveOwnedActor(
-				requireUser(req).id,
-				req.params.actorId as string,
-				requireUser(req).username,
-			);
+			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 
 			const tag = queryString(req, 'build') ?? DEFAULT_TAG;
@@ -302,7 +250,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				body.length > 0 ? { body, contentType: req.header('content-type') ?? 'application/json' } : undefined;
 
 			// `resolveProxyPassword(requireUser(req))` is the *run owner's* proxy password, not just "the
-			// caller's": `actor` was resolved via `resolveOwnedActor(requireUser(req).id, ...)` above, so
+			// caller's": `actor` was resolved via `resolveActorParam(req)` above, so
 			// `actor.userId === requireUser(req).id` always holds - the caller can only ever start a run on
 			// their own Actor - which makes the two the same user record (`actor-driver.md`'s "one
 			// harvested-per-account password used specifically for each user").

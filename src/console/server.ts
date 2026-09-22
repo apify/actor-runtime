@@ -57,6 +57,7 @@ import {
 	table,
 	type LinkedCell,
 } from './templates.js';
+import { CONSOLE_CSS } from './styles.js';
 import { getApiFallbackState, setApiFallbackState } from '../services/api-fallback.js';
 import { upstreamApiBaseUrl } from '../services/identity-resolution.js';
 import type { Driver } from '../driver/types.js';
@@ -150,6 +151,13 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 	// The noVNC client for the browser-view page, served straight from the installed package.
 	app.use('/vendor/novnc/core', express.static(join(NOVNC_ROOT, 'core')));
 	app.use('/vendor/novnc/vendor', express.static(join(NOVNC_ROOT, 'vendor')));
+	// The one stylesheet every page links (`console/styles.ts`). `no-cache` rather than a max-age: it
+	// revalidates on each page load, so a runtime upgrade is picked up immediately, while Express's own
+	// ETag still turns the repeat request into a 304 with no body.
+	app.get('/console.css', (_req, res) => {
+		res.set('Cache-Control', 'no-cache');
+		res.type('text/css').send(CONSOLE_CSS);
+	});
 	// The dev-folder form, the debug-mode form, the run detail view's Migrate button, and the `/settings`
 	// form below are the console's only four writes - every other route is a plain `GET` (`console.md`'s
 	// "Every route is a read except..." list).
