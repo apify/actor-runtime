@@ -162,13 +162,17 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 		'a run started with maxTotalChargeUsd stops at the cap: the SDK reports the limit, the runtime aborts the run gracefully with the reason, and the cap is on the run object',
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
-			// $0.005 start + 2 pages ($0.02) = $0.025 < $0.03; the third page crosses the cap.
+			// An SDK with budget for the next event charges within the cap and stops on its own, so the
+			// cap is set where the budget left after the $0.005 start event is below a page's $0.01: the
+			// SDK then charges that page anyway, exactly as it does on the platform, and it is that
+			// deliberate overshoot the runtime is here to catch. The crawl is asked for more pages so
+			// that where it would otherwise stop does not decide the outcome.
 			const started = JSON.parse(
 				apify(
 					[
 						'api',
 						'POST',
-						`/v2/actors/${actorId}/runs?maxTotalChargeUsd=0.03&waitForFinish=120`,
+						`/v2/actors/${actorId}/runs?maxTotalChargeUsd=0.01&waitForFinish=120`,
 						'--body',
 						JSON.stringify({ maxPages: 10 }),
 					],
@@ -176,18 +180,19 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 				),
 			) as ApiEnvelope<RunObject>;
 			const run = getRun(started.data.id, env);
-			expect(run.options.maxTotalChargeUsd).toBe(0.03);
-			expect(run.status).toBe('ABORTED');
-			expect(run.statusMessage).toMatch(/maximum total charge of \$0\.03 was reached/);
+			expect(run.options.maxTotalChargeUsd).toBe(0.01);
+			// Asserted together so a failure reports the charges that led to the status, not just the status.
+			expect({ status: run.status, charged: run.chargedEventCounts }).toEqual({
+				status: 'ABORTED',
+				charged: { [PAGE_EVENT]: 1, 'apify-actor-start': 1 },
+			});
+			expect(run.statusMessage).toMatch(/maximum total charge of \$0\.01 was reached/);
 			expect(typeof run.chargingStoppedAt).toBe('string');
-			// Three page charges landed (the SDK overshoots by one at the cap, exactly like on the platform).
-			expect(run.chargedEventCounts?.[PAGE_EVENT]).toBe(3);
-			expect(run.chargedEventCounts?.['apify-actor-start']).toBe(1);
 
 			const log = storedLog(run.id, env);
-			expect(log).toContain('Pay-per-event pricing in effect, max total charge: $0.03.');
+			expect(log).toContain('Pay-per-event pricing in effect, max total charge: $0.01.');
 			expect(log).toContain("Charged 1 'page-scraped' event(s); limit reached: true.");
-			expect(log).toContain('maximum total charge of $0.03 was reached');
+			expect(log).toContain('maximum total charge of $0.01 was reached');
 		},
 		5 * 60 * 1000,
 	);
