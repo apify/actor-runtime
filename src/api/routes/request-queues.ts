@@ -4,15 +4,10 @@ import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sendError, sortByTimestamp } from '../envelope.js';
 import { recordNotFound } from '../errors.js';
+import { resolveStorageParam } from '../resolve-reference.js';
 import { h, jsonBody, optionalJsonBody, paginationParams, queryBoolean, queryNumber, queryString } from '../handler.js';
 import { openRequestQueue } from '../../storage/open.js';
-import {
-	createStorage,
-	getOwnedStorage,
-	listOwnedStorages,
-	renameStorage,
-	dropStorage,
-} from '../../services/storages.js';
+import { createStorage, listOwnedStorages, renameStorage, dropStorage } from '../../services/storages.js';
 import { requestQueueDto } from '../dto/storages.js';
 import type { StorageRecord } from '../../storage/entities.js';
 import * as rq from '../../services/request-queues.js';
@@ -183,7 +178,7 @@ export function mountRequestQueues(router: Router): void {
 	router.get(
 		'/request-queues/:queueId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.queueId as string, 'requestQueue');
+			const record = await resolveStorageParam(req, 'queueId', 'requestQueue');
 			if (!record) throw recordNotFound();
 			const queue = await openRequestQueue(record.id);
 			sendData(res, requestQueueDto(record, await queue.getInfo()));
@@ -193,7 +188,7 @@ export function mountRequestQueues(router: Router): void {
 	router.put(
 		'/request-queues/:queueId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.queueId as string, 'requestQueue');
+			const record = await resolveStorageParam(req, 'queueId', 'requestQueue');
 			if (!record) throw recordNotFound();
 			const body = jsonBody<{ name?: string }>(req);
 			const updated = body.name ? await renameStorage(record.id, body.name) : record;
@@ -205,7 +200,7 @@ export function mountRequestQueues(router: Router): void {
 	router.delete(
 		'/request-queues/:queueId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.queueId as string, 'requestQueue');
+			const record = await resolveStorageParam(req, 'queueId', 'requestQueue');
 			// Matches the real platform and this API's own documented contract - see the identical note
 			// on `DELETE /datasets/:datasetId`.
 			if (!record) throw recordNotFound();
@@ -215,6 +210,6 @@ export function mountRequestQueues(router: Router): void {
 	);
 
 	mountRequestQueueOperations(router, '/request-queues/:queueId', async (req) =>
-		getOwnedStorage(requireUser(req).id, req.params.queueId as string, 'requestQueue'),
+		resolveStorageParam(req, 'queueId', 'requestQueue'),
 	);
 }

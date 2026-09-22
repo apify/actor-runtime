@@ -24,7 +24,6 @@ real account, not in the runtime.
 - Result and cost caps (`maxItems`, `maxTotalChargeUsd`)
 - Ad-hoc webhooks on run start
 - Run usage, cost and compute units
-- Last-run shortcuts (`runs/last`)
 - Encrypted secret input fields
 - Actor-level default run options
 - Dynamic and bounded memory from `.actor/actor.json`
@@ -64,7 +63,6 @@ real account, not in the runtime.
 - Bulk key-value store download (zip)
 - Public and signed storage URLs
 - Sharing runs and storages (`generalAccess`, access rights)
-- Storage addressing by `username~name`
 - Unnamed and shared storage listing filters
 - Storage retention and expiry
 - Request queue locking and request deletion (`storage.md`)

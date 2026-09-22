@@ -42,6 +42,27 @@ export async function getOwnedRun(userId: string, id: string): Promise<RunRecord
 	return record;
 }
 
+/**
+ * The `runs/last` pick: apify-core's `getUserActorLastRun`, the same filters under `sort: { startedAt: -1 }`.
+ * `startedAt` is set at creation, `READY` runs included, so the most recently created run wins - and two
+ * runs of the same millisecond tie, which neither sort resolves.
+ */
+export async function findLastOwnedRun(
+	userId: string,
+	actorId: string,
+	filter: { status?: string; origin?: string } = {},
+): Promise<RunRecord | null> {
+	const runs = await listOwnedRuns(userId, actorId);
+	let newest: RunRecord | null = null;
+	for (const run of runs) {
+		if (filter.status !== undefined && run.status !== filter.status) continue;
+		if (filter.origin !== undefined && run.meta.origin !== filter.origin) continue;
+		// `toISOString()` output orders the same lexically as in time.
+		if (!newest || run.startedAt > newest.startedAt) newest = run;
+	}
+	return newest;
+}
+
 /** Cross-user listing, for the console only (see `services/actors.ts: listAllActors`'s doc comment). */
 export async function listAllRuns(): Promise<RunRecord[]> {
 	return getRegistries().runs.list();
