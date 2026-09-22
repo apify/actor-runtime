@@ -25,8 +25,7 @@
       `x-apify-pagination-*` response headers, matching apify-client-js's pagination handling.
     - `GET /actor-runtime/events/:runId`: a websocket upgrade, not a JSON response at all - see "Actor
       runtime API" below.
-    - `POST /v2/actor-runs/:runId/charge`: a bare `{}` with status `201`, matching the platform - see
-      "Pay-per-event charging" below.
+    - `POST /v2/actor-runs/:runId/charge`: a bare `{}`, matching the platform.
 - `*At` timestamp fields are ISO-8601 strings.
 - Log content matches the Apify platform's log format: every log line starts with an ISO-8601 UTC
   timestamp with millisecond precision followed by a space (`2026-08-31T09:13:25.123Z `), exactly one
@@ -144,26 +143,6 @@
 - **One source per request**: an Actor that resolves locally is answered locally, including every later
   miss; only a request naming an Actor unknown here is eligible for the upstream fallback (below), and
   then as the caller's original request, which the platform resolves end to end.
-
-# Pay-per-event charging
-
-- An Actor's pricing is its `pricingInfos` array, accepted on `POST /v2/actors` and
-  `PUT /v2/actors/:actorId` and returned on every Actor object (`[]` when it has none). A submitted array
-  replaces the stored one; `[]` clears it. Only the `FREE` and `PAY_PER_EVENT` models are accepted, and a
-  rejected array is `400` `invalid-request` with nothing stored.
-- `POST /v2/actors/:actorId/runs?maxTotalChargeUsd=<number>` caps what that run may charge. `0` means no
-  cap; a negative value is `400` `invalid-request`.
-- A run started under a pay-per-event pricing carries `pricingInfo`, `chargedEventCounts`, `eventUsage`
-  and, once the cap has been reached, `chargingStoppedAt`. A run of an Actor without pricing carries none
-  of them.
-- **`POST /v2/actor-runs/:runId/charge`** charges the run for one of its pricing's events.
-    - Body: `{ "eventName": string, "count"?: integer }`, `count` defaulting to `1`. An `idempotency-key`
-      header is required; repeating a key on the same run never charges twice.
-    - Success is `201` with a bare `{}`, not a `{data}` envelope.
-    - Errors: `400` `invalid-request` for a malformed request, `405` `cannot-charge-apify-event` for an
-      `apify-` prefixed event, `405` `cannot-charge-non-pay-per-event-actor` when the run is not paid per
-      event, and `404` `record-not-found` for an unknown run or an event the run's pricing does not
-      define. A refused call charges nothing.
 
 # Actor runtime API
 

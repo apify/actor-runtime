@@ -199,33 +199,21 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 
 ## Run usage estimate
 
-- Every run reports what it would cost: `stats` (run time, compute units, and the memory and CPU figures
-  measured while it ran), `usage` and `usageUsd` (compute units and their price), `eventUsage` (each
-  pay-per-event charge) and `usageTotalUsd` (the two added together).
-- A compute unit is 1 GB of memory for one hour, priced at the lowest paid subscription tier. Storage
-  operations, data transfer and proxy usage are not metered and are not reported.
-- The figures grow while the run is going and stop when it ends; a finished run keeps reporting them,
-  across a runtime restart too.
-- Nothing is billed anywhere. The estimate exists so a developer can see what a run of their Actor would
+- Every run reports its usage and what it would cost, as on the platform. It differs in two ways: only
+  compute units are metered, so storage operations, data transfer and proxy usage are neither counted nor
+  priced; and every price is the lowest paid subscription tier's.
+- Nothing is billed anywhere. The figures exist so a developer can see what a run of their Actor would
   cost the user running it.
 
 # Pay-per-event pricing
 
-- An Actor can be given a pay-per-event pricing - named events, each with a price - through the API
-  (`api.md`) or the console's pricing form (`console.md`), with identical outcomes for the same input on
-  both surfaces. Only the free and pay-per-event models are supported, and an event priced per
-  subscription tier is charged at the lowest paid tier.
-- A run is charged under the pricing that was in effect when it was created, so changing an Actor's
-  pricing never reprices a run that already exists.
-- A run's charges come from three places: the Actor charging its own events, the `apify-actor-start` event
-  when the pricing defines it (charged at run start, once per gigabyte of the run's memory), and the
-  `apify-default-dataset-item` event when the pricing defines it (charged once per item the run pushes to
-  its default dataset).
-- A run can be started with a maximum total charge. Reaching it ends the run: the reason is in the run's
-  log and status message, and the run is aborted gracefully, exactly as a graceful abort requested over the
-  API. The run's compute cost counts against that maximum only when the pricing says the user pays it.
-- An Actor reads its pricing, its charges so far and its maximum from the run itself, exactly as on the
-  platform, so charging code written for the platform runs here unchanged and needs no local-testing switch.
+- An Actor can be given a pay-per-event pricing, and its runs are charged against it, as on the platform:
+  the same pricing on the Actor, the same events charged by the Actor and by the runtime on its behalf,
+  the same per-run maximum total charge, which ends the run when reached.
+- It differs in three ways: only the free and pay-per-event pricing models are accepted; an event priced
+  per subscription tier is charged at the lowest paid tier; and nothing is ever billed or paid out.
+- An Actor's own charging code therefore runs here unchanged, with no local-testing switch.
+- The pricing can also be set from the console (`console.md`).
 
 # Users
 

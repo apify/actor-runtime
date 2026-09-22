@@ -1,11 +1,7 @@
 /**
- * Pay-per-event support and the run cost estimate, end to end over a real `apify-client`
- * (`requirements/api.md`'s "Pay-per-event charging" and `actor-driver.md`'s "Pay-per-event pricing" /
- * "Run usage estimate" sections): `pricingInfos` on the Actor, the resolved `pricingInfo` and initial
- * `chargedEventCounts` on a run, `POST /v2/actor-runs/:runId/charge` with its idempotency and error
- * contract, the synthetic default-dataset-item event, the `maxTotalChargeUsd` cap's graceful abort, the
- * `ACTOR_MAX_TOTAL_CHARGE_USD` env var, the `usage`/`usageUsd`/`usageTotalUsd`/`stats` estimate, and the
- * console's pricing form and usage section.
+ * Pay-per-event charging and the run cost estimate (`actor-driver.md`), end to end over a real
+ * `apify-client`: pricing on the Actor, a run's charges and its maximum, the charge endpoint's
+ * idempotency and errors, the estimate on the run object, and the console's pricing and usage views.
  */
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';

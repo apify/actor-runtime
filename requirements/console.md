@@ -47,18 +47,14 @@
 
 ## Pricing form (Actor detail view)
 
-- The Actor detail view shows the pricing in effect: that the Actor is free, or each of its chargeable
-  events with the title and the price it is charged at.
-- A form on the same view sets the Actor's pricing, with exactly the API's behaviour and validation for any
-  given input; an empty value makes the Actor free again. A rejected submission redirects back to the same
-  detail page with the message shown inline, leaving the stored pricing unchanged.
+- The Actor detail view shows the Actor's pay-per-event pricing (`actor-driver.md`) and a form that sets
+  it, with exactly the API's behaviour and validation for any given input. A rejected submission redirects
+  back to the same detail page with the message shown inline, leaving the stored pricing unchanged.
 
 ## Usage and cost (run detail view)
 
-- The run detail view shows the run's usage estimate (`actor-driver.md`): run time, compute units and their
-  cost, the measured memory and CPU figures, each pay-per-event charge and the run's maximum, and the total.
-  It says the figures are an estimate and which usage is not counted.
-- The runs list shows each run's total cost.
+- The run detail view shows the run's usage estimate (`actor-driver.md`), its charged events and its
+  maximum total charge; the runs list shows each run's total cost.
 
 ## Local dev-folder registration form (Actor detail view)
 
