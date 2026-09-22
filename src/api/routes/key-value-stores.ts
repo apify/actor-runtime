@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
 import { recordNotFound } from '../errors.js';
-import { resolveStorageParam } from '../resolve-storage.js';
+import { resolveStorageParam } from '../resolve-reference.js';
 import { h, optionalJsonBody, paginationParams, queryNumber, queryString, toNodeBuffer } from '../handler.js';
 import { openKeyValueStore } from '../../storage/open.js';
 import { createStorage, listOwnedStorages, renameStorage, dropStorage, touchStorage } from '../../services/storages.js';

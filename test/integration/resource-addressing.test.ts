@@ -1,10 +1,11 @@
 /**
- * Storage addressing by name (`api.md`'s "Storage id encoding"): `~name`, `username~name` and
- * `userId~name` in place of a storage id, on all three storage types and every route that takes the
- * id - with the platform's own rules (apify-core's `ResourceIdGetter`): a bare name is an id, names and
- * usernames match case-insensitively, an empty name is `400 invalid-request`, and a reference to any
- * owner other than the caller is `404 record-not-found` (the restricted view - see
- * `test/integration/api-fallback.test.ts` for how that same `404` then feeds the upstream relay).
+ * Addressing by name (`api.md`'s "Resource id encoding"): `~name`, `username~name` and `userId~name` in
+ * place of the id, for Actors and all three storage types alike, on every route that takes one - with
+ * the platform's own rules (apify-core's `ResourceIdGetter`): names and usernames match
+ * case-insensitively, an empty name is `400 invalid-request`, and a reference to any owner other than
+ * the caller is `404 record-not-found` (the restricted view - see `test/integration/api-fallback.test.ts`
+ * for how that same `404` then feeds the upstream relay). A bare segment is an id everywhere except
+ * `:actorId`, which also accepts a plain Actor name.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApifyClient } from 'apify-client';
@@ -12,7 +13,7 @@ import axios from 'axios';
 
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
 
-describe('storage addressing by username~name', () => {
+describe('addressing by username~name', () => {
 	let server: TestServerHandle;
 	let me: { id: string; username: string };
 
@@ -38,6 +39,79 @@ describe('storage addressing by username~name', () => {
 			validateStatus: () => true,
 		});
 	}
+
+	describe('actors', () => {
+		it('resolves ~name, username~name and userId~name, case-insensitively, plus the plain name and the id', async () => {
+			const created = await server.client.actors().create({ name: 'My-Actor' });
+
+			for (const ref of [
+				created.id,
+				'My-Actor',
+				'my-actor',
+				'~My-Actor',
+				`${me.username}~my-actor`,
+				`${me.username.toUpperCase()}~My-Actor`,
+				`${me.id}~my-actor`,
+			]) {
+				const fetched = await server.client.actor(ref).get();
+				expect(fetched?.id, ref).toBe(created.id);
+				expect(fetched?.name, ref).toBe('My-Actor');
+			}
+		});
+
+		it('reaches every Actor sub-route and write by a named reference', async () => {
+			const created = await server.client.actors().create({ name: 'named-actor' });
+
+			expect((await raw('get', `/v2/actors/${me.username}~named-actor/versions`)).status).toBe(200);
+			expect((await raw('get', '/v2/actors/~named-actor/builds')).status).toBe(200);
+			expect((await raw('get', '/v2/actors/~named-actor/runs')).status).toBe(200);
+
+			// The runtime's own /actor-runtime toggles take the same forms.
+			const debug = await raw('post', `/actor-runtime/debug/${me.id}~named-actor`, { enabled: true });
+			expect(debug.status).toBe(200);
+			expect(debug.data.data.localDebug).not.toBeNull();
+
+			const renamed = await raw('put', '/v2/actors/~named-actor', { name: 'renamed-actor' });
+			expect(renamed.status).toBe(200);
+			expect(renamed.data.data.id).toBe(created.id);
+			expect((await raw('get', '/v2/actors/~named-actor')).status).toBe(404);
+			expect((await raw('get', '/v2/actors/~renamed-actor')).data.data.id).toBe(created.id);
+
+			expect((await raw('delete', `/v2/actors/${me.username}~renamed-actor`)).status).toBe(204);
+			expect(await server.client.actor(created.id).get()).toBeUndefined();
+		});
+
+		it("another user's Actor is record-not-found, by username and by user id", async () => {
+			const clientB = new ApifyClient({ baseUrl: server.baseUrl, token: 'actor-user-b', maxRetries: 0 });
+			const userB = await clientB.user('me').get();
+			const actorB = await clientB.actors().create({ name: 'shared-actor-name' });
+
+			expect((await clientB.actor(`${userB.username}~shared-actor-name`).get())?.id).toBe(actorB.id);
+
+			for (const ref of [
+				`${userB.username}~shared-actor-name`,
+				`${userB.id}~shared-actor-name`,
+				'nobody-here~shared-actor-name',
+				'shared-actor-name',
+			]) {
+				const res = await raw('get', `/v2/actors/${ref}`);
+				expect(res.status, ref).toBe(404);
+				expect(res.data.error.type, ref).toBe('record-not-found');
+			}
+		});
+
+		it('an empty name is 400 invalid-request', async () => {
+			for (const path of ['/v2/actors/~', `/v2/actors/${me.username}~`, `/v2/actors/${me.id}~/runs`]) {
+				const res = await raw('get', path);
+				expect(res.status, path).toBe(400);
+				expect(res.data.error.type, path).toBe('invalid-request');
+			}
+			// Same on the runtime's own toggle routes, which take a body.
+			const toggle = await raw('post', '/actor-runtime/debug/~', { enabled: true });
+			expect(toggle.status).toBe(400);
+			expect(toggle.data.error.type).toBe('invalid-request');
+		});
+	});
 
 	describe('datasets', () => {
 		it('resolves ~name, username~name and userId~name to the same dataset as the id, case-insensitively', async () => {

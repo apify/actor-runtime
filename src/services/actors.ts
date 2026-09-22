@@ -1,6 +1,7 @@
 import { generateId } from '../storage/ids.js';
-import type { ActorRecord, ActorVersionRecord } from '../storage/entities.js';
+import type { ActorRecord, ActorVersionRecord, UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
+import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
 
 /** The tag a build/run resolves to when the caller names none. `api/routes/actors.ts` and
  * `services/runs.ts` both import this instead of declaring their own `'latest'` literal. */
@@ -56,31 +57,31 @@ export async function getActorById(id: string): Promise<ActorRecord | null> {
 	return getRegistries().actors.get(id);
 }
 
+/** Case-insensitive, like the platform's `nameLowerCase` (`normalizeName`), and shared by both forms
+ * `resolveOwnedActor` accepts below. */
+export async function findOwnedActorByName(userId: string, name: string): Promise<ActorRecord | null> {
+	const wanted = normalizeName(name);
+	const owned = await listOwnedActors(userId);
+	return owned.find((actor) => normalizeName(actor.name) === wanted) ?? null;
+}
+
 /**
- * Resolves the CLI-friendly identifiers real Apify accepts as `:actorId`: the actual id, the plain
- * Actor `name`, or the `username~name` form (`storage.md`/`api.md` amendment) - useful for
- * `apify push`'s "does this Actor already exist" probe, which looks the Actor up by name before an id
- * has ever been minted.
+ * Resolves a parsed `:actorId` reference (`services/resource-reference.ts`) to the caller's Actor, or
+ * `null` - the API layer's `record-not-found`. The named forms (`~name`, `username~name`,
+ * `userId~name`) work exactly as they do for storages, under the same restricted view
+ * (`isCallerOwner`).
+ *
+ * The one Actor-specific rule, and the only place this differs from `resolveOwnedStorage`: a bare
+ * segment with no separator is tried as an id **and then as a name**, because the platform accepts a
+ * plain Actor name there too - which is how stock `apify push` finds an existing Actor by name before
+ * an id has ever been minted.
  */
-export async function resolveOwnedActor(
-	userId: string,
-	idOrName: string,
-	username: string,
-): Promise<ActorRecord | null> {
-	const byId = await getOwnedActor(userId, idOrName);
-	if (byId) return byId;
-
-	// Single-user POC: a `username~name` reference is only ever this bootstrap user's own username,
-	// so a mismatched prefix can never resolve - same outcome as a real multi-user platform would give
-	// for someone else's username.
-	if (idOrName.includes('~')) {
-		const [prefix, ...rest] = idOrName.split('~');
-		if (prefix !== username) return null;
-		return resolveOwnedActor(userId, rest.join('~'), username);
+export async function resolveOwnedActor(user: UserRecord, reference: ResolvableReference): Promise<ActorRecord | null> {
+	if (reference.kind === 'id') {
+		return (await getOwnedActor(user.id, reference.id)) ?? findOwnedActorByName(user.id, reference.id);
 	}
-
-	const all = await listOwnedActors(userId);
-	return all.find((actor) => actor.name === idOrName) ?? null;
+	if (!isCallerOwner(user, reference.owner)) return null;
+	return findOwnedActorByName(user.id, reference.name);
 }
 
 export async function updateActor(

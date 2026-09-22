@@ -10,7 +10,7 @@ import { getRegistries } from '../storage/registries.js';
 import { openDataset, openKeyValueStore, openRequestQueue } from '../storage/open.js';
 import { closeRequestQueueBuffer } from '../storage/request-queue/registry.js';
 import { KeyedMutex } from '../storage/mutex.js';
-import type { StorageOwnerReference, StorageReference } from './storage-reference.js';
+import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
 
 /**
  * Serialises the lookup-then-create critical section in `createStorage` per `user:type:name`, so two
@@ -20,13 +20,6 @@ import type { StorageOwnerReference, StorageReference } from './storage-referenc
  * matches on - `Foo` and `foo` are the same critical section, not two.
  */
 const createByNameMutex = new KeyedMutex();
-
-/** The one place a storage name is normalised for comparison - the platform keeps a `nameLowerCase`
- * next to every storage's `name` and both its uniqueness index and its `username~name` lookup use
- * that, never the display casing (apify-core's `ResourceIdGetter.getResourceIdFromName`). */
-function normalizeName(name: string): string {
-	return name.toLowerCase();
-}
 
 /**
  * Idempotent by `name`, matching apify-client-js's `getOrCreate(name)` contract: a bare
@@ -106,40 +99,20 @@ export async function findOwnedStorageByName(
 }
 
 /**
- * Resolves a parsed `:datasetId`/`:storeId`/`:queueId` reference (`services/storage-reference.ts`) to
- * the caller's storage record, or `null` - the API layer's `record-not-found`. An id reference is
- * `getOwnedStorage`; a named one is `findOwnedStorageByName` under the owner the reference names,
- * with the platform's owner rules (apify-core's `ResourceIdGetter`): `~name` is the caller, a 17-char
- * alphanumeric prefix is a user id, anything else a username matched case-insensitively.
- *
- * Every API response is a restricted view of the caller's own resources (`storage.md`'s Users section),
- * so an owner that is not the caller - another local user's username or id, a username nobody here
- * has, the platform's `apify~...` - resolves to `null` without any registry access at all: it can never
- * name a storage the caller may see, exactly the outcome a real multi-user platform gives for someone
- * else's private storage. That `null` is also what hands such a reference to the `fallbackNotFoundEnabled`
- * upstream relay (`services/api-fallback.ts`) unchanged, where the platform decides what `apify~name`
- * means for the caller's real token - public storages included. Nothing here ever reads another user's
- * storages to answer the caller.
+ * Resolves a parsed reference (`services/resource-reference.ts`) to the caller's storage record, or
+ * `null` - the API layer's `record-not-found`. An id reference is `getOwnedStorage`; a named one is
+ * `findOwnedStorageByName` under the owner the reference names, which must be the caller
+ * (`isCallerOwner`). Unlike an Actor, a bare segment is only ever an id here - the platform reads
+ * `/v2/datasets/my-dataset` as a storage id too (`services/actors.ts: resolveOwnedActor`).
  */
 export async function resolveOwnedStorage(
 	user: UserRecord,
-	reference: Exclude<StorageReference, { kind: 'empty-name' }>,
+	reference: ResolvableReference,
 	type: StorageType,
 ): Promise<StorageRecord | null> {
 	if (reference.kind === 'id') return getOwnedStorage(user.id, reference.id, type);
-	if (!isCaller(user, reference.owner)) return null;
+	if (!isCallerOwner(user, reference.owner)) return null;
 	return findOwnedStorageByName(user.id, type, reference.name);
-}
-
-function isCaller(user: UserRecord, owner: StorageOwnerReference): boolean {
-	switch (owner.by) {
-		case 'self':
-			return true;
-		case 'userId':
-			return owner.userId === user.id;
-		case 'username':
-			return owner.username.toLowerCase() === user.username.toLowerCase();
-	}
 }
 
 export async function touchStorage(id: string): Promise<void> {

@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
 import { recordNotFound } from '../errors.js';
-import { resolveStorageParam } from '../resolve-storage.js';
+import { resolveStorageParam } from '../resolve-reference.js';
 import {
 	h,
 	jsonBody,

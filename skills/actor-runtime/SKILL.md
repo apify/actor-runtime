@@ -148,10 +148,11 @@ so before enabling it on someone's behalf. A relayed response carries `x-actor-r
 
 - `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
   The `v2/` prefix and the leading slash are both optional.
-- A named dataset, key-value store or request queue can stand in for its id as `~name` (your own),
-  `username~name` or `userId~name`, like on the platform: `apify api GET v2/datasets/~my-results/items`.
-  Names match case-insensitively; a bare name without `~` is treated as an id, so it is not found.
-  Another user's storage is not found here either - the runtime only ever shows your own.
+- A named Actor, dataset, key-value store or request queue can stand in for its id as `~name` (your
+  own), `username~name` or `userId~name`, like on the platform:
+  `apify api GET v2/datasets/~my-results/items`. Names match case-insensitively. A bare name without
+  `~` is an id, except for an Actor, where it is also tried as a name. Another user's resource is not
+  found here - the runtime only ever shows your own.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
 - The console at `http://localhost:3000` shows the same objects, plus the dev-folder form, the
   Migrate button and the browser view.

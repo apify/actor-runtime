@@ -597,7 +597,7 @@ describe('api-fallback: eligibility, relay, and fail-closed behaviour', () => {
 			}
 		});
 
-		// Storage addressing by name (`api.md`'s "Storage id encoding") and the fallback are designed to
+		// Storage addressing by name (`api.md`'s "Resource id encoding") and the fallback are designed to
 		// work together: a `username~name` the runtime has no local storage for is a plain
 		// `record-not-found`, so with this toggle on it is relayed byte-for-byte and the *platform* decides
 		// what that reference means for the caller's real token - e.g. someone else's public dataset.
