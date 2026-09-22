@@ -19,6 +19,13 @@ import type { Request, Response } from 'express';
 
 import { upstreamApiBaseUrl } from './identity-resolution.js';
 
+declare module 'express-serve-static-core' {
+	interface Request {
+		/** Set only by `pinRequestToLocal` below; read only by `attemptFallback`. */
+		pinnedToLocal?: true;
+	}
+}
+
 export interface ApiFallbackState {
 	fallbackUnimplementedEnabled: boolean;
 	fallbackNotFoundEnabled: boolean;
@@ -46,6 +53,16 @@ export function setApiFallbackState(patch: Partial<ApiFallbackState>): ApiFallba
  * `resetUsersForTests` convention. Never call this from runtime code. */
 export function resetApiFallbackStateForTests(): void {
 	state = defaultState();
+}
+
+/**
+ * Declines every later fallback attempt on this request, whatever the toggles say - for a request that
+ * has already resolved one record locally and goes on to resolve more from it (`api.md`'s one-source rule,
+ * `api/routes/last-run.ts`). The platform cannot answer about a local record, so a relayed miss could only
+ * describe some unrelated platform object.
+ */
+export function pinRequestToLocal(req: Request): void {
+	req.pinnedToLocal = true;
 }
 
 /** No retries, and short enough that a hanging upstream never leaves the caller waiting indefinitely -
@@ -122,8 +139,9 @@ export interface LocalError {
  * never eligible, or eligible but abandoned - either way the original local error is still the caller's
  * to send.
  *
- * Eligibility, in order: the local error's `type` must map to a trigger (above) and that trigger's
- * toggle must be on; the request must be under `/v2/*`, excluding `/v2/actor-runtime/*`; the request
+ * Eligibility, in order: the request must not be pinned to this runtime (`pinRequestToLocal` above); the
+ * local error's `type` must map to a trigger (above) and that trigger's toggle must be on; the request
+ * must be under `/v2/*`, excluding `/v2/actor-runtime/*`; the request
  * must be authenticated (`req.user` - every `/v2/*` request, off-spec paths included, passes `auth()`
  * before reaching either seam, so this only ever fails for a request this runtime never authenticated at
  * all, e.g. one outside `/v2` entirely). All HTTP methods are eligible once these hold, writes included.
@@ -154,6 +172,7 @@ export interface LocalError {
  */
 export async function attemptFallback(req: Request, res: Response, localError: LocalError): Promise<boolean> {
 	if (res.headersSent) return false;
+	if (req.pinnedToLocal) return false;
 
 	const trigger = triggerForErrorType(localError.type);
 	if (!trigger) return false;

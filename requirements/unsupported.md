@@ -24,7 +24,6 @@ real account, not in the runtime.
 - Result and cost caps (`maxItems`, `maxTotalChargeUsd`)
 - Ad-hoc webhooks on run start
 - Run usage, cost and compute units
-- Last-run shortcuts (`runs/last`)
 - Input validation and defaults from the input schema
 - Encrypted secret input fields
 - Actor-level default run options

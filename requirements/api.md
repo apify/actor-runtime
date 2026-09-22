@@ -58,6 +58,7 @@
         - v2/actors/:actorId/builds
         - v2/actors/:actorId/builds/default
         - v2/actors/:actorId/runs
+        - v2/actors/:actorId/runs/last, and its sub-paths (see "Last-run shortcuts")
         - v2/actors/:actorId/versions
         - v2/actors/:actorId/versions/:versionNumber
     - Builds
@@ -125,6 +126,21 @@
       `404`.
 - All endpoints from the specification that do not have implementation must return response `501 Not Implemented`
 - All endpoints not present in specification must return `404 Not Found` - **except** the `/actor-runtime/*`
+
+# Last-run shortcuts
+
+- `v2/actors/:actorId/runs/last` answers with the caller's newest run of that Actor, and each sub-path
+  under it - `/log`, `/dataset/*`, `/key-value-store/*`, `/request-queue/*`, `/abort`, `/reboot`,
+  `/metamorph` - answers exactly as the same request against that run's own endpoint, for every method
+  the endpoint accepts. The bare form is `GET`-only; any other sub-path is `404` `not-found`.
+- `?status=` and `?origin=` narrow which run is picked, taking the platform's own values for each; any
+  other value is `400` `invalid-request`.
+- An unknown Actor and no matching run are both `404` `record-not-found`; past that the target endpoint's
+  own responses apply, `501` included.
+- `v2/actor-tasks/:taskId/runs/last*` is not implemented (`unsupported.md`).
+- **One source per request**: an Actor that resolves locally is answered locally, including every later
+  miss; only a request naming an Actor unknown here is eligible for the upstream fallback (below), and
+  then as the caller's original request, which the platform resolves end to end.
 
 # Actor runtime API
 
@@ -308,6 +324,8 @@ This runtime emulates that observable experience on demand:
   different or runtime-internal credential, and never sent at all for a request this runtime didn't
   authenticate. Enabling either toggle therefore means the caller's own Apify token reaches the
   configured `upstreamBaseUrl` on every eligible request; this is the risk being opted into.
+- **Never splits one request between the two sources**: where one request resolves several records in
+  turn ("Last-run shortcuts" above), the first record decides where all of them come from.
 - **Never enriches a call that already succeeds locally**: a collection/list endpoint (e.g.
   `GET /v2/datasets`) that already returns `200` from local data never consults either toggle and never
   gains platform objects. Fallback only ever resolves an otherwise-failing request; it does not make a
