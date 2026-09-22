@@ -102,7 +102,7 @@ No Actor yet? Create one with [`apify create`](https://docs.apify.com/cli/docs/q
     apify call
     ```
 
-    The run takes its input from `storage/key_value_stores/default/INPUT.json`; `--input '{"key": "value"}'` overrides it. The CLI streams the log and prints the run's storage ids.
+    Pass input with `--input '{"key": "value"}'`, or `--input-file input.json` to read it from a JSON file. The CLI streams the log and prints the run's storage ids.
 
 Lines the runtime itself wrote carry a blue `[actor-runtime]` prefix. Your Actor's output is passed through untouched.
 
