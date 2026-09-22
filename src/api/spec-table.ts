@@ -150,6 +150,17 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	// --- Default run storages (requirements amendment for the request sub-resources) ---
 	...runStorageAliasEntries('v2/actor-runs/:runId'),
 
+	// --- Last-run shortcuts ---
+	// These re-dispatch onto the run's own endpoints (`routes/last-run.ts`), so the catch-all only ever sees
+	// them rewritten. Listed anyway, mirroring each target's own flag, so the table stays an honest per-path
+	// answer to "does the runtime serve this?".
+	pathTemplate('GET', 'v2/actors/:actorId/runs/last', true),
+	pathTemplate('GET', 'v2/actors/:actorId/runs/last/log', true),
+	pathTemplate('POST', 'v2/actors/:actorId/runs/last/abort', true),
+	pathTemplate('POST', 'v2/actors/:actorId/runs/last/reboot', true),
+	pathTemplate('POST', 'v2/actors/:actorId/runs/last/metamorph', false),
+	...runStorageAliasEntries('v2/actors/:actorId/runs/last'),
+
 	// --- Known, real Apify API v2 paths this runtime does not implement (-> 501) ---
 	pathTemplate('GET', 'v2/actor-tasks', false),
 	pathTemplate('POST', 'v2/actor-tasks', false),

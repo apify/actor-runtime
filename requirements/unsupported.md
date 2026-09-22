@@ -25,7 +25,6 @@ real account, not in the runtime.
 - Metered usage beyond compute units: storage operations, data transfer and proxy (the run's usage fields
   estimate compute units and pay-per-event charges only, `actor-driver.md`)
 - Pay-per-event accounting and billing - charges are counted and priced, never billed or paid out
-- Last-run shortcuts (`runs/last`)
 - Input validation and defaults from the input schema
 - Encrypted secret input fields
 - Actor-level default run options
@@ -68,7 +67,6 @@ real account, not in the runtime.
 - Bulk key-value store download (zip)
 - Public and signed storage URLs
 - Sharing runs and storages (`generalAccess`, access rights)
-- Storage addressing by `username~name`
 - Unnamed and shared storage listing filters
 - Storage retention and expiry
 - Request queue locking and request deletion (`storage.md`)

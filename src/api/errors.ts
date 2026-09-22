@@ -22,6 +22,15 @@ export function invalidRequest(message: string): ApiError {
 }
 
 /**
+ * The catch-all's own `404` `not-found`, for a route that matches a whole path family and has to reject an
+ * off-spec sub-path itself (`routes/last-run.ts`). Not `record-not-found`: nothing was looked up, and the
+ * two types are gated by different fallback toggles.
+ */
+export function endpointNotFound(message: string): ApiError {
+	return new ApiError(404, 'not-found', message);
+}
+
+/**
  * Matches the real Apify platform exactly: `DELETE /v2/actor-runs/:runId` on a non-terminal run is
  * rejected rather than aborted-then-deleted (the public API answers 400 `cannot-remove-running-run`),
  * so this runtime does the same instead of silently leaking the run's container.

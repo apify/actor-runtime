@@ -2,8 +2,8 @@
  * Covers the upstream API fallback (`api.md`'s "Upstream fallback" section, `services/api-fallback.ts`):
  * the `GET`/`POST /actor-runtime/api-fallback` toggle-state endpoint, the eligibility mapping (both
  * toggles, in isolation and together), the fail-closed guarantee, own-token-only forwarding, and the two
- * marker headers - against a stubbed upstream, exactly the pattern
- * `test/integration/identity-resolution.test.ts` established for the identity probe. Never real egress
+ * marker headers - against a stubbed upstream (`helpers/stub-upstream.ts`, the pattern
+ * `test/integration/identity-resolution.test.ts` established for the identity probe). Never real egress
  * to `api.apify.com`.
  *
  * Console-side coverage (the `/settings` page, its form, and the nav indicator on every page) lives in
@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
+import { startStubUpstream, warmUpIdentity, type CapturedRequest, type StubUpstream } from './helpers/stub-upstream.js';
 import {
 	resetApiFallbackStateForTests,
 	resetFallbackTimeoutMsForTests,
@@ -26,63 +27,6 @@ import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import type { RunRecord } from '../../src/storage/entities.js';
 import type { Driver, DevFolderProbeOutcome } from '../../src/driver/types.js';
-
-interface CapturedRequest {
-	method: string;
-	url: string;
-	headers: Record<string, string | string[] | undefined>;
-	body: Buffer;
-}
-
-interface StubUpstream {
-	baseUrl: string;
-	hitCount: () => number;
-	requests: () => CapturedRequest[];
-	close: () => Promise<void>;
-}
-
-/** Stands in for `https://api.apify.com`, generically: `respond` decides the status/body/headers for
- * every request; passing `'hang'` never calls back at all (simulating a stalled upstream past any
- * timeout). Every hit is recorded (method/url/headers/body), so a test can assert what the runtime
- * actually sent upstream, not just what it got back. A header value may be a `string[]` (not just a
- * `string`) so a test can make the stub send the same header name as two separate raw wire lines - e.g.
- * two `Set-Cookie` lines - rather than one value; `http.ServerResponse.writeHead` sends an array value as
- * repeated lines for any header name, not only `set-cookie`. */
-function startStubUpstream(
-	respond: (
-		req: CapturedRequest,
-	) => { status: number; body?: unknown; headers?: Record<string, string | string[]> } | 'hang',
-): Promise<StubUpstream> {
-	const requests: CapturedRequest[] = [];
-	return new Promise((resolveServer) => {
-		const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
-			const chunks: Buffer[] = [];
-			req.on('data', (chunk: Buffer) => chunks.push(chunk));
-			req.on('end', () => {
-				const captured: CapturedRequest = {
-					method: req.method ?? '',
-					url: req.url ?? '',
-					headers: req.headers,
-					body: Buffer.concat(chunks),
-				};
-				requests.push(captured);
-				const outcome = respond(captured);
-				if (outcome === 'hang') return; // never respond - the client's own timeout must fire
-				res.writeHead(outcome.status, { 'content-type': 'application/json', ...outcome.headers });
-				res.end(outcome.body === undefined ? '' : JSON.stringify(outcome.body));
-			});
-		});
-		server.listen(0, () => {
-			const { port } = server.address() as AddressInfo;
-			resolveServer({
-				baseUrl: `http://127.0.0.1:${port}`,
-				hitCount: () => requests.length,
-				requests: () => requests,
-				close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-			});
-		});
-	});
-}
 
 /** An upstream that completes a final `2xx` status line and headers - the point at which a relay would
  * normally commit - and then dies before the body finishes: it declares a `content-length` larger than
@@ -122,18 +66,6 @@ function startHeadersThenDieUpstream(): Promise<StubUpstream> {
 				close: () => new Promise<void>((resolve) => server.close(() => resolve())),
 			});
 		});
-	});
-}
-
-/** Makes one authenticated request so `services/users.ts: getOrCreateUserForToken()`'s one-time
- * identity probe for `token` runs and gets cached *now*, against whatever upstream is currently
- * configured - before a test points `APIFY_UPSTREAM_API_BASE_URL` at its own fallback stub. Without
- * this, the identity probe for a never-before-seen token would itself be the first request to reach
- * that stub. */
-async function warmUpIdentity(baseUrl: string, token: string): Promise<void> {
-	await axios.get(`${baseUrl}/v2/users/me`, {
-		headers: { Authorization: `Bearer ${token}` },
-		validateStatus: () => true,
 	});
 }
 
@@ -595,6 +527,99 @@ describe('api-fallback: eligibility, relay, and fail-closed behaviour', () => {
 			} finally {
 				await stub.close();
 			}
+		});
+
+		// A `username~name` with no local storage behind it is a plain `record-not-found`, so the platform
+		// gets to decide what the reference means for the caller's real token - someone else's public
+		// dataset, say.
+		describe('storage references by username~name', () => {
+			it("relays another user's `username~name` reference (a local miss) with the URL intact, so the platform resolves the name", async () => {
+				const stub = await startStubUpstream(fixedOkResponse('named-storage-marker'));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const res = await call('get', '/v2/datasets/apify~some-public-dataset/items?clean=true&limit=5');
+					expect(res.status).toBe(200);
+					expect(res.data).toEqual({ fromUpstream: true, marker: 'named-storage-marker' });
+					expect(res.headers['x-actor-runtime-fallback-trigger']).toBe('record-not-found');
+					expect(stub.hitCount()).toBe(1);
+					expect(stub.requests()[0]?.url).toBe(
+						'/v2/datasets/apify~some-public-dataset/items?clean=true&limit=5',
+					);
+
+					// Same for a key-value-store record and a request-queue head - every storage type's
+					// routes resolve the reference the same way.
+					await call('get', '/v2/key-value-stores/apify~some-store/records/OUTPUT');
+					await call('get', '/v2/request-queues/00000000000000009~some-queue/head');
+					expect(stub.requests().map((r) => r.url)).toEqual([
+						'/v2/datasets/apify~some-public-dataset/items?clean=true&limit=5',
+						'/v2/key-value-stores/apify~some-store/records/OUTPUT',
+						'/v2/request-queues/00000000000000009~some-queue/head',
+					]);
+				} finally {
+					await stub.close();
+				}
+			});
+
+			it("relays the caller's own `~name` / `username~name` only when no local storage has that name - a local hit never consults the upstream", async () => {
+				const stub = await startStubUpstream(fixedOkResponse('should-not-be-hit-for-local'));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const me = await server.client.user('me').get();
+					const local = await server.client.datasets().getOrCreate('exists-locally');
+					await server.client.dataset(local.id).pushItems([{ local: true }]);
+
+					const own = await call('get', '/v2/datasets/~exists-locally/items');
+					expect(own.status).toBe(200);
+					expect(own.data).toEqual([{ local: true }]);
+					expect(own.headers['x-actor-runtime-fallback']).toBeUndefined();
+
+					const byUsername = await call('get', `/v2/datasets/${me.username}~exists-locally`);
+					expect(byUsername.status).toBe(200);
+					expect(byUsername.data.data.id).toBe(local.id);
+					expect(byUsername.headers['x-actor-runtime-fallback']).toBeUndefined();
+					expect(stub.hitCount()).toBe(0);
+
+					// The same caller's *missing* name does go upstream - the platform may well have it.
+					const missing = await call('get', '/v2/datasets/~only-on-the-platform');
+					expect(missing.status).toBe(200);
+					expect(missing.headers['x-actor-runtime-fallback-trigger']).toBe('record-not-found');
+					expect(stub.hitCount()).toBe(1);
+					expect(stub.requests()[0]?.url).toBe('/v2/datasets/~only-on-the-platform');
+				} finally {
+					await stub.close();
+				}
+			});
+
+			it("does NOT relay an empty-name reference - that is the platform's own 400 invalid-request, never a fallback trigger", async () => {
+				const stub = await startStubUpstream(fixedOkResponse('should-not-be-hit'));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const res = await call('get', '/v2/datasets/apify~');
+					expect(res.status).toBe(400);
+					expect(res.data.error.type).toBe('invalid-request');
+					expect(res.headers['x-actor-runtime-fallback']).toBeUndefined();
+					expect(stub.hitCount()).toBe(0);
+				} finally {
+					await stub.close();
+				}
+			});
+
+			it('fails closed like any other relay: a non-2xx from the platform for the named reference reproduces the local record-not-found', async () => {
+				const stub = await startStubUpstream(() => ({
+					status: 404,
+					body: { error: { type: 'record-not-found' } },
+				}));
+				process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+				try {
+					const res = await call('get', '/v2/datasets/apify~nope');
+					expect(res.status).toBe(404);
+					expect(res.data.error.type).toBe('record-not-found');
+					expect(res.headers['x-actor-runtime-fallback']).toBeUndefined();
+					expect(stub.hitCount()).toBe(1);
+				} finally {
+					await stub.close();
+				}
+			});
 		});
 	});
 

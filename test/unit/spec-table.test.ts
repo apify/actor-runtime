@@ -25,4 +25,15 @@ describe('matchSpecPath', () => {
 	it('is sensitive to method', () => {
 		expect(matchSpecPath('PATCH', 'v2/actors')).toBeUndefined();
 	});
+
+	it("knows the last-run shortcut family, mirroring each target path's own implemented flag", () => {
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/log')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/abort')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/dataset/items')?.implemented).toBe(true);
+		expect(matchSpecPath('PUT', 'v2/actors/abc/runs/last/key-value-store/records/OUTPUT')?.implemented).toBe(true);
+		// Same 501s as their own targets.
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/key-value-store/records')?.implemented).toBe(false);
+		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/metamorph')?.implemented).toBe(false);
+	});
 });

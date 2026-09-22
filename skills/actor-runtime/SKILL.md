@@ -167,17 +167,34 @@ apify api GET /actor-runtime/api-fallback     # read the current state
 
 Either field alone is accepted. Both default off and reset to off on every restart.
 
+Named storages follow the same path: a `username~name` reference the runtime has no local storage for
+is a not-found miss, so with `fallbackNotFoundEnabled` on, `apify api GET v2/datasets/apify~some-public-dataset/items`
+reads that dataset from the real platform, and your own `~name` that exists only on the platform
+resolves there too. A name that does exist locally is always served locally.
+
 **This writes to a real Apify account.** Enabling either forwards the token the failing call carried
 to the real platform, and every HTTP method is eligible - so a locally-missing `POST`/`PUT`/`DELETE`
 becomes a real write. Only turn it on with a token whose account you are willing to change, and say
 so before enabling it on someone's behalf. A relayed response carries `x-actor-runtime-fallback`
 (which platform served it) and `x-actor-runtime-fallback-trigger` (which toggle let it through).
 
+A `runs/last` call is never split between the two: an Actor that exists here is answered here, even when
+a later step misses. Only a call naming an Actor this runtime does not know is relayed.
+
 ## Inspecting state directly
 
 - `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
   The `v2/` prefix and the leading slash are both optional.
+- A named Actor, dataset, key-value store or request queue can stand in for its id as `~name` (your
+  own), `username~name` or `userId~name`, like on the platform:
+  `apify api GET v2/datasets/~my-results/items`. Names match case-insensitively. A bare name without
+  `~` is an id, except for an Actor, where it is also tried as a name. Another user's resource is not
+  found here - the runtime only ever shows your own.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
+- The `runs/last` shortcuts address an Actor's newest run without knowing its id:
+  `apify api GET v2/actors/<actorId>/runs/last`, and the same under `/log`, `/dataset/items`,
+  `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
+  failed runs. `client.actor(id).lastRun()` in the SDKs uses these.
 - The console at `http://localhost:3000` shows the same objects, plus the pricing and dev-folder forms,
   each run's usage and cost, the Migrate button and the browser view.
 - The runtime's data directory holds every storage, build and run record on disk. Read it freely;
