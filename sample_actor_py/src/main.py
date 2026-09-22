@@ -2,7 +2,7 @@
 
 Mirrors `sample_actor_ts`: crawls a live site (`startUrl` input, defaulting to
 `https://crawlee.dev/`) up to `maxPages` pages with `ParselCrawler` over the Actor's default
-request queue, and pushes one dataset item per page.
+request queue, pushes one dataset item per page, and charges the same pay-per-event events.
 """
 
 from __future__ import annotations
@@ -28,6 +28,14 @@ async def main() -> None:
 
         Actor.on(Event.SYSTEM_INFO, log_resource_usage)
 
+        # Under pay-per-event pricing (set on the Actor through the runtime's API or console) this Actor
+        # charges two events: 'page-scraped' once per page and 'crawl-finished' once at the end. A free
+        # Actor skips both, so a plain push-and-call stays unchanged.
+        pricing = Actor.get_charging_manager().get_pricing_info()
+        if pricing.is_pay_per_event:
+            cap = f'${pricing.max_total_charge_usd}' if pricing.max_total_charge_usd.is_finite() else 'none'
+            Actor.log.info(f'Pay-per-event pricing in effect, max total charge: {cap}.')
+
         actor_input = await Actor.get_input() or {}
         start_url = actor_input.get('startUrl', 'https://crawlee.dev/')
         max_pages = int(actor_input.get('maxPages', 2))
@@ -50,7 +58,21 @@ async def main() -> None:
             await context.enqueue_links()
             title = context.selector.css('title::text').get()
             await context.push_data({'url': context.request.url, 'title': title})
+            if pricing.is_pay_per_event:
+                charge = await Actor.charge('page-scraped')
+                Actor.log.info(
+                    f"Charged {charge.charged_count} 'page-scraped' event(s); "
+                    f'limit reached: {charge.event_charge_limit_reached}.'
+                )
+                # Nothing more can be charged, so nothing more should be scraped.
+                if charge.event_charge_limit_reached:
+                    crawler.stop(reason='The pay-per-event charge limit was reached.')
 
         await crawler.run([start_url])
+
+        if pricing.is_pay_per_event:
+            # Charged once the work is done, so a run that hit its cap mid-crawl charges nothing here.
+            charge = await Actor.charge('crawl-finished')
+            Actor.log.info(f"Charged {charge.charged_count} 'crawl-finished' event(s).")
 
         Actor.log.info('Crawl finished.')

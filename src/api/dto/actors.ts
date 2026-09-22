@@ -1,6 +1,5 @@
 import type { ActorRecord, BuildRecord, RunRecord } from '../../storage/entities.js';
 import { getRunTelemetry } from '../../services/events-channel.js';
-import { isTerminalJobStatus } from '../../services/job-status.js';
 import { computeRunUsage } from '../../services/run-usage.js';
 
 /** Matches `services/actors.ts`'s `DEFAULT_BUILD_TAG` - backfilled here only for run records that
@@ -54,8 +53,10 @@ export function buildDto(build: BuildRecord) {
 }
 
 export function runDto(run: RunRecord) {
-	// A live run has no final figures on its record yet, so its estimate comes from the events channel.
-	const usage = computeRunUsage(run, isTerminalJobStatus(run.status) ? undefined : getRunTelemetry(run.id));
+	// The accumulators outlive the run, and a run turns terminal a moment before they are copied onto its
+	// record, so reading them for a finished run too is what keeps its figures from briefly disappearing.
+	// Only a run whose figures were accumulated by an earlier process falls back to the record.
+	const usage = computeRunUsage(run, getRunTelemetry(run.id));
 	return {
 		id: run.id,
 		userId: run.userId,

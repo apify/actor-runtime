@@ -119,6 +119,10 @@ apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY
     "apify-actor-start":{"eventTitle":"Actor start","eventPriceUsd":0.005,"isOneTimeEvent":true}}}}]}'
 ```
 
+Both bundled samples already charge `page-scraped` per page and `crawl-finished` once at the end, and
+carry the matching pricing in `pricing.json`: `apify api PUT /v2/actors/<actorId> --body "$(cat
+sample_actor_ts/pricing.json)"` prices one in a single call.
+
 From then on every run of the Actor is a pay-per-event run: the SDKs read `pricingInfo` and
 `chargedEventCounts` off the run object exactly as on the platform, and `Actor.charge()` (or
 `apify actor charge`) posts to `POST /v2/actor-runs/<runId>/charge`. Do not set
@@ -130,7 +134,9 @@ tier. Submit `[]` to make the Actor free again; the same form is on the Actor's 
 
 Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
 (there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,
-its status message and log say so, and `chargingStoppedAt` is set on the run.
+its status message and log say so, and `chargingStoppedAt` is set on the run. An SDK with budget left
+for the next event stops charging by itself below the cap, so the abort only fires on a charge that
+crosses it - the JavaScript SDK's deliberate one-event overshoot does, the Python SDK never does.
 
 Read the outcome off the run object, `apify api GET actor-runs/<runId>`, or the run's console page:
 

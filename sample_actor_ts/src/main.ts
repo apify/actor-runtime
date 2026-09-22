@@ -25,8 +25,9 @@ Actor.on('systemInfo', (info: { cpuCurrentUsage?: number; memCurrentBytes?: numb
 	);
 });
 
-// Under pay-per-event pricing (set on the Actor through the runtime's API or console) every page is
-// charged as one 'page-scraped' event; a free Actor skips this, so a plain push-and-call stays unchanged.
+// Under pay-per-event pricing (set on the Actor through the runtime's API or console) this Actor charges
+// two events: 'page-scraped' once per page and 'crawl-finished' once at the end. A free Actor skips both,
+// so a plain push-and-call stays unchanged.
 const { isPayPerEvent, maxTotalChargeUsd } = Actor.getChargingManager().getPricingInfo();
 if (isPayPerEvent) {
 	const cap = Number.isFinite(maxTotalChargeUsd) ? `$${maxTotalChargeUsd}` : 'none';
@@ -67,6 +68,12 @@ const crawler = new CheerioCrawler({
 });
 
 await crawler.run();
+
+if (isPayPerEvent) {
+	// Charged once the work is done, so a run that hit its cap mid-crawl charges nothing here.
+	const charge = await Actor.charge({ eventName: 'crawl-finished' });
+	log.info(`Charged ${charge.chargedCount} 'crawl-finished' event(s).`);
+}
 
 log.info('Crawl finished.');
 

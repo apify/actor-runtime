@@ -429,9 +429,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			r.status,
 			r.startedAt,
 			storageLink('/datasets', r.defaultDatasetId),
-			formatUsd(
-				computeRunUsage(r, isTerminalJobStatus(r.status) ? undefined : getRunTelemetry(r.id)).usageTotalUsd,
-			),
+			formatUsd(computeRunUsage(r, getRunTelemetry(r.id)).usageTotalUsd),
 		]);
 		res.send(
 			layout(
@@ -492,7 +490,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				},
 			]);
 		}
-		const usage = computeRunUsage(run, isTerminalJobStatus(run.status) ? undefined : getRunTelemetry(run.id));
+		const usage = computeRunUsage(run, getRunTelemetry(run.id));
 		const body =
 			definitionList(rows) +
 			usageSection(run, usage) +
