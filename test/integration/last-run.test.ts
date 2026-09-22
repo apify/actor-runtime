@@ -1,12 +1,6 @@
 /**
- * Covers the last-run shortcuts (`api.md`'s "Last-run shortcuts", `api/routes/last-run.ts`): the pick
- * (newest by `startedAt`, the `?status=`/`?origin=` filters, id/name/`username~name` addressing, per-user
- * scoping); every sub-path re-dispatch (bare run, log, dataset, key-value store, request queue, abort,
- * reboot) answering exactly as the run's own endpoint does - through the real `apify-client` wherever it
- * has a method for it; the error ladder (unknown Actor, no run, unknown sub-path, GET-only bare form, `501`
- * targets); and the source-consistency rule against the upstream fallback, with a stub upstream: a local
- * Actor's request never leaves the runtime whatever it misses on later, and an unknown Actor's request
- * relays whole, original URL intact.
+ * Covers the last-run shortcuts (`api.md`'s "Last-run shortcuts", `api/routes/last-run.ts`): the pick, every
+ * sub-path re-dispatch, the error ladder, and the one-source rule against a stub upstream.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import axios from 'axios';
@@ -32,10 +26,9 @@ interface SeedRunOptions {
 	origin?: string;
 }
 
-/** A run record with real default storages (so every storage sub-path has something to reach), written
- * straight into the registry - `startedAt`/`status`/`meta.origin` fully under the test's control, and no
- * background lifecycle to race against (a run started through the API with the unavailable test driver
- * moves to `FAILED` on its own, at a time the test does not choose). */
+/** Seeded straight into the registry: `startedAt`/`status`/`meta.origin` under the test's control, and no
+ * background lifecycle to race (a run started through the API with the unavailable driver fails on its own,
+ * whenever it gets there). */
 async function seedRun(actor: { id: string; userId: string }, options: SeedRunOptions): Promise<RunRecord> {
 	const [dataset, keyValueStore, requestQueue] = await Promise.all([
 		createStorage(actor.userId, 'dataset'),
@@ -68,10 +61,8 @@ describe('last-run shortcuts', () => {
 
 	beforeEach(async () => {
 		server = await startTestServer();
-		// Every first-seen token runs the one-time identity probe against whatever upstream is configured
-		// (`services/identity-resolution.ts`). A guaranteed-dead address makes it fail instantly with zero
-		// real egress, for the default token here and for any second token a test below mints - and the
-		// fallback tests further down re-point this at their own stub only after warming the default token.
+		// Every first-seen token probes the configured upstream once; a dead address makes that fail instantly
+		// instead of landing on a test's own stub and inflating its hit count.
 		previousUpstreamUrl = process.env.APIFY_UPSTREAM_API_BASE_URL;
 		process.env.APIFY_UPSTREAM_API_BASE_URL = 'http://127.0.0.1:1';
 		await warmUpIdentity(server.baseUrl, server.token);
@@ -108,7 +99,7 @@ describe('last-run shortcuts', () => {
 	describe('the pick', () => {
 		it('GET runs/last is the newest run by startedAt - the same object GET actor-runs/:runId returns', async () => {
 			const actor = await seedActor();
-			// Inserted out of time order on purpose: registry order must not decide the pick.
+			// Out of time order on purpose: registry order must not decide the pick.
 			await seedRun(actor, { startedAt: T1 });
 			const newest = await seedRun(actor, { startedAt: T3 });
 			await seedRun(actor, { startedAt: T2 });
@@ -210,8 +201,7 @@ describe('last-run shortcuts', () => {
 			expect(asOther.status).toBe(404);
 			expect(asOther.data.error.type).toBe('record-not-found');
 
-			// The other user's own same-named Actor with no runs: their name resolves to *their* Actor, and
-			// the first user's run is never a candidate for it.
+			// Their own same-named Actor resolves to theirs, and the first user's run is never a candidate.
 			const other = new ApifyClient({ baseUrl: server.baseUrl, token: otherToken, maxRetries: 0 });
 			await other.actors().create({ name: 'mine-only' });
 			const byName = await call('get', '/v2/actors/mine-only/runs/last', { token: otherToken });
@@ -269,8 +259,7 @@ describe('last-run shortcuts', () => {
 				contentType: 'application/json',
 			});
 			expect(put.status).toBe(201);
-			// `!()` are legal key characters; sent percent-encoded, they must reach the store route as-is and
-			// be decoded exactly once, there.
+			// `!()` are legal key characters; percent-encoded, they must be decoded exactly once, at the target.
 			const putEncoded = await call('put', `${base}/records/OUTPUT%21%28v1%29`, {
 				body: 'plain',
 				contentType: 'text/plain',
@@ -476,19 +465,19 @@ describe('last-run shortcuts', () => {
 			const base = `/v2/actors/${actor.id}/runs/last`;
 
 			await withStub(async (stub) => {
-				// `record-not-found` from the target route: the run's store has no such key.
+				// `record-not-found` from the target route.
 				const missingKey = await call('get', `${base}/key-value-store/records/NOPE`);
 				expect(missingKey.status).toBe(404);
 				expect(missingKey.data.error.type).toBe('record-not-found');
 				expectLocalAnswer(missingKey);
 
-				// `not-found` decided by the last-run route itself: no such shortcut on the platform either.
+				// `not-found` decided by the last-run route itself.
 				const unknownSubPath = await call('get', `${base}/foo`);
 				expect(unknownSubPath.status).toBe(404);
 				expect(unknownSubPath.data.error.type).toBe('not-found');
 				expectLocalAnswer(unknownSubPath);
 
-				// `not-implemented` from the catch-all, for targets this runtime does not serve.
+				// `not-implemented` from the catch-all.
 				const zip = await call('get', `${base}/key-value-store/records`);
 				expect(zip.status).toBe(501);
 				expectLocalAnswer(zip);
@@ -496,7 +485,7 @@ describe('last-run shortcuts', () => {
 				expect(metamorph.status).toBe(501);
 				expectLocalAnswer(metamorph);
 
-				// A filter that matches no local run is still a local "no run", never the platform's last run.
+				// A filter matching no local run is still a local "no run", never the platform's last run.
 				const noneInStatus = await call('get', `${base}?status=TIMING-OUT`);
 				expect(noneInStatus.status).toBe(404);
 				expect(noneInStatus.data.error.type).toBe('record-not-found');
@@ -508,7 +497,7 @@ describe('last-run shortcuts', () => {
 
 		it('fallbackNotFoundEnabled: an unknown Actor relays the whole original request once, URL and query intact, own token only', async () => {
 			setApiFallbackState({ fallbackUnimplementedEnabled: false, fallbackNotFoundEnabled: true });
-			// A local Actor with a run exists too - it must play no part in a request that names another Actor.
+			// A local Actor with a run exists too, and must play no part in a request naming another Actor.
 			const local = await seedActor('local-bystander');
 			await seedRun(local, { startedAt: T1 });
 
@@ -524,8 +513,7 @@ describe('last-run shortcuts', () => {
 				expect(stub.hitCount()).toBe(1);
 				const relayed = stub.requests()[0]!;
 				expect(relayed.method).toBe('GET');
-				// The caller's URL, not a rewritten `/v2/datasets/<some local id>/items`: the platform resolves
-				// the Actor, its last run and the dataset itself.
+				// The caller's URL, never a rewritten local one.
 				expect(relayed.url).toBe(path);
 				expect(relayed.headers.authorization).toBe(`Bearer ${server.token}`);
 			});

@@ -1,9 +1,5 @@
-/**
- * `lastRunTargetUrl` (`api/routes/last-run.ts`) as a pure function: the router-relative URL of a
- * `runs/last` request plus the picked run, in; the URL the request re-dispatches to (or a `not-found`
- * `ApiError`), out. The HTTP-level behaviour of the re-dispatch itself is covered by
- * `test/integration/last-run.test.ts`.
- */
+/** `lastRunTargetUrl` (`api/routes/last-run.ts`) alone; the re-dispatch it feeds is covered by
+ * `test/integration/last-run.test.ts`. */
 import { describe, expect, it } from 'vitest';
 
 import { lastRunTargetUrl } from '../../src/api/routes/last-run.js';
@@ -37,7 +33,7 @@ describe('lastRunTargetUrl', () => {
 		expect(lastRunTargetUrl('GET', '/actors/A/runs/last?status=SUCCEEDED', run)).toBe(
 			'/v2/actor-runs/RUN1?status=SUCCEEDED',
 		);
-		// Never a shortcut to `DELETE actor-runs/:runId` - the platform's bare form is GET-only.
+		// Never a shortcut to `DELETE actor-runs/:runId`.
 		expectNotFound(() => lastRunTargetUrl('DELETE', '/actors/A/runs/last', run));
 		expectNotFound(() => lastRunTargetUrl('POST', '/actors/A/runs/last', run));
 		expectNotFound(() => lastRunTargetUrl('PUT', '/actors/A/runs/last?status=SUCCEEDED', run));
@@ -83,7 +79,7 @@ describe('lastRunTargetUrl', () => {
 		);
 		expect(lastRunTargetUrl('POST', '/actors/A/runs/last/reboot', run)).toBe('/v2/actor-runs/RUN1/reboot');
 		expect(lastRunTargetUrl('POST', '/actors/A/runs/last/metamorph', run)).toBe('/v2/actor-runs/RUN1/metamorph');
-		// A trailing sub-path is forwarded and left to the target to reject.
+		// Forwarded, and left to the target to reject.
 		expect(lastRunTargetUrl('POST', '/actors/A/runs/last/abort/extra', run)).toBe(
 			'/v2/actor-runs/RUN1/abort/extra',
 		);

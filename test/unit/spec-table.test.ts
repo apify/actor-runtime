@@ -32,7 +32,7 @@ describe('matchSpecPath', () => {
 		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/abort')?.implemented).toBe(true);
 		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/dataset/items')?.implemented).toBe(true);
 		expect(matchSpecPath('PUT', 'v2/actors/abc/runs/last/key-value-store/records/OUTPUT')?.implemented).toBe(true);
-		// Same two 501s as their `v2/key-value-stores/:storeId/records` / `v2/actor-runs/:runId/metamorph` targets.
+		// Same 501s as their own targets.
 		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/key-value-store/records')?.implemented).toBe(false);
 		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/metamorph')?.implemented).toBe(false);
 	});

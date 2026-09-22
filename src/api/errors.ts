@@ -22,11 +22,9 @@ export function invalidRequest(message: string): ApiError {
 }
 
 /**
- * The same `404` `not-found` `server.ts`'s catch-all answers for a path no router matched at all
- * (`api.md`'s "501 vs 404"), for the one route that matches a whole path *family* and has to make that
- * call itself for a sub-path the Apify API has no endpoint at (`routes/last-run.ts`). Deliberately not
- * `record-not-found`: nothing was looked up and missed, the URL itself names no endpoint - and the two
- * are gated by different fallback toggles.
+ * The catch-all's own `404` `not-found`, for a route that matches a whole path family and has to reject an
+ * off-spec sub-path itself (`routes/last-run.ts`). Not `record-not-found`: nothing was looked up, and the
+ * two types are gated by different fallback toggles.
  */
 export function endpointNotFound(message: string): ApiError {
 	return new ApiError(404, 'not-found', message);

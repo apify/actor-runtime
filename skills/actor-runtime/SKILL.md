@@ -144,9 +144,8 @@ becomes a real write. Only turn it on with a token whose account you are willing
 so before enabling it on someone's behalf. A relayed response carries `x-actor-runtime-fallback`
 (which platform served it) and `x-actor-runtime-fallback-trigger` (which toggle let it through).
 
-A `runs/last` call is never split between the two: an Actor that exists here is answered here - its newest
-run, storages and log are local even when a later step misses, and even with both toggles on. Only a call
-naming an Actor this runtime does not know is relayed, whole, for the platform to resolve end to end.
+A `runs/last` call is never split between the two: an Actor that exists here is answered here, even when
+a later step misses. Only a call naming an Actor this runtime does not know is relayed.
 
 ## Inspecting state directly
 
@@ -158,11 +157,10 @@ naming an Actor this runtime does not know is relayed, whole, for the platform t
   `~` is an id, except for an Actor, where it is also tried as a name. Another user's resource is not
   found here - the runtime only ever shows your own.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
-- The platform's `runs/last` shortcuts work here too: `apify api GET v2/actors/<actorId>/runs/last` is the
-  Actor's newest run, and `.../runs/last/dataset/items`, `.../runs/last/key-value-store/records/OUTPUT`,
-  `.../runs/last/log` and `apify api POST v2/actors/<actorId>/runs/last/abort` address that run's
-  storages, log and abort without knowing its id. Add `?status=SUCCEEDED` to skip failed runs.
-  `client.actor(id).lastRun()` in the SDKs uses exactly these.
+- The `runs/last` shortcuts address an Actor's newest run without knowing its id:
+  `apify api GET v2/actors/<actorId>/runs/last`, and the same under `/log`, `/dataset/items`,
+  `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
+  failed runs. `client.actor(id).lastRun()` in the SDKs uses these.
 - The console at `http://localhost:3000` shows the same objects, plus the dev-folder form, the
   Migrate button and the browser view.
 - The runtime's data directory holds every storage, build and run record on disk. Read it freely;

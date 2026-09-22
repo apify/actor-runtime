@@ -56,15 +56,10 @@ export function resetApiFallbackStateForTests(): void {
 }
 
 /**
- * Pins `req` to this runtime for the rest of its life: from here on `attemptFallback` declines it,
- * whatever local miss it later produces and whatever the toggles say. For a request whose *identity*
- * this runtime has already resolved locally - `api.md`'s source-consistency rule for the last-run
- * shortcuts (`api/routes/last-run.ts`), where the Actor is resolved first and everything decided after
- * it (the newest run, its storages, its log) must then come from the same place. The platform cannot
- * know a local run's id, so relaying a later miss on such a request (no run yet, no such record key, an
- * unimplemented sub-path) could never answer about the resource the caller meant - it could only forward
- * the token and answer about some unrelated platform object. Never unset: nothing that happens later
- * in the request can make its source undecided again.
+ * Declines every later fallback attempt on this request, whatever the toggles say - for a request that
+ * has already resolved one record locally and goes on to resolve more from it (`api.md`'s one-source rule,
+ * `api/routes/last-run.ts`). The platform cannot answer about a local record, so a relayed miss could only
+ * describe some unrelated platform object.
  */
 export function pinRequestToLocal(req: Request): void {
 	req.pinnedToLocal = true;
@@ -144,10 +139,9 @@ export interface LocalError {
  * never eligible, or eligible but abandoned - either way the original local error is still the caller's
  * to send.
  *
- * Eligibility, in order: the request must not be pinned to this runtime (`pinRequestToLocal` above -
- * its source was decided locally before the miss happened); the local error's `type` must map to a
- * trigger (above) and that trigger's toggle must be on; the request must be under `/v2/*`, excluding
- * `/v2/actor-runtime/*`; the request
+ * Eligibility, in order: the request must not be pinned to this runtime (`pinRequestToLocal` above); the
+ * local error's `type` must map to a trigger (above) and that trigger's toggle must be on; the request
+ * must be under `/v2/*`, excluding `/v2/actor-runtime/*`; the request
  * must be authenticated (`req.user` - every `/v2/*` request, off-spec paths included, passes `auth()`
  * before reaching either seam, so this only ever fails for a request this runtime never authenticated at
  * all, e.g. one outside `/v2` entirely). All HTTP methods are eligible once these hold, writes included.

@@ -149,13 +149,10 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	// --- Default run storages (requirements amendment for the request sub-resources) ---
 	...runStorageAliasEntries('v2/actor-runs/:runId'),
 
-	// --- Last-run shortcuts (`api.md`'s "Last-run shortcuts") ---
-	// One `router.all('/actors/:actorId/runs/last{/*rest}')` route serves this whole family
-	// (`routes/last-run.ts`): it resolves the Actor and its newest run, then re-dispatches onto the run's
-	// own endpoint, so the *target's* entry above is what decides each sub-path's methods and its 501/404 -
-	// the catch-all only ever sees these paths in their rewritten form. The entries here mirror those
-	// targets one to one (`implemented: false` marks a sub-path whose target is itself 501 here), so this
-	// table stays an honest per-path answer to "does the runtime serve this?".
+	// --- Last-run shortcuts ---
+	// These re-dispatch onto the run's own endpoints (`routes/last-run.ts`), so the catch-all only ever sees
+	// them rewritten. Listed anyway, mirroring each target's own flag, so the table stays an honest per-path
+	// answer to "does the runtime serve this?".
 	pathTemplate('GET', 'v2/actors/:actorId/runs/last', true),
 	pathTemplate('GET', 'v2/actors/:actorId/runs/last/log', true),
 	pathTemplate('POST', 'v2/actors/:actorId/runs/last/abort', true),
