@@ -21,6 +21,7 @@ import {
 	apify,
 	apifyAllOutput,
 	apifyEnv,
+	apifyExpectingFailure,
 	createIsolatedApifyHome,
 	loginApifyCli,
 	removeIsolatedApifyHome,
@@ -131,6 +132,31 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 
 		const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
 		expect(log).toMatch(/Processing/);
+	});
+
+	it("a call with no input at all runs on the input schema's defaults, and one the schema rejects never starts", () => {
+		const env = apifyEnv(isolatedApifyHome);
+		const actorDir = join(REPO_ROOT, 'sample_actor_ts');
+
+		// No `--input`: the Actor's input schema defaults `maxPages` to 2, so the item count is 2 -
+		// input-dependent, like every other assertion here, just with the input coming from the schema.
+		const callOutput = apify(['call', '--json'], { cwd: actorDir, env });
+		const call = JSON.parse(callOutput) as CallResult;
+		expect(call.run.status).toBe('SUCCEEDED');
+
+		const infoOutput = apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		expect((JSON.parse(infoOutput) as DatasetInfoResult).itemCount).toBe(2);
+
+		// `maxPages` has `minimum: 1` - the run is refused before any container starts, and the CLI
+		// surfaces the runtime's validation message.
+		const rejected = apifyExpectingFailure(['call', '--input', JSON.stringify({ maxPages: 0 }), '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		expect(rejected).toMatch(/maxPages/);
 	});
 
 	it('apify api reads back the run and its default dataset (requirements/cli.md: `apify api`)', () => {

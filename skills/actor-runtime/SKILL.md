@@ -53,6 +53,28 @@ both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - a
 those is retried for `linux/amd64`, the architecture the Apify platform builds and runs on, with the
 reason in the build log. The engine emulates it (Rosetta on Apple Silicon), so it works, just slower.
 
+## Input schema: defaults and validation
+
+If the Actor declares an input schema - the `input` field of `.actor/actor.json`, or
+`.actor/INPUT_SCHEMA.json`, or `INPUT_SCHEMA.json` at its root - the runtime uses it the way the
+platform does:
+
+```sh
+apify call                                  # no input: the run gets the schema's defaults
+apify call --input '{"maxPages":0}'         # rejected before anything starts, if the schema forbids it
+```
+
+- Every field left out of `--input` is filled from the schema's `default`, and that filled-in input is
+  what the run reads back as `INPUT`.
+- An input the schema rejects fails the call with the same message the real API gives (`Input is not
+valid: Field input.maxPages must be >= 1`); no run is created and no container starts.
+- The schema comes from the **build**, so a locally edited `INPUT_SCHEMA.json` needs an `apify push` to
+  take effect - unlike a source edit under a registered dev folder.
+- A schema the Apify input-schema meta-schema rejects fails the **build**, with the defect in the build
+  log, instead of being silently ignored.
+- Two local differences: Apify Proxy groups are not checked (any `apifyProxyGroups` selection is
+  accepted), and encrypted secret input fields are not supported.
+
 ## Iterate without rebuilding (dev folder)
 
 After that first `apify push`, the runtime registers the pushed directory as the Actor's **dev

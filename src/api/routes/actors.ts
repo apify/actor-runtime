@@ -3,7 +3,7 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sendPaginated, sortByTimestamp } from '../envelope.js';
-import { recordNotFound, invalidRequest } from '../errors.js';
+import { ApiError, recordNotFound, invalidRequest } from '../errors.js';
 import { h, jsonBody, paginationParams, queryBoolean, queryNumber, queryString, rawBody } from '../handler.js';
 import {
 	addOrReplaceVersion,
@@ -25,10 +25,16 @@ import {
 import { listOwnedRuns, startRun, waitForRunFinish } from '../../services/runs.js';
 import { getRegistries } from '../../storage/registries.js';
 import { actorDto, buildDto, runDto } from '../dto/actors.js';
-import type { ActorVersionRecord } from '../../storage/entities.js';
+import type { ActorVersionRecord, BuildRecord } from '../../storage/entities.js';
 import type { ApiServerDeps } from '../server.js';
 import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
+import {
+	describeInputProcessingFailure,
+	processActorInput,
+	type ActorInput,
+	type InputProcessingResult,
+} from '../../services/input-schema.js';
 
 export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
@@ -272,6 +278,27 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		}),
 	);
 
+	/** Maps a non-`ok` `InputProcessingResult` to the `ApiError` this route throws - the HTTP status and
+	 * error `type` are the route's concern, the message text the service's (`services/input-schema.ts`),
+	 * the same split `api/routes/dev-folder.ts` already uses. Both types, and both messages, are the
+	 * real platform's for the same input (`@apify-packages/errors`'s `actor.inputNotValid` and friends). */
+	function inputApiError(result: Exclude<InputProcessingResult, { kind: 'ok' }>): ApiError {
+		const message = describeInputProcessingFailure(result);
+		const type = result.kind === 'invalid-schema' ? 'invalid-input-schema' : 'invalid-input';
+		return new ApiError(400, type, message);
+	}
+
+	/** The run's effective input: the caller's bytes as-is for a build with no input schema, or - for one
+	 * that has a schema - the input with the schema's defaults applied, validated, and re-serialized
+	 * (`services/input-schema.ts`). A schema turns "no input at all" into "the defaults", which is why
+	 * this can return an input for a request that carried no body. */
+	function resolveRunInput(build: BuildRecord, raw: ActorInput | undefined): ActorInput | undefined {
+		if (!build.inputSchema) return raw;
+		const processed = processActorInput(raw, build.inputSchema);
+		if (processed.kind !== 'ok') throw inputApiError(processed);
+		return processed.input;
+	}
+
 	router.post(
 		'/actors/:actorId/runs',
 		h(async (req, res) => {
@@ -298,8 +325,9 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const build = lookup.build;
 
 			const body = rawBody(req);
-			const input =
+			const rawInput =
 				body.length > 0 ? { body, contentType: req.header('content-type') ?? 'application/json' } : undefined;
+			const input = resolveRunInput(build, rawInput);
 
 			// `resolveProxyPassword(requireUser(req))` is the *run owner's* proxy password, not just "the
 			// caller's": `actor` was resolved via `resolveOwnedActor(requireUser(req).id, ...)` above, so

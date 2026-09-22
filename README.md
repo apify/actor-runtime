@@ -46,6 +46,23 @@ In a build or run log, everything the runtime itself has to say - dev-folder not
 attach line, the browser-view URL, migration markers, a run that could not be started - opens with a
 blue `[actor-runtime]` prefix. Your Actor's own output is passed through byte for byte.
 
+## Input schema: defaults and validation
+
+An Actor that declares an input schema (the `input` field of `.actor/actor.json`, `.actor/INPUT_SCHEMA.json`,
+or `INPUT_SCHEMA.json` at its root) gets the platform's behaviour locally: the schema's defaults are filled into
+every run's input, and an input the schema rejects fails the call with the API's own message instead of starting a
+container.
+
+```bash
+apify call                              # runs on the schema's defaults
+apify call --input '{"maxPages":0}'     # 400 Input is not valid: Field input.maxPages must be >= 1
+```
+
+The schema is read at build time, so editing it locally needs an `apify push` even under a registered dev folder,
+and a schema the Apify meta-schema rejects fails the build with the defect in its log. Proxy group availability is
+not checked locally, and encrypted secret input fields stay unsupported - see
+`requirements/actor-driver.md`'s "Input schema, validation and defaults".
+
 ## Running with Podman instead of Docker
 
 The runtime talks to the container engine only through its Docker-compatible API socket, and Podman

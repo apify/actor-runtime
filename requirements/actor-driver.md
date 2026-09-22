@@ -34,6 +34,44 @@
     4. the platform's bundled default Dockerfile, for that build only - the pushed source itself is unchanged.
     - Matching is case-insensitive, exact-case wins ties, and every outcome is stated in the build log.
 
+# Input schema, validation and defaults
+
+- **A build records the input schema found in the Actor's pushed source**, and every run started against
+  that build has its input validated against it and the schema's defaults applied. A build that has no
+  input schema runs every input through untouched, exactly as the caller sent it.
+- Resolution order at build time, stopping at the first hit, matching what `apify-cli` looks for
+  locally:
+    1. the `input` field of `.actor/actor.json` - either an inline schema object, or a path relative to
+       `.actor/`; a path escaping the Actor root fails the build with "points outside the Actor root
+       directory", a value that is neither a string nor an object fails with `"input" must be a string
+or an object`, and a path naming no pushed file falls through instead of failing.
+    2. `.actor/INPUT_SCHEMA.json`
+    3. `INPUT_SCHEMA.json` at the Actor root
+    - Matching is case-insensitive, exact-case wins ties, and every outcome is stated in the build log.
+      Schema files are parsed as JSON5, like `.actor/actor.json` already is.
+- **A schema that is itself invalid fails the build**, with the defect in both the build log and the
+  build's status message - rather than producing an image whose every later run silently skips
+  validation. Validity is judged by the Apify input-schema meta-schema, the platform's own.
+- **At run start** (`POST /v2/actors/:actorId/runs`), for a build that has a schema:
+    - The input must be `application/json` and must parse to a JSON object; `null` counts as no input.
+    - The schema's defaults fill in every field the caller left out, nested objects and the items of
+      arrays included, and the result is what is stored as the run's `INPUT` record. A run started with
+      no input at all therefore still gets an `INPUT` record holding the defaults.
+    - A field that is `required` but has a `default` is satisfied by that default; a required array must
+      hold at least one item.
+    - An input the schema rejects answers `400` and starts nothing - no run record, no container
+      (`api.md`).
+    - The schema used is that of the build the run actually resolved, never another tag's more recently
+      pushed one.
+- **Known differences from the platform**: proxy group availability is not checked, since this runtime
+  emulates no proxy groups - a `proxy` field is still validated for shape, custom proxy URLs and
+  country code, but any `apifyProxyGroups` selection is accepted. Encrypted secret input fields stay
+  unsupported (`unsupported.md`), so a value for an `isSecret` field is validated as the plain value it
+  locally is.
+- The schema comes from the **build**, so an Actor running from a registered dev folder validates
+  against the schema of its last build: editing `INPUT_SCHEMA.json` locally needs an `apify push` to
+  take effect, unlike a source edit.
+
 # Bind mount volumes with Actor source code
 
 - To let an Actor be re-run with source changes and no rebuild, the Actor's registered local dev

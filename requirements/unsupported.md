@@ -25,7 +25,6 @@ real account, not in the runtime.
 - Ad-hoc webhooks on run start
 - Run usage, cost and compute units
 - Last-run shortcuts (`runs/last`)
-- Input validation and defaults from the input schema
 - Encrypted secret input fields
 - Actor-level default run options
 - Dynamic and bounded memory from `.actor/actor.json`

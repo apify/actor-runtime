@@ -8,6 +8,7 @@ import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
+import { resolveInputSchemaLocation } from './input-schema-location.js';
 import { appendLog, appendRuntimeLog, flushLog, markLogTerminal } from './logs.js';
 import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
 
@@ -214,6 +215,25 @@ export async function runBuildInBackground(
 		return;
 	}
 	for (const line of dockerfileResolution.logLines) appendRuntimeLog(record.id, line);
+
+	// Resolved before the image is built, not after: an Actor whose declared input contract cannot be
+	// read (or is itself invalid) fails the build with that reason stated, rather than building an image
+	// whose every later run would silently skip validation. Same failure shape as the Dockerfile
+	// resolution above, and, like it, nothing here ever touches the pushed source itself.
+	const inputSchemaResolution = resolveInputSchemaLocation(version.sourceFiles);
+	if (inputSchemaResolution.outcome === 'failure') {
+		appendRuntimeLog(record.id, inputSchemaResolution.message);
+		await flushLog(record.id);
+		markLogTerminal(record.id);
+		await transitionJobStatus(builds, record.id, 'FAILED', {
+			finishedAt: new Date().toISOString(),
+			statusMessage: inputSchemaResolution.message,
+		});
+		return;
+	}
+	for (const line of inputSchemaResolution.logLines) appendRuntimeLog(record.id, line);
+	const inputSchema = inputSchemaResolution.outcome === 'resolved' ? inputSchemaResolution.schema : undefined;
+
 	const sourceFiles: SourceFile[] = qualifyDockerfileImages(
 		dockerfileResolution.outcome === 'default'
 			? [...version.sourceFiles, dockerfileResolution.extraSourceFile]
@@ -269,6 +289,10 @@ export async function runBuildInBackground(
 			...(outcome.imageWorkingDirectory !== undefined
 				? { imageWorkingDirectory: outcome.imageWorkingDirectory }
 				: {}),
+			// Omitted entirely (rather than written as `undefined`) for an Actor with no input schema,
+			// same reason as `imageWorkingDirectory` right above: "never present on a non-SUCCEEDED
+			// build" stays true of the value too, there is simply nothing to record for this build.
+			...(inputSchema !== undefined ? { inputSchema } : {}),
 		});
 		if (succeeded?.status !== 'SUCCEEDED') {
 			await updateActor(actor.id, (current) => {

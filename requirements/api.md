@@ -17,6 +17,15 @@
 - `DELETE /v2/actor-builds/:buildId` and `DELETE /v2/actor-runs/:runId` on a **non-terminal** build/run
   are rejected, not aborted-then-deleted: `400` with error type `deleting-unfinished-build` (builds) or
   `cannot-remove-running-run` (runs), matching the Apify platform.
+- `POST /v2/actors/:actorId/runs` validates the input against the resolved build's input schema, when it
+  has one (`actor-driver.md`'s "Input schema, validation and defaults"), and answers `400` with the
+  platform's own error types and messages when it does not pass - starting nothing at all:
+    - `invalid-input` - `Actor input must have content type "application/json".`, `Cannot parse input
+JSON body: ...`, `The input JSON must be object, got "<type>" instead.`, or `Input is not valid:
+<every validation error, comma-separated>`.
+    - `invalid-input-schema` - `Input schema is not valid: ...`, for a stored schema that cannot be
+      compiled at all (a build made by an older runtime, before builds validated their schemas).
+    - A build with no input schema accepts any body, unvalidated, exactly as before.
 - Three endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
@@ -283,9 +292,9 @@ This runtime emulates that observable experience on demand:
     - `fallbackNotFoundEnabled` covers a request that reaches a route this runtime does serve, but
       whose specific record id doesn't exist locally (`record-not-found`, see "Response envelopes"
       above).
-    - Every other error type - `invalid-request`, `user-not-authenticated`,
-      `cannot-remove-running-run`, `deleting-unfinished-build`, any `dev-folder-*` type,
-      `internal-error` - is never relayed, regardless of either toggle's state.
+    - Every other error type - `invalid-request`, `invalid-input`, `invalid-input-schema`,
+      `user-not-authenticated`, `cannot-remove-running-run`, `deleting-unfinished-build`, any
+      `dev-folder-*` type, `internal-error` - is never relayed, regardless of either toggle's state.
 - **All HTTP methods are eligible for both toggles, writes included**: a `POST`/`PUT`/`DELETE` that
   would otherwise 404/501 locally is relayed exactly like a `GET` when its toggle is on - and, if the
   platform accepts it, becomes a real write against the caller's real account. This is a deliberate

@@ -32,6 +32,24 @@ export function apifyAllOutput(args: string[], options: { cwd: string; env: Node
 	return `${result.stdout}\n${result.stderr}`;
 }
 
+/**
+ * Like `apifyAllOutput()`, but for a command that is *expected* to fail: returns its combined output
+ * instead of throwing, and fails the test if the command unexpectedly succeeded. Used for the run that
+ * the runtime must refuse (an input its Actor's input schema rejects), where the CLI's non-zero exit is
+ * itself part of what the test asserts.
+ */
+export function apifyExpectingFailure(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): string {
+	const result = spawnSync('npx', ['-y', '-p', 'apify-cli', 'apify', ...args], {
+		cwd: options.cwd,
+		env: options.env,
+		encoding: 'utf8',
+	});
+	if (result.status === 0) {
+		throw new Error(`apify ${args.join(' ')} was expected to fail, but succeeded:\n${result.stdout}`);
+	}
+	return `${result.stdout}\n${result.stderr}`;
+}
+
 /** Any non-empty value works - the runtime creates a user for this token ad-hoc on its first API
  * request (`cli.md`'s User bootstrap), the same token throughout this e2e run mapping back to that one
  * user on every subsequent request. */
