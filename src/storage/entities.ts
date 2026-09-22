@@ -43,10 +43,9 @@ export interface SourceFile {
 }
 
 /**
- * An Actor's input schema, exactly as it was pushed (`services/input-schema-location.ts` resolves which
- * file or inline object that is). Kept as a loose record rather than a modelled type: it is the
- * developer's own document, handed to the platform's own validator verbatim, and the runtime itself
- * only ever reads `properties`/`required` out of it.
+ * An Actor's input schema, exactly as it was pushed. A loose record rather than a modelled type: it is
+ * the developer's own document, handed to the platform's validator verbatim, and the runtime itself
+ * reads only `properties`/`required` out of it.
  */
 export interface InputSchema {
 	[key: string]: unknown;
@@ -132,12 +131,10 @@ export interface BuildRecord {
 	 * inspect failed or the working directory was empty/`/` (mounting over `/` would destroy the
 	 * container) - never present on a non-`SUCCEEDED` build. */
 	imageWorkingDirectory?: string;
-	/** The input schema resolved from this build's own source files (`services/input-schema-location.ts`),
-	 * recorded in the same status-transition write that records `SUCCEEDED`, exactly like
-	 * `imageWorkingDirectory` above. Build-specific for the same reason that field is: a run validates
-	 * its input against the schema of the build it actually resolved, never against some other tag's
-	 * more recently pushed one. Absent when the Actor declares no input schema at all, and never present
-	 * on a non-`SUCCEEDED` build - such a run then takes its input exactly as the caller sent it. */
+	/** The input schema this build's own source files declared, written with `SUCCEEDED` like
+	 * `imageWorkingDirectory` above, and build-specific for the same reason: a run validates against the
+	 * schema of the build it resolved, never another tag's more recently pushed one. Absent when the
+	 * Actor declares none - such a run takes its input exactly as the caller sent it. */
 	inputSchema?: InputSchema;
 	exitCode?: number;
 	statusMessage?: string;

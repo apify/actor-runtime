@@ -1,20 +1,10 @@
 /**
- * Input validation and defaults from the Actor's input schema - the run-time half of the feature whose
- * build-time half (finding the schema in the pushed source) is `services/input-schema-location.ts`.
+ * Input validation and defaults at run start; `services/input-schema-location.ts` is the build-time
+ * half that finds the schema in the pushed source.
  *
- * Validation itself is the platform's own: `@apify/input_schema`'s `validateInputSchema` (the schema
- * against the Apify input-schema meta-schema) and `validateInputUsingValidator` (the input against the
- * schema, plus the proxy/`requestListSources`/pattern checks AJV alone cannot express), driven by the
- * same AJV configuration the platform's API uses. That is deliberate: a developer must see locally the
- * very same message the real API would answer with, not an approximation of it.
- *
- * Two behaviours the platform has and this runtime deliberately does not:
- *   - **Proxy group availability.** The platform passes the caller's proxy groups into the validator,
- *     which then rejects a group the account cannot use. This runtime emulates no proxy groups at all
- *     (`unsupported.md`), so it passes none: a `proxy` field is still checked for shape, custom proxy
- *     URLs and country code, but any `apifyProxyGroups` selection is accepted.
- *   - **Encrypted secret input fields** stay unsupported (`unsupported.md`); a schema may declare
- *     `isSecret`, and the value is then validated as the plain value it locally is.
+ * Validation goes through the platform's own `@apify/input_schema`, driven by the same AJV
+ * configuration the platform's API uses, so a developer reads locally the very message the real API
+ * would answer with rather than an approximation of it.
  */
 import ajvPackage from 'ajv';
 import ajv2019Package from 'ajv/dist/2019.js';
@@ -23,8 +13,8 @@ import { validateInputSchema, validateInputUsingValidator } from '@apify/input_s
 import type { InputSchema } from '../storage/entities.js';
 
 // AJV ships as CommonJS, so under this package's ESM resolution its class arrives as the module's
-// `default` rather than as the import binding itself. `2019` is the same library built with
-// draft-2019-09 support, which the Apify input-schema meta-schema requires and the plain build lacks.
+// `default`. `2019` is the same library with draft-2019-09 support, which the Apify input-schema
+// meta-schema requires and the plain build lacks.
 const Ajv = ajvPackage.default;
 const Ajv2019 = ajv2019Package.default;
 type InputValidator = ReturnType<InstanceType<typeof Ajv>['compile']>;
@@ -46,10 +36,8 @@ export type InputProcessingResult =
 	| { kind: 'invalid'; message: string }
 	| { kind: 'invalid-schema'; message: string };
 
-/** The messages the real Apify API answers with, word for word (`@apify-packages/errors`'s
- * `actor.inputNotJson`/`inputNotValidJson`/`inputNotObject`/`inputNotValid`/`invalidInputSchema`) -
- * the whole point of routing validation through the platform's own validator is that the text a
- * developer reads locally is the text they would read against the platform. */
+/** The real Apify API's messages, word for word (`@apify-packages/errors`'s `actor.inputNotJson` and
+ * its neighbours). */
 export function describeInputProcessingFailure(result: Exclude<InputProcessingResult, { kind: 'ok' }>): string {
 	switch (result.kind) {
 		case 'not-json':
@@ -66,22 +54,18 @@ export function describeInputProcessingFailure(result: Exclude<InputProcessingRe
 }
 
 /**
- * Meta-validates an input schema, returning `null` when it is valid or a human-readable defect when it
- * is not. Used at build time (`services/input-schema-location.ts`) so a broken schema is reported where
- * the developer is already looking - the build log - rather than silently at every later run.
- *
- * The meta-schema uses JSON Schema draft 2019-09 features, hence AJV's 2019 build here; the input
- * validator below deliberately uses the plain one, exactly as the platform does for each.
+ * `null` for a valid input schema, the defect otherwise. Runs at build time, so a broken schema is
+ * reported where the developer is already looking rather than silently at every later run.
  */
 export function describeInputSchemaDefect(schema: unknown): string | null {
 	if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
 		return 'Input schema must be an object.';
 	}
 	try {
-		// A fresh instance per call: AJV caches every schema it compiles in a Map it never evicts, and
-		// this runs once per build, not per request.
+		// A fresh instance per call: AJV never evicts its internal compiled-schema map, and this runs
+		// once per build, not per request.
 		const ajv = new Ajv2019({ strict: false, unicodeRegExp: false });
-		// Cloned because `validateInputSchema` normalizes the object it is handed in place.
+		// `validateInputSchema` normalizes in place, so it must not get the stored schema itself.
 		validateInputSchema(ajv, structuredClone(schema) as Record<string, unknown>);
 		return null;
 	} catch (error) {
@@ -90,11 +74,9 @@ export function describeInputSchemaDefect(schema: unknown): string | null {
 }
 
 /**
- * Applies the schema's defaults to `input` and validates the result, returning the effective input a
- * run should actually be started with. Mirrors the platform's `processInputUsingSchema`: an absent
- * input is not "no input" once a schema exists - it is an empty object the defaults are applied to, so
- * `apify call` with no input at all still gets the schema's defaults in its `INPUT` record, and a
- * required field with no default is still reported missing.
+ * The effective input a run should start with. Mirrors the platform's `processInputUsingSchema`: once
+ * a schema exists, an absent input is an empty object the defaults are applied to, not "no input" - so
+ * a call with no input still gets the defaults, and a required field with no default is still missing.
  */
 export function processActorInput(input: ActorInput | undefined, schema: InputSchema): InputProcessingResult {
 	let parsedInput: unknown = {};
@@ -118,16 +100,17 @@ export function processActorInput(input: ActorInput | undefined, schema: InputSc
 	try {
 		validator = compileInputSchemaValidator(schema);
 	} catch (error) {
-		// Only reachable for a schema that passed the build-time meta-validation but still cannot be
-		// compiled (or one recorded by an older runtime, before builds validated schemas at all).
+		// Reachable only for a schema recorded before builds validated them, or one that meta-validates
+		// yet still will not compile.
 		return { kind: 'invalid-schema', message: (error as Error).message };
 	}
 
-	// No `proxy` options: proxy-group availability is not emulated here (see this module's doc comment).
+	// No `proxy` options: this runtime emulates no proxy groups (`unsupported.md`), so any
+	// `apifyProxyGroups` selection is accepted, while the rest of a proxy field is still checked.
 	const validationErrors = validateInputUsingValidator(validator, schema, withDefaults, {});
 	if (validationErrors.length > 0) {
-		// Every message, joined - what the platform returns for an API-origin run (it shortens this to
-		// the first message only for the web console, which has a single notification line to show it in).
+		// Joined, as the platform answers an API-origin run; it shortens this to the first message only
+		// for the web console, which has one notification line to show it in.
 		return { kind: 'invalid', message: validationErrors.map(({ message }) => message).join(', ') };
 	}
 
@@ -150,11 +133,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Merges the schema's default values into `values` and returns a new object - a port of the platform's
- * `mergeDefaultsFromInputSchema`, including its recursion into nested objects and into the items of an
- * array whose `items` sub-schema carries defaults.
- *
- * Exported for direct testing; run-start callers go through `processActorInput`.
+ * A port of the platform's `mergeDefaultsFromInputSchema`, recursion into nested objects and array
+ * items included. Exported for direct testing; run-start callers go through `processActorInput`.
  */
 export function mergeDefaultsFromInputSchema(
 	values: Record<string, unknown>,
@@ -166,8 +146,8 @@ export function mergeDefaultsFromInputSchema(
 		defaults[key] = extractDefaults(fieldSchema);
 	}
 
-	// Cloned once here so nothing ever assigns a live reference into the schema record itself - a later
-	// mutation of the returned input (or of the stored schema) can then never reach the other.
+	// Cloned so no reference into the stored schema is ever assigned into the returned input, where a
+	// later mutation of either would reach the other.
 	const clonedDefaults = structuredClone(defaults);
 	const target = structuredClone(values);
 	assignRecursively(target, clonedDefaults, schema);
@@ -198,9 +178,8 @@ function extractArrayItemDefaults(fieldSchema: unknown): unknown {
 	return extractDefaults(fieldSchema.items);
 }
 
-/** Assigns a default only where the current value is `undefined`, recursing into nested objects and
- * into array items. `fillDefinedValues` is set for array items alone, where the platform fills an
- * item's fields even though the item itself is present. */
+/** `fillDefinedValues` is set for array items alone, where the platform fills an item's fields even
+ * though the item itself is present. */
 function assignRecursively(
 	target: Record<string, unknown>,
 	defaults: Record<string, unknown>,
@@ -226,8 +205,7 @@ function assignRecursively(
 				: ((extractDefaults(fieldSchema) as Record<string, unknown> | undefined) ?? {});
 			assignRecursively(
 				currentValue,
-				// Without `fillDefinedValues`, a present nested object keeps exactly the keys it came
-				// with - only its own sub-schema's defaults for keys it is missing are considered.
+				// A present nested object otherwise keeps exactly the keys it came with.
 				fillDefinedValues ? nestedDefaults : {},
 				fieldSchema as InputSchema | undefined,
 			);
@@ -246,8 +224,8 @@ function assignRecursively(
 	}
 }
 
-/** Deep-merges `overrides` onto a copy of `base`, object by object - the one `lodash.merge` behaviour
- * `extractDefaults` needs, without the dependency. Arrays and scalars replace wholesale. */
+/** The one `lodash.merge` behaviour `extractDefaults` needs, without the dependency: objects merge
+ * key by key, arrays and scalars replace wholesale. */
 function deepMerge(base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
 	const merged: Record<string, unknown> = { ...base };
 	for (const [key, value] of Object.entries(overrides)) {
@@ -258,9 +236,9 @@ function deepMerge(base: Record<string, unknown>, overrides: Record<string, unkn
 }
 
 /**
- * Compiled validators, keyed by the schema's serialization - a run start would otherwise recompile the
- * same schema on every single call. Bounded and oldest-first evicted, the same reason the platform caps
- * its own LRU: a long-lived runtime must not grow a map per schema it has ever seen.
+ * Compiled validators, keyed by the schema's serialization: every run start would otherwise recompile
+ * the same schema. Bounded and oldest-first evicted, so a long-lived runtime does not keep an entry
+ * per schema it has ever seen.
  */
 const validatorCache = new Map<string, InputValidator>();
 const VALIDATOR_CACHE_MAX_ENTRIES = 100;
@@ -281,10 +259,10 @@ function compileInputSchemaValidator(schema: InputSchema): InputValidator {
 }
 
 /**
- * The platform's `getAjvValidator` preparation, ported: a required field that has a default is treated
- * as optional (there is always a value for it by the time validation runs), a required array must hold
- * at least one item, and `$schema` is dropped because AJV would otherwise try to fetch the Apify
- * meta-schema it names and fail to compile the schema at all.
+ * The platform's `getAjvValidator` preparation, ported: a required field with a default is optional
+ * (there is always a value for it by then), a required array must hold at least one item, and
+ * `$schema` is dropped - AJV would otherwise try to fetch the Apify meta-schema it names and fail to
+ * compile at all.
  */
 function prepareSchemaForValidation(schema: InputSchema): Record<string, unknown> {
 	const copy = structuredClone(schema) as Record<string, unknown>;

@@ -230,20 +230,16 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		}),
 	);
 
-	/** Maps a non-`ok` `InputProcessingResult` to the `ApiError` this route throws - the HTTP status and
-	 * error `type` are the route's concern, the message text the service's (`services/input-schema.ts`),
-	 * the same split `api/routes/dev-folder.ts` already uses. Both types, and both messages, are the
-	 * real platform's for the same input (`@apify-packages/errors`'s `actor.inputNotValid` and friends). */
+	/** Status and error `type` are the route's concern, the message text the service's - the split
+	 * `api/routes/dev-folder.ts` already uses. Both are the real platform's for the same input. */
 	function inputApiError(result: Exclude<InputProcessingResult, { kind: 'ok' }>): ApiError {
 		const message = describeInputProcessingFailure(result);
 		const type = result.kind === 'invalid-schema' ? 'invalid-input-schema' : 'invalid-input';
 		return new ApiError(400, type, message);
 	}
 
-	/** The run's effective input: the caller's bytes as-is for a build with no input schema, or - for one
-	 * that has a schema - the input with the schema's defaults applied, validated, and re-serialized
-	 * (`services/input-schema.ts`). A schema turns "no input at all" into "the defaults", which is why
-	 * this can return an input for a request that carried no body. */
+	/** The caller's bytes as-is for a build with no input schema; otherwise the validated input with
+	 * the schema's defaults applied - which is why a request carrying no body can still yield one. */
 	function resolveRunInput(build: BuildRecord, raw: ActorInput | undefined): ActorInput | undefined {
 		if (!build.inputSchema) return raw;
 		const processed = processActorInput(raw, build.inputSchema);

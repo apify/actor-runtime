@@ -216,10 +216,8 @@ export async function runBuildInBackground(
 	}
 	for (const line of dockerfileResolution.logLines) appendRuntimeLog(record.id, line);
 
-	// Resolved before the image is built, not after: an Actor whose declared input contract cannot be
-	// read (or is itself invalid) fails the build with that reason stated, rather than building an image
-	// whose every later run would silently skip validation. Same failure shape as the Dockerfile
-	// resolution above, and, like it, nothing here ever touches the pushed source itself.
+	// Before the image is built, not after: an Actor whose declared input contract cannot be read fails
+	// the build with that reason, rather than producing an image whose every run skips validation.
 	const inputSchemaResolution = resolveInputSchemaLocation(version.sourceFiles);
 	if (inputSchemaResolution.outcome === 'failure') {
 		appendRuntimeLog(record.id, inputSchemaResolution.message);
@@ -289,9 +287,8 @@ export async function runBuildInBackground(
 			...(outcome.imageWorkingDirectory !== undefined
 				? { imageWorkingDirectory: outcome.imageWorkingDirectory }
 				: {}),
-			// Omitted entirely (rather than written as `undefined`) for an Actor with no input schema,
-			// same reason as `imageWorkingDirectory` right above: "never present on a non-SUCCEEDED
-			// build" stays true of the value too, there is simply nothing to record for this build.
+			// Omitted rather than written as `undefined` for an Actor with no input schema, same reason
+			// as `imageWorkingDirectory` above.
 			...(inputSchema !== undefined ? { inputSchema } : {}),
 		});
 		if (succeeded?.status !== 'SUCCEEDED') {

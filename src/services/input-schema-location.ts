@@ -1,23 +1,15 @@
 /**
- * Resolves which input schema a build should carry from the version's `sourceFiles` - the build-time
- * half of input validation (`actor-driver.md`'s "Input schema, validation and defaults"). The run-time
- * half (defaults, validation) lives in `services/input-schema.ts` and reads only the schema this module
- * resolved, never the source files again.
+ * Which input schema a build carries, resolved from the version's `sourceFiles`
+ * (`actor-driver.md`'s "Input schema, validation and defaults"). The run-time half - defaults and
+ * validation - is `services/input-schema.ts`, which reads only the resolved schema, never the source
+ * files again.
  *
- * Candidate order, stopping at the first hit, matching what `apify-cli` itself looks for locally (its
- * `readInputSchema`), which is also what the platform's builder records on the build:
- *   1. the `input` field of `.actor/actor.json` - an inline schema object, or a path relative to
- *      `.actor/`
- *   2. `.actor/INPUT_SCHEMA.json`
- *   3. `INPUT_SCHEMA.json` at the Actor root
- * Matching is case-insensitive with an exact-case win, exactly like `services/dockerfile-location.ts`
- * (so `.actor/input_schema.json` and `.actor/INPUT_SCHEMA.json` are the same candidate - which is why
- * the CLI's four-entry list collapses to the two locations above here), and every outcome is stated in
- * the build log.
+ * The candidate order is `apify-cli`'s own `readInputSchema`, so a developer's local `apify
+ * validate-schema` and this build agree on which file is the Actor's schema. Case-insensitive matching
+ * (as in `services/dockerfile-location.ts`) is why the CLI's four candidates collapse to two here.
  *
- * `.actor/actor.json` and the schema file alike are parsed as JSON5, matching how this runtime already
- * parses `.actor/actor.json` for the Dockerfile lookup; every valid JSON file is also valid JSON5, so
- * this only ever accepts more than the platform, never less.
+ * Schema files are parsed as JSON5, like `.actor/actor.json` already is: every valid JSON file is
+ * valid JSON5, so this only ever accepts more than the platform, never less.
  */
 import * as path from 'node:path';
 import JSON5 from 'json5';
@@ -31,15 +23,12 @@ const ACTOR_JSON_NAME = `${ACTOR_DIR}/actor.json`;
 /** Checked case-insensitively, so the `INPUT_SCHEMA.json` spelling matches these too. */
 const DEFAULT_SCHEMA_CANDIDATES = [`${ACTOR_DIR}/input_schema.json`, 'input_schema.json'] as const;
 
-/** Why input-schema resolution failed. Each one fails the build, the same way the Dockerfile
- * resolution's own failures do - an Actor whose declared input contract cannot be read is not built
- * with that contract silently dropped. */
+/** Why resolution failed. Each one fails the build: an Actor whose declared input contract cannot be
+ * read must not be built with that contract silently dropped. */
 export type InputSchemaResolutionFailureReason =
 	'escapes-actor-root' | 'invalid-input-field' | 'unparseable-input-schema' | 'invalid-input-schema';
 
-/** `resolveInputSchemaLocation`'s outcomes: `resolved` (a candidate matched and the schema is valid),
- * `none` (no candidate at all - the Actor simply has no input schema, which is not an error), or
- * `failure`. */
+/** `none` means the Actor declares no input schema, which is not an error. */
 export type InputSchemaResolution =
 	| { outcome: 'resolved'; schema: InputSchema; source: string; logLines: string[] }
 	| { outcome: 'none'; logLines: string[] }
@@ -49,8 +38,8 @@ function sourceFileToText(file: SourceFile): string {
 	return file.format === 'BASE64' ? Buffer.from(file.content, 'base64').toString('utf8') : file.content;
 }
 
-/** Exact-case match wins; otherwise the first match in `sourceFiles` order - same rule as
- * `services/dockerfile-location.ts`'s own lookup. */
+/** Exact-case match wins; otherwise the first match in `sourceFiles` order - the same rule as the
+ * Dockerfile lookup's. */
 function findCaseInsensitive(sourceFiles: SourceFile[], candidate: string): SourceFile | undefined {
 	const lowerCandidate = candidate.toLowerCase();
 	let firstMatch: SourceFile | undefined;
@@ -76,8 +65,7 @@ function escapesActorRootFailure(rawField: string): InputSchemaResolution {
 	};
 }
 
-/** Meta-validates a resolved candidate, turning it into the `resolved`/`failure` outcome. Kept in one
- * place so an inline `input` object and a schema file are held to exactly the same standard. */
+/** One place, so an inline `input` object and a schema file are held to the same standard. */
 function acceptSchema(schema: unknown, source: string, logLines: string[]): InputSchemaResolution {
 	const defect = describeInputSchemaDefect(schema);
 	if (defect) {
@@ -167,8 +155,6 @@ export function resolveInputSchemaLocation(sourceFiles: SourceFile[]): InputSche
 		return acceptSchema(parsed.schema, `"${normalizeEntryName(match.name)}"`, logLines);
 	}
 
-	// No input schema at all is the normal state of an Actor that never declared one - runs of such a
-	// build take their input exactly as the caller sent it, with nothing validated and nothing added.
 	return { outcome: 'none', logLines };
 }
 
