@@ -138,11 +138,10 @@ apify call
 
 The path is resolved on the machine your container engine runs on, which under `podman machine` or Docker Desktop is not your own filesystem.
 
-## 6. Stop and reset
+## 6. Stop the runtime
 
 - **Stop:** `apify runtime stop`, or Ctrl+C if you started it in the foreground.
 - **Keep your data:** start again with the same data directory.
-- **Reset:** stop the runtime and delete the data directory. Built Actor images stay in your engine and are reused on the next push.
 
 ## Next steps
 
