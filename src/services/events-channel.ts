@@ -22,17 +22,15 @@ interface RunEventsState {
 	cpuUsageMax: number;
 	cpuUsageCurrent: number;
 	memoryUsageSum: number;
-	/** The observed peak - unlike the `systemInfo` frame's `memMaxBytes`, which is the configured limit. */
+	/** The observed peak; the frame's own `memMaxBytes` is the configured limit instead. */
 	memoryUsageMax: number;
 	memoryUsageCurrent: number;
 	terminal: boolean;
 }
 
 /**
- * The running figures behind a run's `systemInfo` frames, in the platform's `Run.stats` vocabulary
- * (`actor-driver.md`'s "Run usage estimate"). Read live by `api/dto/actors.ts: runDto` while the run is
- * going, and copied onto the run record once it ends (`services/runs.ts`), since this state is in-memory
- * only. `memMaxBytes` here is the observed peak, as on the platform's run object.
+ * A live run's figures in the run object's own vocabulary (`actor-driver.md`'s "Run usage estimate").
+ * In-memory only, so `services/runs.ts` copies them onto the record when the run ends.
  */
 export interface RunTelemetrySnapshot {
 	memAvgBytes: number;
@@ -101,9 +99,7 @@ export function publishSystemInfo(runId: string, sample: RunResourceSample, gran
 	broadcast(state, JSON.stringify({ name: 'systemInfo', data: payload }));
 }
 
-/** The run's telemetry so far, or `undefined` for a run that has not produced a single sample (never
- * started a container, or a driver without a sampler) - there are no figures to report then, and a
- * zero-filled snapshot would be indistinguishable from a genuinely idle run. */
+/** `undefined` until the first sample: zeros would be indistinguishable from a genuinely idle run. */
 export function getRunTelemetry(runId: string): RunTelemetrySnapshot | undefined {
 	const state = live.get(runId);
 	if (!state || state.sampleCount === 0) return undefined;

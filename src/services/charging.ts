@@ -1,13 +1,10 @@
 /**
- * Pay-per-event charging for a run (`actor-driver.md`'s "Pay-per-event pricing" section): the
- * `POST /v2/actor-runs/:runId/charge` endpoint's logic, the synthetic `apify-default-dataset-item` event
- * the platform charges on the run's behalf for every item pushed to its default dataset, and the cost
- * cap (`options.maxTotalChargeUsd`) whose reaching gracefully aborts the run - the platform's own
- * `CostEnforcementHelper` behaviour, done inline here instead of by a daemon.
+ * Pay-per-event charging for a run (`actor-driver.md`'s "Pay-per-event pricing"). The cap is enforced
+ * inline after each charge, where the platform uses an accounting daemon - there is no daemon here, and
+ * a local run is short enough that a delayed abort would come after it had already finished.
  *
- * Everything but the counts themselves is in-memory: the idempotency keys (the platform keeps them for
- * three minutes in Redis; same window here) and the default-dataset index. Both are only ever needed
- * for a live run, and a runtime restart aborts every live run anyway (`reconcileOrphanedJobs`).
+ * Only the counts are persisted. The idempotency keys and the default-dataset index are in-memory: both
+ * are only ever needed for a live run, and a restart aborts every live run anyway.
  */
 import type { Driver } from '../driver/types.js';
 import type { RunRecord } from '../storage/entities.js';
@@ -19,10 +16,10 @@ import { APIFY_EVENTS_PREFIX, DEFAULT_DATASET_ITEM_EVENT_NAME, isPayPerEvent } f
 import { abortRun } from './runs.js';
 import { chargeableTotalUsd, computeRunUsage } from './run-usage.js';
 
-/** How long a used idempotency key keeps answering with its first outcome - the platform's window. */
+/** The platform's own window. */
 const IDEMPOTENCY_TTL_MS = 3 * 60 * 1000;
 
-/** The platform's bound on one charge call's `count` ("to stop some joker from trying to integer overflow"). */
+/** The platform's own bound, there to stop an overflow attempt rather than to limit legitimate use. */
 export const MAX_CHARGE_COUNT = 10_000_000;
 
 interface IdempotencyEntry {
@@ -30,11 +27,9 @@ interface IdempotencyEntry {
 	expiresAt: number;
 }
 
-/** `${runId}:${idempotencyKey}` -> the status the first call answered with. */
 const idempotencyRecords = new Map<string, IdempotencyEntry>();
 
-/** Default dataset id -> run id, for the runs whose pricing defines the synthetic per-item event - the
- * only runs a dataset push has to be attributed to. Populated at run start, cleared at run end. */
+/** Only runs that price the per-item event are here, so a push to any other dataset costs one lookup. */
 const defaultDatasetRuns = new Map<string, string>();
 
 function pruneIdempotencyRecords(now: number): void {
@@ -45,27 +40,23 @@ function pruneIdempotencyRecords(now: number): void {
 
 export interface ChargeRequest {
 	eventName: string;
-	/** A positive integer, validated by the route (`1..MAX_CHARGE_COUNT`). */
 	count: number;
 	idempotencyKey: string;
 }
 
-/** Every way `chargeEvent` can end; the route maps each to its HTTP status and error type. */
+/** The route maps each of these to its HTTP status and error type. */
 export type ChargeResult =
-	/** The charge was recorded; `status` is what the platform answers (`201`). */
 	| { kind: 'charged'; status: number; run: RunRecord }
-	/** The same idempotency key was already used on this run: the first call's status, no new charge. */
+	/** The key was already used on this run; answered with the first call's status, nothing charged. */
 	| { kind: 'replayed'; status: number }
 	| { kind: 'not-pay-per-event' }
 	| { kind: 'apify-event' }
 	| { kind: 'unknown-event' };
 
 /**
- * Records `count` occurrences of `eventName` on the run - the whole of the charge endpoint's semantics,
- * in the platform's own order of checks: an `apify-` event is refused before anything else is looked at,
- * then the run's pricing must be pay-per-event and must define the event. Charging a finished run is
- * allowed, as on the platform (a run's last charges legitimately land as it exits); only the cost-cap
- * abort is skipped for it.
+ * The checks are in the platform's order, which is observable: an `apify-` event is refused before the
+ * run's pricing is even looked at. Charging a finished run is allowed, since a run's last charges
+ * legitimately land as it exits.
  */
 export async function chargeEvent(driver: Driver, run: RunRecord, request: ChargeRequest): Promise<ChargeResult> {
 	if (request.eventName.startsWith(APIFY_EVENTS_PREFIX)) return { kind: 'apify-event' };
@@ -77,8 +68,7 @@ export async function chargeEvent(driver: Driver, run: RunRecord, request: Charg
 	const recordKey = `${run.id}:${request.idempotencyKey}`;
 	const replayed = idempotencyRecords.get(recordKey);
 	if (replayed) return { kind: 'replayed', status: replayed.status };
-	// Reserved before the write lands, so a concurrent retry with the same key replays instead of
-	// double-charging - the platform takes a lock for the same reason.
+	// Reserved before the write lands, so a concurrent retry replays instead of double-charging.
 	idempotencyRecords.set(recordKey, { status: 201, expiresAt: now + IDEMPOTENCY_TTL_MS });
 
 	let updated: RunRecord | null;
@@ -102,8 +92,6 @@ async function incrementChargedEventCount(runId: string, eventName: string, coun
 	});
 }
 
-/** Remembers the run's default dataset when its pricing defines the synthetic per-item event; a no-op
- * for every other run, so pushes to their datasets cost nothing to attribute. */
 export function registerDefaultDatasetForCharging(run: RunRecord): void {
 	if (!isPayPerEvent(run.pricingInfo)) return;
 	if (!(DEFAULT_DATASET_ITEM_EVENT_NAME in run.pricingInfo.pricingPerEvent.actorChargeEvents)) return;
@@ -115,10 +103,8 @@ export function unregisterDefaultDatasetForCharging(run: Pick<RunRecord, 'defaul
 }
 
 /**
- * The platform's synthetic `apify-default-dataset-item` event: every item pushed to a pay-per-event
- * run's default dataset counts as one charge, with no call from the Actor (the SDKs deliberately skip
- * the charge endpoint for `apify-` events and let the platform count the writes). Called by the dataset
- * routes after every successful push; a dataset that is not a registered run's default is ignored.
+ * Called by the dataset routes after every push, since the Actor never charges this event itself - both
+ * SDKs leave `apify-` events to the platform and only count them locally.
  */
 export async function recordDefaultDatasetItems(driver: Driver, datasetId: string, itemCount: number): Promise<void> {
 	if (itemCount <= 0) return;
@@ -128,7 +114,6 @@ export async function recordDefaultDatasetItems(driver: Driver, datasetId: strin
 	if (updated) await enforceCostLimit(driver, updated);
 }
 
-/** Wording of the cap-reached status message and log line, shared so the console and the log agree. */
 export function costLimitReachedMessage(maxTotalChargeUsd: number, chargedUsd: number): string {
 	return (
 		`Run aborted: the maximum total charge of $${maxTotalChargeUsd} was reached ` +
@@ -137,12 +122,8 @@ export function costLimitReachedMessage(maxTotalChargeUsd: number, chargedUsd: n
 }
 
 /**
- * The cost cap, checked after every charge (the platform's `CostEnforcementHelper.checkAndEnforceCostLimit`,
- * run inline instead of by the accounting daemon): once the run's chargeable total reaches
- * `options.maxTotalChargeUsd` (`0` or absent means no cap), `chargingStoppedAt` is stamped exactly once,
- * the run's log says why, and a `RUNNING` run is aborted gracefully with that reason as its status
- * message. Later charges are still recorded - the SDKs deliberately overshoot by one event so the
- * platform notices - but never trigger a second abort.
+ * Stamps `chargingStoppedAt` once and aborts the run gracefully. Later charges are still recorded rather
+ * than refused: both SDKs deliberately overshoot by one event at the cap so the platform notices.
  */
 export async function enforceCostLimit(driver: Driver, run: RunRecord): Promise<void> {
 	const cap = run.options.maxTotalChargeUsd;
@@ -166,7 +147,6 @@ export async function enforceCostLimit(driver: Driver, run: RunRecord): Promise<
 	if (stamped.status === 'RUNNING') await abortRun(driver, stamped, true, message);
 }
 
-/** Test-only: drop the idempotency records and the default-dataset index. */
 export function resetChargingForTests(): void {
 	idempotencyRecords.clear();
 	defaultDatasetRuns.clear();

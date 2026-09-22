@@ -223,14 +223,13 @@ connect();
 	);
 }
 
-/** A USD figure for the console: six decimals at most, trailing zeros trimmed, never exponent notation. */
+/** Six decimals at most, trailing zeros trimmed, never exponent notation. */
 export function formatUsd(value: number): string {
 	return `$${Number(value.toFixed(6)).toString()}`;
 }
 
-/** The Actor detail view's pricing section (`console.md`, "Pricing form"): the pricing in effect now,
- * summarized per event with the price this runtime resolves each to, plus a JSON form carrying the whole
- * `pricingInfos` array - the same value `PUT /v2/actors/:actorId` accepts, validated the same way. */
+/** The pricing in effect plus a form carrying the whole array, the same value the API takes
+ * (`console.md`). Tiered prices are shown resolved, since that is what a local run would be charged. */
 export function pricingSection(
 	actorId: string,
 	pricingInfos: ActorPricingInfoRecord[] | undefined,
@@ -283,8 +282,8 @@ export function pricingSection(
 	);
 }
 
-/** The run detail view's usage and cost section (`console.md`, "Usage and cost"): the estimate the run
- * object carries, with its two components side by side and the assumptions spelled out. */
+/** The run object's own estimate, with the compute and event components split and the assumptions named
+ * (`console.md`) - the figures are easy to mistake for a bill otherwise. */
 export function usageSection(run: RunRecord, usage: RunUsage): string {
 	const { stats } = usage;
 	const megabytes = (bytes: number | undefined) =>

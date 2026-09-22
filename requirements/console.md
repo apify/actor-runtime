@@ -47,25 +47,18 @@
 
 ## Pricing form (Actor detail view)
 
-- The Actor detail view shows the pricing in effect now (`actor-driver.md`'s "Pay-per-event pricing"):
-  that the Actor is free, or the pricing model and, for pay-per-event, one row per event with its title,
-  the price the runtime resolves it to (the `BRONZE` tier's for a tiered price, and the view says so) and
-  whether it is one-time.
-- A form on the same view carries the whole `pricingInfos` array as JSON, prefilled with the stored value.
-  Submitting it replaces the Actor's pricing with exactly `PUT /v2/actors/:actorId`'s behaviour and
-  validation (`api.md`): for any given array, the form and the API produce the same outcome. `[]` (or an
-  empty field) makes the Actor free again.
-- A submission that is not valid JSON, or fails the shared validation, redirects back to the same detail
-  page with the message shown inline, and the stored pricing is unchanged.
+- The Actor detail view shows the pricing in effect: that the Actor is free, or each of its chargeable
+  events with the title and the price it is charged at.
+- A form on the same view sets the Actor's pricing, with exactly the API's behaviour and validation for any
+  given input; an empty value makes the Actor free again. A rejected submission redirects back to the same
+  detail page with the message shown inline, leaving the stored pricing unchanged.
 
 ## Usage and cost (run detail view)
 
-- The run detail view shows the run's usage estimate (`actor-driver.md`'s "Run usage estimate"): run time,
-  compute units and their cost, the sampled memory and CPU figures, and `usageTotalUsd`; for a pay-per-event
-  run also the events' total, the cap (and when it was reached), and a table of every priced event with its
-  charged count, unit price and total. The view states that the figures are an estimate priced at the lowest
-  paid tier and which usage is not metered.
-- The runs list has a `usageTotalUsd` column with the same figure the run object reports.
+- The run detail view shows the run's usage estimate (`actor-driver.md`): run time, compute units and their
+  cost, the measured memory and CPU figures, each pay-per-event charge and the run's maximum, and the total.
+  It says the figures are an estimate and which usage is not counted.
+- The runs list shows each run's total cost.
 
 ## Local dev-folder registration form (Actor detail view)
 

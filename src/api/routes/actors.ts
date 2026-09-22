@@ -31,8 +31,7 @@ import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
 import { validatePricingInfos } from '../../services/pricing.js';
 
-/** `pricingInfos` from a `POST`/`PUT /v2/actors` body, validated and normalized (`services/pricing.ts`);
- * `undefined` when the body does not mention the field at all. Any other rejection is a `400`. */
+/** `undefined` when the body does not mention the field; a body that does but is invalid throws. */
 function pricingInfosFromBody(body: { pricingInfos?: unknown }): ActorRecord['pricingInfos'] | undefined {
 	if (body.pricingInfos === undefined) return undefined;
 	const result = validatePricingInfos(body.pricingInfos);
@@ -84,8 +83,6 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const body = jsonBody<{ name?: string; title?: string; pricingInfos?: unknown }>(req);
-			// The platform's own way to set an Actor's pricing (`actor-driver.md`); the array replaces the
-			// stored one whole, and an empty array clears it (a free Actor again).
 			const pricingInfos = pricingInfosFromBody(body);
 			const updated = await updateActor(actor.id, (current) => ({
 				...current,
@@ -281,7 +278,6 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				input,
 				memoryMbytes: queryNumber(req, 'memory'),
 				timeoutSecs: queryNumber(req, 'timeout'),
-				// The platform's pay-per-event cost cap (`api.md`); `0` means no cap, as on the platform.
 				maxTotalChargeUsd,
 				build: tag,
 				// Runtime-only extension (`api.md`): `?devFolder=false` skips the dev-folder mount for this run.

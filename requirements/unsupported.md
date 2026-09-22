@@ -20,11 +20,10 @@ real account, not in the runtime.
 - Infinite runs (timeout `0`)
 - Synchronous runs returning output (`run-sync`)
 - Actor-set run status messages
-- Result cap (`maxItems`) - the pay-per-event cost cap `maxTotalChargeUsd` is emulated (`actor-driver.md`)
+- Result cap (`maxItems`)
 - Ad-hoc webhooks on run start
-- Metered usage beyond compute units: storage operations, data transfer and proxy (the run's usage fields
-  estimate compute units and pay-per-event charges only, `actor-driver.md`)
-- Pay-per-event accounting and billing - charges are counted and priced, never billed or paid out
+- Metered usage other than compute units: storage operations, data transfer and proxy
+- Billing: a run's charges and costs are reported, never invoiced or paid out
 - Input validation and defaults from the input schema
 - Encrypted secret input fields
 - Actor-level default run options
@@ -42,9 +41,8 @@ real account, not in the runtime.
 - Generated per-build OpenAPI definition
 - Output, key-value store and web server schemas
 - Publishing to Apify Store
-- Actor monetization: rental and pay per result (pay-per-event pricing is emulated for local testing,
-  `actor-driver.md`), and every Store-side flow (payouts, pricing change notifications, tiers other than
-  `BRONZE`)
+- Actor monetization other than pay-per-event pricing (`actor-driver.md`): rental, pay per result, and the
+  Store-side flows (payouts, pricing-change notifications, per-tier prices above the lowest paid tier)
 - Actor status, deprecation and maintenance notices
 - README, changelog, categories and SEO metadata
 
@@ -86,7 +84,7 @@ real account, not in the runtime.
 ## Console
 
 - Input editor and run start from the console
-- Run charts (the usage and cost estimate is shown, `console.md`)
+- Run charts
 - Output tab, storage export and download
 - Login, account, token and billing settings
 - Actor insights, analytics and monitoring

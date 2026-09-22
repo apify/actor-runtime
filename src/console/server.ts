@@ -226,9 +226,8 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.send(layout(`Actor ${actor.name}`, body));
 	});
 
-	/** The pricing form (`console.md`): the same `setActorPricingInfos` as `PUT /v2/actors/:actorId`,
-	 * cross-user like the other Actor forms. The textarea carries the JSON array; a body that is not
-	 * valid JSON is rejected with the parse error inline, everything else by the shared validator. */
+	/** Same `setActorPricingInfos` as the API, cross-user like the other Actor forms. Only the JSON parse
+	 * is this route's own; every other rejection comes from the shared validator. */
 	app.post('/actors/:id/pricing', async (req, res) => {
 		if (isCrossSiteWrite(req)) {
 			res.status(403).send('Cross-site form submissions are not allowed.');
@@ -493,7 +492,6 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				},
 			]);
 		}
-		// Live figures while the run is going, the persisted ones once it has ended - same rule as `runDto`.
 		const usage = computeRunUsage(run, isTerminalJobStatus(run.status) ? undefined : getRunTelemetry(run.id));
 		const body =
 			definitionList(rows) +

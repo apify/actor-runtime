@@ -12,7 +12,7 @@ export interface CreateActorInput {
 	name: string;
 	title?: string;
 	versions?: ActorVersionRecord[];
-	/** Already validated by `services/pricing.ts: validatePricingInfos` - the route does that. */
+	/** Already validated by the caller. */
 	pricingInfos?: ActorPricingInfoRecord[];
 }
 
@@ -113,11 +113,8 @@ export function recordTaggedBuild(actor: ActorRecord, tag: string, buildId: stri
 export type SetActorPricingResult = { kind: 'ok'; actor: ActorRecord } | { kind: 'invalid'; message: string };
 
 /**
- * The single validate-and-persist path for an Actor's `pricingInfos`, shared by `PUT /v2/actors/:actorId`
- * (`api/routes/actors.ts`) and the console's pricing form (`console/server.ts`), so the two surfaces
- * accept and reject exactly the same inputs. Replaces the stored array whole; an empty array clears it.
- * Goes through `updateActor` deliberately - unlike the `local*` toggles, pricing is a real Actor field the
- * platform itself exposes, so bumping `modifiedAt` is right.
+ * Shared by the API and the console's form, so the two cannot drift apart. Unlike the `local*` toggles
+ * this goes through `updateActor`: pricing is a real Actor field, so bumping `modifiedAt` is right.
  */
 export async function setActorPricingInfos(actor: ActorRecord, raw: unknown): Promise<SetActorPricingResult> {
 	const result = validatePricingInfos(raw);

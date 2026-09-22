@@ -95,7 +95,7 @@ export interface StartRunOptions {
 	build?: string;
 	/** `false` skips the registered dev folder for this run only (`?devFolder=false`). */
 	devFolder?: boolean;
-	/** The caller's cost cap for a pay-per-event run (`?maxTotalChargeUsd=`); absent means no cap. */
+	/** Absent means no cap. */
 	maxTotalChargeUsd?: number;
 	proxyPassword?: string;
 	apiBaseUrl: string;
@@ -158,10 +158,9 @@ function buildEnv(
 		APIFY_DEDICATED_CPUS: String(dedicatedCpusFor(run.options.memoryMbytes)),
 	};
 	if (options.proxyPassword) env.APIFY_PROXY_PASSWORD = options.proxyPassword;
-	// The one pay-per-event var the platform sets that the SDKs read at startup. Deliberately NOT
-	// `APIFY_ACTOR_PRICING_INFO`/`APIFY_CHARGED_ACTOR_EVENT_COUNTS`: with both present the SDKs skip their
-	// `GET /v2/actor-runs/:runId` fetch, and after a migration restart (same env, new container) the
-	// counts baked in at run start would be stale. Absent, both SDKs fetch the run object, always fresh.
+	// Deliberately not accompanied by `APIFY_ACTOR_PRICING_INFO`/`APIFY_CHARGED_ACTOR_EVENT_COUNTS`: with
+	// both set the SDKs skip their fetch of the run object, and a container restarted by a migration would
+	// then read charge counts frozen at run start.
 	if (run.options.maxTotalChargeUsd !== undefined) {
 		env.ACTOR_MAX_TOTAL_CHARGE_USD = String(run.options.maxTotalChargeUsd);
 	}
@@ -188,7 +187,7 @@ export async function startRun(
 	}
 
 	const memoryMbytes = options.memoryMbytes ?? DEFAULT_MEMORY_MBYTES;
-	// Resolved once, here: a pricing change on the Actor never reprices a run already created.
+	// Resolved once: a later pricing change must not reprice a run that already exists.
 	const pricingInfo = resolveRunPricingInfo(actor.pricingInfos);
 	const chargedEventCounts = initialChargedEventCounts(pricingInfo, memoryMbytes);
 	const record: RunRecord = {
@@ -471,8 +470,7 @@ export async function runInBackground(
 		if (cancelGracefulAbort(record.id)) {
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
-		// The telemetry accumulators are in-memory only; the finished run keeps its final figures on the
-		// record so `GET /v2/actor-runs/:runId` still reports them after a restart (`services/run-usage.ts`).
+		// The accumulators are in-memory, so a finished run keeps its figures only if they are written here.
 		await persistRunTelemetry(record.id);
 		unregisterDefaultDatasetForCharging(record);
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
@@ -485,9 +483,7 @@ export async function runInBackground(
 	}
 }
 
-/** Copies the run's in-memory telemetry (`events-channel.ts`) onto its record's `stats`. A plain update,
- * not a status transition: the run is already terminal by the time this runs, and this must never touch
- * its status. A run that never produced a sample has nothing to persist. */
+/** A plain update, never a status transition: the run is already terminal when this runs. */
 async function persistRunTelemetry(runId: string): Promise<void> {
 	const telemetry = getRunTelemetry(runId);
 	if (!telemetry) return;
@@ -556,8 +552,8 @@ export async function abortRun(
 	const { runs } = getRegistries();
 	let wasRunning = false;
 	let alreadyAborting = false;
-	// `statusMessage` names the reason for a runtime-initiated abort (the pay-per-event cost cap,
-	// `services/charging.ts`); a caller-requested abort carries none, as on the platform.
+	// Only a runtime-initiated abort (the cost cap) carries a reason; a caller's abort has none, as on
+	// the platform.
 	const patch: Partial<RunRecord> = statusMessage === undefined ? {} : { statusMessage };
 	const aborting = await transitionJobStatus(runs, run.id, 'ABORTING', patch, (current) => {
 		wasRunning = current?.status === 'RUNNING';

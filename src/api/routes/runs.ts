@@ -88,11 +88,8 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => serveLog(req, res, req.params.runId as string)),
 	);
 
-	// The platform's pay-per-event charge endpoint (`api.md`'s "Pay-per-event charging"), the call both
-	// SDKs' `Actor.charge()` and `apify actor charge` make. Body `{ eventName, count? }` plus the
-	// `idempotency-key` header the platform requires (apify-client always sends one). Owner-scoped like
-	// every other run route; the platform additionally insists on the run's own scoped token, which this
-	// runtime has no equivalent of (every run shares its owner's token).
+	// Owner-scoped like every other run route. The platform additionally insists on the run's own scoped
+	// token, which has no local equivalent - every run here shares its owner's token.
 	router.post(
 		'/actor-runs/:runId/charge',
 		h(async (req, res) => {
@@ -120,7 +117,7 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 					throw recordNotFound(`Pricing for the event ${body.eventName}`);
 				case 'charged':
 				case 'replayed':
-					// The platform answers a bare `{}` here, not a `{ data }` envelope (`api.md`).
+					// A bare `{}`, not the `{ data }` envelope every other route uses (`api.md`).
 					res.status(result.status).json({});
 			}
 		}),

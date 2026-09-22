@@ -1,12 +1,7 @@
 /**
- * Actor pricing (`actor-driver.md`'s "Pay-per-event pricing" section): the platform's own
- * `Actor.pricingInfos` field, validated here for `POST`/`PUT /v2/actors` and the console's pricing form,
- * and resolved per run at run start. Pure - no registry access - so it is unit-testable on its own.
- *
- * Only the `FREE` and `PAY_PER_EVENT` models are accepted: those are the two whose observable behaviour
- * the runtime emulates (`unsupported.md` keeps rental and pay-per-result out of scope). A tiered event
- * price is resolved to the BRONZE tier - the lowest paid subscription tier (the Starter plan), the same
- * tier every cost figure this runtime reports is priced at (`services/run-usage.ts`).
+ * Actor pricing (`actor-driver.md`'s "Pay-per-event pricing"): validation for the API and the console's
+ * form, and per-run resolution. Rental and pay-per-result are rejected rather than stored, since nothing
+ * downstream would act on them (`unsupported.md`).
  */
 import type {
 	ActorChargeEventRecord,
@@ -15,13 +10,12 @@ import type {
 	RunPricingInfoRecord,
 } from '../storage/entities.js';
 
-/** The synthetic events the platform itself charges (never an Actor's own `charge` call); the SDKs
- * track these client-side and skip the charge endpoint for anything with the `apify-` prefix. */
+/** Charged by the runtime itself; both SDKs deliberately never post these to the charge endpoint. */
 export const APIFY_EVENTS_PREFIX = 'apify-';
 export const ACTOR_START_EVENT_NAME = 'apify-actor-start';
 export const DEFAULT_DATASET_ITEM_EVENT_NAME = 'apify-default-dataset-item';
 
-/** The tier tiered event prices resolve to: the lowest paid subscription tier (Starter). */
+/** The lowest paid subscription tier (Starter), which every price this runtime reports is taken at. */
 export const RESOLVED_PRICING_TIER = 'BRONZE';
 
 const SUPPORTED_PRICING_MODELS: readonly ActorPricingModel[] = ['FREE', 'PAY_PER_EVENT'];
@@ -60,17 +54,14 @@ function isNonNegativeNumber(value: unknown): value is number {
 	return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-/** Either outcome of `validatePricingInfos`; `message` is reused verbatim by the API's `400` and the
- * console's inline error. */
+/** `message` is shown verbatim by both the API's `400` and the console's inline error. */
 export type ValidatedPricingInfos =
 	{ kind: 'ok'; pricingInfos: ActorPricingInfoRecord[] } | { kind: 'invalid'; message: string };
 
-/** The shared rejection shape of every validator below; assignable to each one's own result union. */
 function invalid(message: string): { kind: 'invalid'; message: string } {
 	return { kind: 'invalid', message };
 }
 
-/** An ISO-8601 timestamp, or `undefined` for a missing/invalid one. */
 function parseTimestamp(value: unknown): string | undefined {
 	if (typeof value !== 'string' && !(value instanceof Date)) return undefined;
 	const millis = value instanceof Date ? value.getTime() : Date.parse(value);
@@ -238,11 +229,9 @@ function validatePricingInfo(raw: unknown, index: number, now: Date): ValidatedP
 }
 
 /**
- * Validates and normalizes a caller-supplied `pricingInfos` array (the body field of `POST`/`PUT
- * /v2/actors`, or the console form's JSON). Every entry comes out with `createdAt`, `startedAt` (both
- * default to `now`) and `apifyMarginPercentage` (default `0`) filled in, so the stored shape satisfies
- * every field the public API and the SDKs' pydantic models mark required. An empty array is valid and
- * means "no pricing".
+ * Every entry comes out with `createdAt`, `startedAt` and `apifyMarginPercentage` filled in: the public
+ * API and the SDKs' models mark all three required, so a stored entry must carry them to go back out.
+ * An empty array is valid and means no pricing.
  */
 export function validatePricingInfos(raw: unknown, now = new Date()): ValidatedPricingInfos {
 	if (!Array.isArray(raw)) return invalid('"pricingInfos" must be a JSON array');
@@ -255,8 +244,7 @@ export function validatePricingInfos(raw: unknown, now = new Date()): ValidatedP
 	return { kind: 'ok', pricingInfos };
 }
 
-/** The pricing in effect at `date`: the entry with the latest `startedAt` not after `date` (the
- * platform's `getActorPricingInfoEffectiveAtDate`). `undefined` when none has started yet. */
+/** The entry with the latest `startedAt` not after `date`, the platform's own rule. */
 export function effectivePricingInfo(
 	pricingInfos: readonly ActorPricingInfoRecord[] | undefined,
 	date = new Date(),
@@ -270,11 +258,7 @@ export function effectivePricingInfo(
 	return effective;
 }
 
-/**
- * The pricing a run is created under: the Actor's effective pricing with every tiered event price
- * collapsed to the `RESOLVED_PRICING_TIER` price. `undefined` for an Actor without pricing, which the
- * run object then simply omits - the SDKs treat that as "not pay-per-event".
- */
+/** Tiered event prices are collapsed here, so nothing downstream has to know tiers exist. */
 export function resolveRunPricingInfo(
 	pricingInfos: readonly ActorPricingInfoRecord[] | undefined,
 	date = new Date(),
@@ -317,11 +301,7 @@ export function isPayPerEvent(pricingInfo: RunPricingInfoRecord | undefined): pr
 	return pricingInfo?.pricingModel === 'PAY_PER_EVENT' && pricingInfo.pricingPerEvent !== undefined;
 }
 
-/**
- * The `chargedEventCounts` a fresh run starts with (the platform's `getInitialChargedEventCounts`):
- * every priced event at `0`, and - when the pricing defines the synthetic `apify-actor-start` event -
- * that one pre-charged once per whole gigabyte of the run's memory, at least once.
- */
+/** The platform pre-charges `apify-actor-start` once per whole gigabyte of the run's memory. */
 export function initialChargedEventCounts(
 	pricingInfo: RunPricingInfoRecord | undefined,
 	memoryMbytes: number,

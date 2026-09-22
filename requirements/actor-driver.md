@@ -199,60 +199,33 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 
 ## Run usage estimate
 
-- Every run object carries the platform's usage fields, computed from what the runtime can measure - an
-  estimate, never a bill:
-    - `stats`: the restart bookkeeping (`migrationCount`, `rebootCount`, `restartCount`, `resurrectCount`)
-      plus `inputBodyLen`, `durationMillis`, `runTimeSecs`, `metamorph` (always `0`), `computeUnits`, and
-        - once the run's container has produced a sample - `memAvgBytes`, `memMaxBytes` (the observed peak,
-          unlike the `systemInfo` frame's configured limit), `memCurrentBytes`, `cpuAvgUsage`, `cpuMaxUsage`,
-          `cpuCurrentUsage` (percent of one core). The telemetry fields are absent for a run that never
-          produced a sample; they are never invented.
-    - `usage`: `{ ACTOR_COMPUTE_UNITS }` only. A compute unit is 1 GB of memory for one hour; the run's
-      compute units are its `memoryMbytes` times its wall-clock time (creation to `finishedAt`, or to now
-      while it is going; `0` for a run that never started). Storage operations, data transfer and proxy
-      usage are not metered and do not appear.
-    - `usageUsd`: `usage` priced at the lowest paid subscription tier (the Starter plan, tier `BRONZE`):
-      $0.20 per compute unit at the time of writing. The same tier tiered pay-per-event prices resolve to.
-    - `eventUsage` (pay-per-event runs only): per priced event, `{ eventTitle, eventTotalUsd }` - charged
-      count times the run's price for it. A charged event the pricing no longer defines is not priced.
-    - `usageTotalUsd`: the compute-unit cost plus the sum of `eventUsage` - everything the runtime can price
-      for the run, in one number. (On the platform a user of a pay-per-event Actor pays only the events
-      unless the pricing sets `isPPEPlatformUsagePaidByUser`; the console shows both components.)
-- The figures are live while the run is going and frozen when it ends; the final telemetry is written onto
-  the run record then, so a finished run reports the same figures after a runtime restart.
-- USD figures are rounded to six decimals.
+- Every run reports what it would cost: `stats` (run time, compute units, and the memory and CPU figures
+  measured while it ran), `usage` and `usageUsd` (compute units and their price), `eventUsage` (each
+  pay-per-event charge) and `usageTotalUsd` (the two added together).
+- A compute unit is 1 GB of memory for one hour, priced at the lowest paid subscription tier. Storage
+  operations, data transfer and proxy usage are not metered and are not reported.
+- The figures grow while the run is going and stop when it ends; a finished run keeps reporting them,
+  across a runtime restart too.
+- Nothing is billed anywhere. The estimate exists so a developer can see what a run of their Actor would
+  cost the user running it.
 
 # Pay-per-event pricing
 
-- An Actor's pricing is the platform's own `pricingInfos` array, set through `POST`/`PUT /v2/actors`
-  (`api.md`'s "Pay-per-event charging") or the console's pricing form (`console.md`), with identical
-  outcomes for the same input on both surfaces. Only `FREE` and `PAY_PER_EVENT` are emulated.
-- **Which pricing applies** is decided when a run is created: the entry with the latest `startedAt` not in
-  the future (the platform's rule), resolved onto the run as `pricingInfo`, with every tiered event price
-  collapsed to the `BRONZE` tier. A pricing change on the Actor never reprices a run already created.
-- **Charges** land in the run's `chargedEventCounts` from three sources, exactly as on the platform:
-    - the Actor's own `Actor.charge()` / `apify actor charge` calls (`POST /v2/actor-runs/:runId/charge`);
-    - the synthetic `apify-actor-start` event, when the pricing defines it: pre-charged at run creation,
-      once per whole gigabyte of the run's memory and at least once;
-    - the synthetic `apify-default-dataset-item` event, when the pricing defines it: one charge per item
-      pushed to the run's **default** dataset (by dataset id or through the run alias), with no call from
-      the Actor - the SDKs skip the charge endpoint for `apify-` events and rely on the platform counting
-      the writes. Pushes to any other dataset, and pushes after the run has ended, are never counted.
-- **The cap** (`options.maxTotalChargeUsd`, `?maxTotalChargeUsd=` on run start; `0` or absent means none)
-  is checked after every charge: at or above it, `chargingStoppedAt` is stamped once, the run's log says why,
-  and a `RUNNING` run is aborted gracefully with that reason as its status message. What counts against the
-  cap is the events' total, plus the compute-unit cost only when the pricing sets
-  `isPPEPlatformUsagePaidByUser` - the platform's own rule. Later charges are still recorded (the SDKs
-  deliberately overshoot by one event at the cap) and never abort twice.
-- **What the Actor sees**: `APIFY_IS_AT_HOME=1` makes both SDKs fetch the run object at startup for
-  `pricingInfo`, `chargedEventCounts` and `options.maxTotalChargeUsd`, and post their charges to the charge
-  endpoint - the same code path they take on the platform, so `ACTOR_TEST_PAY_PER_EVENT` is not needed and
-  must not be set (both SDKs refuse it together with `APIFY_IS_AT_HOME`). `ACTOR_MAX_TOTAL_CHARGE_USD` is
-  set when a cap was given. `APIFY_ACTOR_PRICING_INFO` and `APIFY_CHARGED_ACTOR_EVENT_COUNTS` are
-  deliberately never set: with both present the SDKs skip the fetch, and a container restarted by a
-  migration would read counts frozen at run start.
-- Nothing is billed anywhere: the figures exist so a developer can see what a run of their Actor would
-  cost a user and check that the Actor charges what it should.
+- An Actor can be given a pay-per-event pricing - named events, each with a price - through the API
+  (`api.md`) or the console's pricing form (`console.md`), with identical outcomes for the same input on
+  both surfaces. Only the free and pay-per-event models are supported, and an event priced per
+  subscription tier is charged at the lowest paid tier.
+- A run is charged under the pricing that was in effect when it was created, so changing an Actor's
+  pricing never reprices a run that already exists.
+- A run's charges come from three places: the Actor charging its own events, the `apify-actor-start` event
+  when the pricing defines it (charged at run start, once per gigabyte of the run's memory), and the
+  `apify-default-dataset-item` event when the pricing defines it (charged once per item the run pushes to
+  its default dataset).
+- A run can be started with a maximum total charge. Reaching it ends the run: the reason is in the run's
+  log and status message, and the run is aborted gracefully, exactly as a graceful abort requested over the
+  API. The run's compute cost counts against that maximum only when the pricing says the user pays it.
+- An Actor reads its pricing, its charges so far and its maximum from the run itself, exactly as on the
+  platform, so charging code written for the platform runs here unchanged and needs no local-testing switch.
 
 # Users
 
@@ -287,8 +260,6 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - `ACTOR_MEMORY_MBYTES` / `APIFY_MEMORY_MBYTES` — the run's requested `memoryMbytes`.
 - `APIFY_DEDICATED_CPUS` — the run's granted CPU cores. No `ACTOR_`-prefixed counterpart; only the
   Python SDK reads it.
-- `ACTOR_MAX_TOTAL_CHARGE_USD` — the run's `options.maxTotalChargeUsd` ("Pay-per-event pricing" above);
-  absent when the run was started without a cap. Never `APIFY_ACTOR_PRICING_INFO` or
-  `APIFY_CHARGED_ACTOR_EVENT_COUNTS` (same section).
+- `ACTOR_MAX_TOTAL_CHARGE_USD` — the run's maximum total charge; absent when it was started without one.
 - Every `ACTOR_*`/`APIFY_*` pair above is set to an identical value (the two SDKs disagree on which name
   wins).

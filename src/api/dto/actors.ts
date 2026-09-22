@@ -24,7 +24,6 @@ export function actorDto(actor: ActorRecord, username: string) {
 		versions: actor.versions,
 		defaultRunOptions: { build: 'latest', timeoutSecs: 300, memoryMbytes: 1024 },
 		deploymentKey: actor.id,
-		// The platform's own field, verbatim as stored (already normalized by `services/pricing.ts`).
 		pricingInfos: actor.pricingInfos ?? [],
 		taggedBuilds: Object.fromEntries(
 			Object.entries(actor.taggedBuilds).map(([tag, info]) => [
@@ -55,7 +54,7 @@ export function buildDto(build: BuildRecord) {
 }
 
 export function runDto(run: RunRecord) {
-	// Live figures for a run still going, the persisted ones once it has ended (`services/run-usage.ts`).
+	// A live run has no final figures on its record yet, so its estimate comes from the events channel.
 	const usage = computeRunUsage(run, isTerminalJobStatus(run.status) ? undefined : getRunTelemetry(run.id));
 	return {
 		id: run.id,
@@ -81,23 +80,19 @@ export function runDto(run: RunRecord) {
 			memoryMbytes: run.options.memoryMbytes,
 			timeoutSecs: run.options.timeoutSecs,
 			diskMbytes: run.options.diskMbytes ?? run.options.memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
-			// Only when a cap was given - the platform omits the field on a run without one.
 			...(run.options.maxTotalChargeUsd !== undefined
 				? { maxTotalChargeUsd: run.options.maxTotalChargeUsd }
 				: {}),
 		},
 		generalAccess: run.generalAccess ?? 'FOLLOW_USER_SETTING',
 		meta: run.meta,
-		// The platform's `stats`: restart bookkeeping plus the usage estimate's figures (`actor-driver.md`).
 		stats: usage.stats,
-		// The cost estimate (`actor-driver.md`'s "Run usage estimate") - compute units only, priced at the
-		// lowest paid subscription tier, plus the pay-per-event totals on a PAY_PER_EVENT run.
 		usage: usage.usage,
 		usageUsd: usage.usageUsd,
 		usageTotalUsd: usage.usageTotalUsd,
 		...(usage.eventUsage ? { eventUsage: usage.eventUsage } : {}),
-		// Pay-per-event state the SDKs' charging managers read (`services/charging.ts`); absent on a run of
-		// an Actor without pricing, exactly like the platform's run object.
+		// Omitted, not nulled, on a run without pricing - the SDKs key their "is this pay-per-event" check
+		// off the field's presence.
 		...(run.pricingInfo ? { pricingInfo: run.pricingInfo } : {}),
 		...(run.chargedEventCounts ? { chargedEventCounts: run.chargedEventCounts } : {}),
 		...(run.chargingStoppedAt ? { chargingStoppedAt: run.chargingStoppedAt } : {}),
