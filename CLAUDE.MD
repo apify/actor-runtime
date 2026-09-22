@@ -33,3 +33,28 @@ The behavioural spec lives in `requirements/*.md` (`system.md`, `api.md`, `stora
 does not emulate). When a change alters what the runtime does for
 its users, update `skills/actor-runtime/SKILL.md` in the same commit - it is shipped documentation,
 not a README.
+
+## Contribution conventions
+
+### Requirements (`requirements/*.md`)
+
+- Describe end-user functionality.
+- Describe WHAT, not HOW.
+- Do not leak implementation details.
+- Are concise, not verbose.
+
+### Ad-hoc code comments
+
+- Are concise, not verbose.
+- Do not describe what the code is doing.
+- Describe the missing context - why, constraints, non-obvious consequences.
+- Are present only where the code is not self-explanatory.
+
+### Pull request descriptions
+
+- At most 5 lines.
+- Concise, not verbose.
+- Describe only what was done, highlighting end-user functionality.
+- No implementation details, no rejected alternatives.
+- No verification/testing notes.
+- No agent-specific text (session links, model names, tool output).
