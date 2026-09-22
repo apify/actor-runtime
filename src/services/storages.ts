@@ -5,31 +5,30 @@
  * live, because `KeyValueStore` has no `getInfo()` of its own.
  */
 import { generateId } from '../storage/ids.js';
-import type { StorageRecord, StorageType } from '../storage/entities.js';
+import type { StorageRecord, StorageType, UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { openDataset, openKeyValueStore, openRequestQueue } from '../storage/open.js';
 import { closeRequestQueueBuffer } from '../storage/request-queue/registry.js';
 import { KeyedMutex } from '../storage/mutex.js';
+import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
 
 /**
- * Serialises the lookup-then-create critical section in `createStorage` per `user:type:name`, so two
- * concurrent `getOrCreate(name)` calls can never both pass the "not found" check before either has
- * written its record. Unnamed creates never look anything up (a fresh id can never collide), so they
- * skip the mutex entirely.
+ * Without this, two concurrent `getOrCreate(name)` calls can both pass the "not found" check and mint
+ * two records. Keyed by the lower-cased name, so `Foo` and `foo` are one critical section; unnamed
+ * creates look nothing up and skip it.
  */
 const createByNameMutex = new KeyedMutex();
 
 /**
- * Idempotent by `name`, matching apify-client-js's `getOrCreate(name)` contract: a bare
- * `POST .../datasets?name=X` relies on the *server* deduplicating by name (the client itself does no
- * dedup - `resource_collection_client.ts:41-49`). When `name` is given and a storage of this type with
- * that name already exists for the user, that existing record is returned unchanged rather than
- * minting a new storage. The lookup-plus-create is serialised per `user:type:name` (see
- * `createByNameMutex`) so two concurrent calls with the same name can never both mint a record.
+ * Idempotent by `name`: apify-client-js's `getOrCreate(name)` does no dedup of its own
+ * (`resource_collection_client.ts:41-49`), so the server must. An existing storage comes back
+ * unchanged, matched case-insensitively and keeping its original casing.
  */
 export async function createStorage(userId: string, type: StorageType, name?: string): Promise<StorageRecord> {
 	if (name) {
-		return createByNameMutex.run(`${userId}:${type}:${name}`, () => createStorageRecord(userId, type, name));
+		return createByNameMutex.run(`${userId}:${type}:${normalizeName(name)}`, () =>
+			createStorageRecord(userId, type, name),
+		);
 	}
 	return createStorageRecord(userId, type, undefined);
 }
@@ -81,13 +80,26 @@ export async function getStorageById(id: string, type: StorageType): Promise<Sto
 	return record;
 }
 
+/** Case-insensitive, like the platform (`normalizeName`). */
 export async function findOwnedStorageByName(
 	userId: string,
 	type: StorageType,
 	name: string,
 ): Promise<StorageRecord | null> {
+	const wanted = normalizeName(name);
 	const owned = await listOwnedStorages(userId, type);
-	return owned.find((s) => s.name === name) ?? null;
+	return owned.find((s) => s.name !== undefined && normalizeName(s.name) === wanted) ?? null;
+}
+
+/** Unlike an Actor, a bare segment is only ever an id here - so is it on the platform. */
+export async function resolveOwnedStorage(
+	user: UserRecord,
+	reference: ResolvableReference,
+	type: StorageType,
+): Promise<StorageRecord | null> {
+	if (reference.kind === 'id') return getOwnedStorage(user.id, reference.id, type);
+	if (!isCallerOwner(user, reference.owner)) return null;
+	return findOwnedStorageByName(user.id, type, reference.name);
 }
 
 export async function touchStorage(id: string): Promise<void> {

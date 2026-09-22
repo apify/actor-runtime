@@ -64,7 +64,6 @@ real account, not in the runtime.
 - Bulk key-value store download (zip)
 - Public and signed storage URLs
 - Sharing runs and storages (`generalAccess`, access rights)
-- Storage addressing by `username~name`
 - Unnamed and shared storage listing filters
 - Storage retention and expiry
 - Request queue locking and request deletion (`storage.md`)

@@ -133,6 +133,11 @@ apify api GET /actor-runtime/api-fallback     # read the current state
 
 Either field alone is accepted. Both default off and reset to off on every restart.
 
+Named storages follow the same path: a `username~name` reference the runtime has no local storage for
+is a not-found miss, so with `fallbackNotFoundEnabled` on, `apify api GET v2/datasets/apify~some-public-dataset/items`
+reads that dataset from the real platform, and your own `~name` that exists only on the platform
+resolves there too. A name that does exist locally is always served locally.
+
 **This writes to a real Apify account.** Enabling either forwards the token the failing call carried
 to the real platform, and every HTTP method is eligible - so a locally-missing `POST`/`PUT`/`DELETE`
 becomes a real write. Only turn it on with a token whose account you are willing to change, and say
@@ -147,6 +152,11 @@ naming an Actor this runtime does not know is relayed, whole, for the platform t
 
 - `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
   The `v2/` prefix and the leading slash are both optional.
+- A named Actor, dataset, key-value store or request queue can stand in for its id as `~name` (your
+  own), `username~name` or `userId~name`, like on the platform:
+  `apify api GET v2/datasets/~my-results/items`. Names match case-insensitively. A bare name without
+  `~` is an id, except for an Actor, where it is also tried as a name. Another user's resource is not
+  found here - the runtime only ever shows your own.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
 - The platform's `runs/last` shortcuts work here too: `apify api GET v2/actors/<actorId>/runs/last` is the
   Actor's newest run, and `.../runs/last/dataset/items`, `.../runs/last/key-value-store/records/OUTPUT`,
