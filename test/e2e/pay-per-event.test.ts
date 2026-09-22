@@ -107,7 +107,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 	});
 
 	it(
-		'push, price the Actor through PUT /v2/acts/:id, call it: the run charges one event per page, the start event is pre-charged, and the run object prices everything',
+		'push, price the Actor through PUT /v2/actors/:id, call it: the run charges one event per page, the start event is pre-charged, and the run object prices everything',
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
 
@@ -131,7 +131,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			expect(storedLog(freeCall.run.id, env)).not.toContain('Pay-per-event pricing in effect');
 
 			const priced = JSON.parse(
-				apify(['api', 'PUT', `/v2/acts/${actorId}`, '--body', JSON.stringify({ pricingInfos: PRICING })], {
+				apify(['api', 'PUT', `/v2/actors/${actorId}`, '--body', JSON.stringify({ pricingInfos: PRICING })], {
 					cwd: REPO_ROOT,
 					env,
 				}),
@@ -168,7 +168,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 					[
 						'api',
 						'POST',
-						`/v2/acts/${actorId}/runs?maxTotalChargeUsd=0.03&waitForFinish=120`,
+						`/v2/actors/${actorId}/runs?maxTotalChargeUsd=0.03&waitForFinish=120`,
 						'--body',
 						JSON.stringify({ maxPages: 10 }),
 					],

@@ -113,7 +113,7 @@ Give the Actor a pricing exactly the way the platform stores it - the `pricingIn
 object. Only `FREE` and `PAY_PER_EVENT` are emulated:
 
 ```sh
-apify api PUT /v2/acts/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY_PER_EVENT",
+apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY_PER_EVENT",
   "pricingPerEvent":{"actorChargeEvents":{
     "page-scraped":{"eventTitle":"Page scraped","eventPriceUsd":0.002},
     "apify-actor-start":{"eventTitle":"Actor start","eventPriceUsd":0.005,"isOneTimeEvent":true}}}}]}'
@@ -128,7 +128,7 @@ at run start (once per GB of memory) and `apify-default-dataset-item` once per i
 default dataset, when the pricing defines them. Tiered event prices resolve to the `BRONZE` (Starter)
 tier. Submit `[]` to make the Actor free again; the same form is on the Actor's console page.
 
-Cap a run's spend like a user would: `apify api POST '/v2/acts/<actorId>/runs?maxTotalChargeUsd=0.5'`
+Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
 (there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,
 its status message and log say so, and `chargingStoppedAt` is set on the run.
 
