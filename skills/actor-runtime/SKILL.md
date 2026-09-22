@@ -110,7 +110,8 @@ which shows as a black display. Disable with `{"enabled": false}`.
 ## Test pay-per-event pricing and see what a run costs
 
 Give the Actor a pricing exactly the way the platform stores it - the `pricingInfos` array on the Actor
-object. Only `FREE` and `PAY_PER_EVENT` are emulated:
+object, which only an update takes, never the call that creates the Actor. Only `FREE` and
+`PAY_PER_EVENT` are emulated:
 
 ```sh
 apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY_PER_EVENT",
@@ -130,7 +131,9 @@ From then on every run of the Actor is a pay-per-event run: the SDKs read `prici
 variable together with `APIFY_IS_AT_HOME`. The synthetic events work too: `apify-actor-start` is charged
 at run start (once per GB of memory) and `apify-default-dataset-item` once per item pushed to the run's
 default dataset, when the pricing defines them. Tiered event prices resolve to the `BRONZE` (Starter)
-tier. Submit `[]` to make the Actor free again; the same form is on the Actor's console page.
+tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
+plus at most one new one starting after all of them - so making the Actor free again means appending a
+`{"pricingModel":"FREE"}` entry, not sending `[]`. The same form is on the Actor's console page.
 
 Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
 (there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,

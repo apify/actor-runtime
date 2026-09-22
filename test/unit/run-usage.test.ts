@@ -6,7 +6,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-	chargeableTotalUsd,
 	computeRunUsage,
 	computeUnitsFor,
 	runDurationMillis,
@@ -142,16 +141,5 @@ describe('computeRunUsage', () => {
 		const usage = computeRunUsage(ppeRun({ 'page-scraped': 3, 'apify-actor-start': 0 }), undefined, HOUR_LATER);
 		expect(usage.eventUsage?.['page-scraped']?.eventTotalUsd).toBe(0.006);
 		expect(usage.eventsUsd).toBe(0.006);
-	});
-});
-
-describe('chargeableTotalUsd', () => {
-	it('counts only the events unless the pricing makes the user pay platform usage too', () => {
-		const eventsOnly = ppeRun({ 'page-scraped': 100, 'apify-actor-start': 0 });
-		expect(chargeableTotalUsd(computeRunUsage(eventsOnly, undefined, HOUR_LATER), eventsOnly)).toBe(0.2);
-
-		const usagePaidByUser = ppeRun({ 'page-scraped': 100, 'apify-actor-start': 0 });
-		usagePaidByUser.pricingInfo!.isPPEPlatformUsagePaidByUser = true;
-		expect(chargeableTotalUsd(computeRunUsage(usagePaidByUser, undefined, HOUR_LATER), usagePaidByUser)).toBe(0.4);
 	});
 });

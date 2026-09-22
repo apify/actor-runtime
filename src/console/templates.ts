@@ -257,13 +257,6 @@ export function pricingSection(
 			definitionList([
 				['pricingModel', effective.pricingModel],
 				['startedAt', effective.startedAt],
-				['isPPEPlatformUsagePaidByUser', effective.isPPEPlatformUsagePaidByUser ? 'true' : 'false'],
-				[
-					'minimalMaxTotalChargeUsd',
-					effective.minimalMaxTotalChargeUsd !== undefined
-						? formatUsd(effective.minimalMaxTotalChargeUsd)
-						: '',
-				],
 			]) + table(['event', 'title', 'price per event', 'one-time'], rows);
 	}
 	const errorHtml = errorMessage ? `<p class="error"><strong>Error:</strong> ${escapeHtml(errorMessage)}</p>` : '';
@@ -277,7 +270,9 @@ export function pricingSection(
 		'<button type="submit">Save</button>' +
 		'</form>' +
 		'<p class="empty">The whole <code>pricingInfos</code> array, as <code>PUT /v2/actors/:actorId</code> takes it - ' +
-		'only <code>FREE</code> and <code>PAY_PER_EVENT</code> are emulated. Submit <code>[]</code> to make the Actor free again. ' +
+		'only <code>FREE</code> and <code>PAY_PER_EVENT</code> are emulated. The array is append-only: keep the entries ' +
+		'already in the box and add at most one below them, starting after all of them. An entry with ' +
+		'<code>"pricingModel":"FREE"</code> makes the Actor free again. ' +
 		`Example: <code>[{"pricingModel":"PAY_PER_EVENT","pricingPerEvent":{"actorChargeEvents":{"page-scraped":{"eventTitle":"Page scraped","eventPriceUsd":0.002}}}}]</code></p>`
 	);
 }

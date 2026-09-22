@@ -91,8 +91,6 @@ export interface ActorPricingInfoRecord {
 	apifyMarginPercentage: number;
 	reasonForChange?: string;
 	pricingPerEvent?: { actorChargeEvents: Record<string, ActorChargeEventRecord> };
-	minimalMaxTotalChargeUsd?: number;
-	isPPEPlatformUsagePaidByUser?: boolean;
 }
 
 /** One run's pricing: tiered prices already collapsed to the tier's own `eventPriceUsd`, the shape the
@@ -114,8 +112,6 @@ export interface RunPricingInfoRecord {
 			}
 		>;
 	};
-	minimalMaxTotalChargeUsd?: number;
-	isPPEPlatformUsagePaidByUser?: boolean;
 }
 
 export interface ActorRecord {

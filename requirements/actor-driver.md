@@ -208,12 +208,12 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 # Pay-per-event pricing
 
 - An Actor can be given a pay-per-event pricing, and its runs are charged against it, as on the platform:
-  the same pricing on the Actor, the same events charged by the Actor and by the runtime on its behalf,
-  the same per-run maximum total charge, which ends the run when reached.
+  the same pricing on the Actor, set only on an existing Actor and only ever appended to, the same events
+  charged by the Actor and by the runtime on its behalf, the same per-run maximum total charge, which
+  ends the run when reached.
 - It differs in four ways: only the free and pay-per-event pricing models are accepted; an event priced
   per subscription tier is charged at the lowest paid tier; nothing is ever billed or paid out; and the
-  pricing is set freely, without the platform's monetization rules on who may price an Actor, when, and
-  how often.
+  rules tying a price change to payout details, notice periods and subscription tiers do not apply.
 - An Actor's own charging code therefore runs here unchanged, with no local-testing switch.
 - The pricing can also be set from the console (`console.md`).
 

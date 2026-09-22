@@ -65,6 +65,18 @@ export function cannotChargeNonPayPerEventActor(): ApiError {
 	);
 }
 
+/**
+ * Matches the platform: pricing is never part of creating an Actor (the public API answers 403
+ * `operation-not-allowed`), only of updating one that already exists.
+ */
+export function cannotSetPricingOnCreate(): ApiError {
+	return new ApiError(
+		403,
+		'operation-not-allowed',
+		'Pricing cannot be set while creating an Actor - set it with PUT /v2/actors/:actorId afterwards.',
+	);
+}
+
 /** The `apify-` prefixed events are charged by the runtime itself, never through the charge endpoint. */
 export function cannotChargeApifyEvent(eventName: string): ApiError {
 	return new ApiError(

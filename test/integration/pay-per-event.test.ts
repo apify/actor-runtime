@@ -119,10 +119,14 @@ describe('pay-per-event: pricing on the Actor', () => {
 		await server.close();
 	});
 
-	it('accepts pricingInfos on create and update through the real client, and returns the normalized array', async () => {
-		const created = await server.client
-			.actors()
-			.create({ name: 'priced-on-create', pricingInfos: PPE_PRICING } as never);
+	it('refuses pricingInfos while the Actor is being created, takes them on update, and returns the normalized array', async () => {
+		// The platform never accepts pricing on the call that creates an Actor, only on a later update.
+		await expect(
+			server.client.actors().create({ name: 'priced-on-create', pricingInfos: PPE_PRICING } as never),
+		).rejects.toMatchObject({ statusCode: 403, type: 'operation-not-allowed' });
+
+		const created = await server.client.actors().create({ name: 'priced-on-create' });
+		await server.client.actor(created.id).update({ pricingInfos: PPE_PRICING } as never);
 		const fetched = (await server.client.actor(created.id).get()) as unknown as { pricingInfos: unknown[] };
 		expect(fetched.pricingInfos).toHaveLength(1);
 		const info = fetched.pricingInfos[0] as Record<string, unknown>;
@@ -140,10 +144,15 @@ describe('pay-per-event: pricing on the Actor', () => {
 		});
 		expect(events['premium-page']?.eventTieredPricingUsd).toBeDefined();
 
-		const cleared = (await server.client.actor(created.id).update({ pricingInfos: [] } as never)) as unknown as {
-			pricingInfos: unknown[];
-		};
-		expect(cleared.pricingInfos).toEqual([]);
+		// Free again means appending a FREE entry; dropping the history is refused.
+		await expect(server.client.actor(created.id).update({ pricingInfos: [] } as never)).rejects.toMatchObject({
+			statusCode: 400,
+			type: 'cannot-remove-pricing-info',
+		});
+		const freed = (await server.client.actor(created.id).update({
+			pricingInfos: [...fetched.pricingInfos, { pricingModel: 'FREE', startedAt: '2030-01-01T00:00:00.000Z' }],
+		} as never)) as unknown as { pricingInfos: unknown[] };
+		expect(freed.pricingInfos).toHaveLength(2);
 
 		const unpriced = (await server.client.actors().create({ name: 'unpriced' })) as unknown as {
 			pricingInfos: unknown[];
@@ -152,9 +161,8 @@ describe('pay-per-event: pricing on the Actor', () => {
 	});
 
 	it('rejects an invalid pricingInfos with 400 invalid-request naming the problem, leaving the stored pricing untouched', async () => {
-		const created = await server.client
-			.actors()
-			.create({ name: 'badly-priced', pricingInfos: PPE_PRICING } as never);
+		const created = await server.client.actors().create({ name: 'badly-priced' });
+		await server.client.actor(created.id).update({ pricingInfos: PPE_PRICING } as never);
 		await expect(
 			server.client
 				.actor(created.id)
@@ -235,7 +243,15 @@ describe('pay-per-event: runs and charging', () => {
 	it('a pricing change on the Actor does not reprice a run already created', async () => {
 		const actorId = await seedRunnableActor(server, 'repriced-actor', PPE_PRICING);
 		const runId = await startLiveRun(server, driver, actorId);
-		await server.client.actor(actorId).update({ pricingInfos: [] } as never);
+		const current = (await server.client.actor(actorId).get()) as unknown as {
+			pricingInfos: Array<{ startedAt: string | Date }>;
+		};
+		// Effective at once (a millisecond after the entry it follows), so the run is only unrepriced
+		// because it resolved its pricing when it was created, not because the change is still pending.
+		const freeFrom = new Date(new Date(current.pricingInfos[0]!.startedAt).getTime() + 1).toISOString();
+		await server.client.actor(actorId).update({
+			pricingInfos: [...current.pricingInfos, { pricingModel: 'FREE', startedAt: freeFrom }],
+		} as never);
 		const run = (await server.client.run(runId).get()) as unknown as Record<string, unknown>;
 		expect((run.pricingInfo as { pricingModel: string }).pricingModel).toBe('PAY_PER_EVENT');
 		await finishRun(server, driver, runId);
@@ -575,6 +591,14 @@ describe('console: pricing form and usage section', () => {
 		expect(notJson.headers.location).toMatch(/pricingError=Not\+valid\+JSON|pricingError=Not%20valid%20JSON/);
 		const stillPriced = (await server.client.actor(actor.id).get()) as unknown as { pricingInfos: unknown[] };
 		expect(stillPriced.pricingInfos).toHaveLength(1);
+
+		// The form is append-only too: an emptied box would drop the history the API keeps.
+		const emptied = await axios.post(
+			`${consoleBaseUrl}/actors/${actor.id}/pricing`,
+			new URLSearchParams({ pricingInfos: '[]' }),
+			{ maxRedirects: 0, validateStatus: () => true },
+		);
+		expect(emptied.headers.location).toMatch(/pricingError=.*cannot\+remove|pricingError=.*cannot%20remove/);
 
 		const crossSite = await axios.post(
 			`${consoleBaseUrl}/actors/${actor.id}/pricing`,

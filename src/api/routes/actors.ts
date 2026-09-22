@@ -3,7 +3,7 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sendPaginated, sortByTimestamp } from '../envelope.js';
-import { recordNotFound, invalidRequest } from '../errors.js';
+import { ApiError, cannotSetPricingOnCreate, recordNotFound, invalidRequest } from '../errors.js';
 import { h, jsonBody, paginationParams, queryBoolean, queryNumber, queryString, rawBody } from '../handler.js';
 import {
 	addOrReplaceVersion,
@@ -25,17 +25,25 @@ import {
 import { listOwnedRuns, startRun, waitForRunFinish } from '../../services/runs.js';
 import { getRegistries } from '../../storage/registries.js';
 import { actorDto, buildDto, runDto } from '../dto/actors.js';
-import type { ActorRecord, ActorVersionRecord } from '../../storage/entities.js';
+import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord } from '../../storage/entities.js';
 import type { ApiServerDeps } from '../server.js';
 import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
-import { validatePricingInfos } from '../../services/pricing.js';
+import { validatePricingInfosUpdate } from '../../services/pricing.js';
 
-/** `undefined` when the body does not mention the field; a body that does but is invalid throws. */
-function pricingInfosFromBody(body: { pricingInfos?: unknown }): ActorRecord['pricingInfos'] | undefined {
+/**
+ * `undefined` when the body does not mention the field; a body that does but is invalid throws, with the
+ * platform's own error type where it has one for the same rule.
+ */
+function pricingInfosFromBody(
+	body: { pricingInfos?: unknown },
+	actor: ActorRecord,
+): ActorPricingInfoRecord[] | undefined {
 	if (body.pricingInfos === undefined) return undefined;
-	const result = validatePricingInfos(body.pricingInfos);
-	if (result.kind === 'invalid') throw invalidRequest(result.message);
+	const result = validatePricingInfosUpdate(body.pricingInfos, actor.pricingInfos);
+	if (result.kind === 'invalid') {
+		throw result.type ? new ApiError(400, result.type, result.message) : invalidRequest(result.message);
+	}
 	return result.pricingInfos;
 }
 
@@ -63,7 +71,8 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				pricingInfos?: unknown;
 			}>(req);
 			if (!body.name) throw invalidRequest('Actor "name" is required');
-			const actor = await createActor(requireUser(req).id, { ...body, pricingInfos: pricingInfosFromBody(body) });
+			if (body.pricingInfos !== undefined) throw cannotSetPricingOnCreate();
+			const actor = await createActor(requireUser(req).id, body);
 			sendData(res, actorDto(actor, requireUser(req).username), 201);
 		}),
 	);
@@ -83,7 +92,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
 			const body = jsonBody<{ name?: string; title?: string; pricingInfos?: unknown }>(req);
-			const pricingInfos = pricingInfosFromBody(body);
+			const pricingInfos = pricingInfosFromBody(body, actor);
 			const updated = await updateActor(actor.id, (current) => ({
 				...current,
 				name: body.name ?? current.name,

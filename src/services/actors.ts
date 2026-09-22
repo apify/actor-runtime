@@ -1,7 +1,7 @@
 import { generateId } from '../storage/ids.js';
-import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord, UserRecord } from '../storage/entities.js';
+import type { ActorRecord, ActorVersionRecord, UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
-import { validatePricingInfos } from './pricing.js';
+import { validatePricingInfosUpdate, type InvalidPricingInfos } from './pricing.js';
 import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
 
 /** The tag a build/run resolves to when the caller names none. `api/routes/actors.ts` and
@@ -12,8 +12,6 @@ export interface CreateActorInput {
 	name: string;
 	title?: string;
 	versions?: ActorVersionRecord[];
-	/** Already validated by the caller. */
-	pricingInfos?: ActorPricingInfoRecord[];
 }
 
 export async function createActor(userId: string, input: CreateActorInput): Promise<ActorRecord> {
@@ -27,7 +25,6 @@ export async function createActor(userId: string, input: CreateActorInput): Prom
 		modifiedAt: now,
 		versions: input.versions ?? [],
 		taggedBuilds: {},
-		...(input.pricingInfos ? { pricingInfos: input.pricingInfos } : {}),
 	};
 	await getRegistries().actors.set(record.id, record);
 	return record;
@@ -110,14 +107,14 @@ export function recordTaggedBuild(actor: ActorRecord, tag: string, buildId: stri
 	return { ...actor, taggedBuilds: { ...actor.taggedBuilds, [tag]: { buildId, buildNumber } } };
 }
 
-export type SetActorPricingResult = { kind: 'ok'; actor: ActorRecord } | { kind: 'invalid'; message: string };
+export type SetActorPricingResult = { kind: 'ok'; actor: ActorRecord } | InvalidPricingInfos;
 
 /**
  * Shared by the API and the console's form, so the two cannot drift apart. Unlike the `local*` toggles
  * this goes through `updateActor`: pricing is a real Actor field, so bumping `modifiedAt` is right.
  */
 export async function setActorPricingInfos(actor: ActorRecord, raw: unknown): Promise<SetActorPricingResult> {
-	const result = validatePricingInfos(raw);
+	const result = validatePricingInfosUpdate(raw, actor.pricingInfos);
 	if (result.kind === 'invalid') return result;
 	const updated = await updateActor(actor.id, (current) => ({ ...current, pricingInfos: result.pricingInfos }));
 	return { kind: 'ok', actor: updated ?? { ...actor, pricingInfos: result.pricingInfos } };

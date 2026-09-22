@@ -12,6 +12,7 @@ import {
 	isPayPerEvent,
 	resolveRunPricingInfo,
 	validatePricingInfos,
+	validatePricingInfosUpdate,
 } from '../../src/services/pricing.js';
 
 const NOW = new Date('2026-09-21T10:00:00.000Z');
@@ -71,8 +72,6 @@ describe('validatePricingInfos', () => {
 					startedAt: '2026-02-01T00:00:00.000Z',
 					apifyMarginPercentage: 0.2,
 					reasonForChange: 'launch',
-					minimalMaxTotalChargeUsd: 1,
-					isPPEPlatformUsagePaidByUser: true,
 				},
 			),
 		]);
@@ -80,8 +79,6 @@ describe('validatePricingInfos', () => {
 		expect(info.startedAt).toBe('2026-02-01T00:00:00.000Z');
 		expect(info.apifyMarginPercentage).toBe(0.2);
 		expect(info.reasonForChange).toBe('launch');
-		expect(info.minimalMaxTotalChargeUsd).toBe(1);
-		expect(info.isPPEPlatformUsagePaidByUser).toBe(true);
 		expect(info.pricingPerEvent?.actorChargeEvents.result?.isPrimaryEvent).toBe(true);
 		expect(info.pricingPerEvent?.actorChargeEvents[ACTOR_START_EVENT_NAME]?.isOneTimeEvent).toBe(true);
 	});
@@ -111,7 +108,9 @@ describe('validatePricingInfos', () => {
 
 	it('accepts a FREE pricing and rejects PPE-only fields on it', () => {
 		expect(ok([{ pricingModel: 'FREE' }])[0]?.pricingModel).toBe('FREE');
-		expect(invalidMessage([{ pricingModel: 'FREE', minimalMaxTotalChargeUsd: 1 }])).toMatch(/only valid with/);
+		expect(invalidMessage([{ pricingModel: 'FREE', pricingPerEvent: { actorChargeEvents: {} } }])).toMatch(
+			/only valid with/,
+		);
 	});
 
 	it('rejects the pricing models this runtime does not emulate, and unknown ones', () => {
@@ -206,5 +205,84 @@ describe('initialChargedEventCounts', () => {
 		expect(initialChargedEventCounts(resolved, 512)).toEqual({ [ACTOR_START_EVENT_NAME]: 1, a: 0 });
 		expect(initialChargedEventCounts(resolved, 4096)).toEqual({ [ACTOR_START_EVENT_NAME]: 4, a: 0 });
 		expect(initialChargedEventCounts(resolved, 4095)).toEqual({ [ACTOR_START_EVENT_NAME]: 3, a: 0 });
+	});
+});
+
+describe('validatePricingInfosUpdate (the append-only history)', () => {
+	const existing = ok([
+		ppe({ result: { eventTitle: 'Result', eventPriceUsd: 0.01 } }, { startedAt: '2026-01-01T00:00:00.000Z' }),
+	]);
+
+	function update(raw: unknown, current = existing) {
+		return validatePricingInfosUpdate(raw, current, NOW);
+	}
+
+	function rejection(raw: unknown, current = existing): { type?: string; message: string } {
+		const result = update(raw, current);
+		if (result.kind !== 'invalid') throw new Error('expected the update to be rejected');
+		return { type: result.type, message: result.message };
+	}
+
+	it('accepts resending the existing entries unchanged, and appending one that starts later', () => {
+		expect(update(existing).kind).toBe('ok');
+		const appended = update([...existing, { pricingModel: 'FREE', startedAt: '2026-06-01T00:00:00.000Z' }]);
+		if (appended.kind !== 'ok') throw new Error(appended.message);
+		expect(appended.pricingInfos).toHaveLength(2);
+		expect(appended.pricingInfos[1]?.pricingModel).toBe('FREE');
+	});
+
+	it('refuses to drop an entry, so a price a run was charged at stays readable', () => {
+		expect(rejection([])).toEqual({
+			type: 'cannot-remove-pricing-info',
+			message: expect.stringContaining('FREE'),
+		});
+	});
+
+	it('refuses more than one new entry at a time', () => {
+		expect(
+			rejection([
+				...existing,
+				{ pricingModel: 'FREE', startedAt: '2026-06-01T00:00:00.000Z' },
+				{ pricingModel: 'FREE', startedAt: '2026-07-01T00:00:00.000Z' },
+			]).type,
+		).toBe('cannot-add-multiple-pricing-infos');
+	});
+
+	it('refuses an edit to an entry already stored, whichever field it touches', () => {
+		const edited = [
+			{
+				...existing[0]!,
+				pricingPerEvent: { actorChargeEvents: { result: { eventTitle: 'Result', eventPriceUsd: 0.02 } } },
+			},
+		];
+		expect(rejection(edited).type).toBe('incorrect-pricing-modifier-prefix');
+		expect(rejection([{ ...existing[0]!, startedAt: '2026-01-02T00:00:00.000Z' }]).type).toBe(
+			'incorrect-pricing-modifier-prefix',
+		);
+	});
+
+	it('refuses a new entry that starts at or before one already stored', () => {
+		expect(rejection([...existing, { pricingModel: 'FREE', startedAt: '2025-12-01T00:00:00.000Z' }]).type).toBe(
+			'cannot-add-pricing-info-that-alters-past',
+		);
+		expect(rejection([...existing, { pricingModel: 'FREE', startedAt: existing[0]!.startedAt }]).type).toBe(
+			'cannot-add-pricing-info-that-alters-past',
+		);
+	});
+
+	it('allows one entry starting in the future, never a second', () => {
+		const future = update([...existing, { pricingModel: 'FREE', startedAt: '2027-01-01T00:00:00.000Z' }]);
+		if (future.kind !== 'ok') throw new Error(future.message);
+		expect(
+			rejection(
+				[...future.pricingInfos, { pricingModel: 'FREE', startedAt: '2027-02-01T00:00:00.000Z' }],
+				future.pricingInfos,
+			).type,
+		).toBe('cannot-add-second-future-pricing-info');
+	});
+
+	it('is the plain validation for an Actor that has no pricing yet', () => {
+		expect(update([], []).kind).toBe('ok');
+		expect(update([ppe({ result: { eventTitle: 'Result', eventPriceUsd: 0.01 } })], []).kind).toBe('ok');
 	});
 });

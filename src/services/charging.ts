@@ -9,12 +9,11 @@
 import type { Driver } from '../driver/types.js';
 import type { RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
-import { getRunTelemetry } from './events-channel.js';
 import { isTerminalJobStatus } from './job-status.js';
 import { appendRuntimeLog } from './logs.js';
 import { APIFY_EVENTS_PREFIX, DEFAULT_DATASET_ITEM_EVENT_NAME, isPayPerEvent } from './pricing.js';
 import { abortRun } from './runs.js';
-import { chargeableTotalUsd, computeRunUsage } from './run-usage.js';
+import { eventUsageFor, sumEventUsageUsd } from './run-usage.js';
 
 /** The platform's own window. */
 const IDEMPOTENCY_TTL_MS = 3 * 60 * 1000;
@@ -129,7 +128,9 @@ export async function enforceCostLimit(driver: Driver, run: RunRecord): Promise<
 	const cap = run.options.maxTotalChargeUsd;
 	if (cap === undefined || !(cap > 0) || run.chargingStoppedAt) return;
 
-	const total = chargeableTotalUsd(computeRunUsage(run, getRunTelemetry(run.id)), run);
+	// Only the events count against the cap: the compute a run spends is the Actor owner's cost, not the
+	// user's.
+	const total = sumEventUsageUsd(eventUsageFor(run));
 	if (total < cap) return;
 
 	const stoppedAt = new Date().toISOString();

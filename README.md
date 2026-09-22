@@ -221,8 +221,11 @@ apify api GET actor-runs/<runId>
 
 The run object then carries `chargedEventCounts`, `eventUsage` and `usageTotalUsd` - what was charged,
 what it adds up to per event, and the events plus the compute units priced at the lowest paid tier. The
-run's console page and the runs list show the same figures, and `{"pricingInfos": []}` makes the Actor
-free again.
+run's console page and the runs list show the same figures.
+
+`pricingInfos` is append-only and is never accepted while the Actor is being created, both as on the
+platform: an update sends the Actor's existing entries unchanged plus at most one new one, starting after
+all of them. Making the Actor free again is therefore appending a `{"pricingModel": "FREE"}` entry.
 
 Cap a run's spend the way a user does - the cap is a query parameter, with no `apify call` flag for it:
 

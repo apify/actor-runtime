@@ -140,12 +140,3 @@ export function computeRunUsage(
 		eventsUsd,
 	};
 }
-
-/**
- * What counts against the run's cap. The compute cost is the Actor owner's, not the user's, unless the
- * pricing says otherwise, so it only counts when `isPPEPlatformUsagePaidByUser` is set.
- */
-export function chargeableTotalUsd(usage: RunUsage, run: Pick<RunRecord, 'pricingInfo'>): number {
-	const platformShare = run.pricingInfo?.isPPEPlatformUsagePaidByUser ? usage.platformUsageUsd : 0;
-	return roundUsd(usage.eventsUsd + platformShare);
-}

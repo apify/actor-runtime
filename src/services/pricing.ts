@@ -3,6 +3,8 @@
  * form, and per-run resolution. Rental and pay-per-result are rejected rather than stored, since nothing
  * downstream would act on them (`unsupported.md`).
  */
+import { isDeepStrictEqual } from 'node:util';
+
 import type {
 	ActorChargeEventRecord,
 	ActorPricingInfoRecord,
@@ -33,8 +35,6 @@ const PRICING_INFO_FIELDS = [
 	'apifyMarginPercentage',
 	'reasonForChange',
 	'pricingPerEvent',
-	'minimalMaxTotalChargeUsd',
-	'isPPEPlatformUsagePaidByUser',
 ] as const;
 
 const CHARGE_EVENT_FIELDS = [
@@ -54,12 +54,15 @@ function isNonNegativeNumber(value: unknown): value is number {
 	return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-/** `message` is shown verbatim by both the API's `400` and the console's inline error. */
-export type ValidatedPricingInfos =
-	{ kind: 'ok'; pricingInfos: ActorPricingInfoRecord[] } | { kind: 'invalid'; message: string };
+/**
+ * `message` is shown verbatim by both the API's error and the console's inline error. `type` is the
+ * platform's own error type for the rules it also enforces; a plain `invalid-request` otherwise.
+ */
+export type InvalidPricingInfos = { kind: 'invalid'; message: string; type?: string };
+export type ValidatedPricingInfos = { kind: 'ok'; pricingInfos: ActorPricingInfoRecord[] } | InvalidPricingInfos;
 
-function invalid(message: string): { kind: 'invalid'; message: string } {
-	return { kind: 'invalid', message };
+function invalid(message: string, type?: string): InvalidPricingInfos {
+	return { kind: 'invalid', message, ...(type ? { type } : {}) };
 }
 
 function parseTimestamp(value: unknown): string | undefined {
@@ -72,7 +75,7 @@ function validateChargeEvent(
 	eventName: string,
 	raw: unknown,
 	where: string,
-): { kind: 'ok'; event: ActorChargeEventRecord } | { kind: 'invalid'; message: string } {
+): { kind: 'ok'; event: ActorChargeEventRecord } | InvalidPricingInfos {
 	if (!isPlainObject(raw)) return invalid(`${where}: event "${eventName}" must be a JSON object`);
 	const unknownKey = Object.keys(raw).find((key) => !(CHARGE_EVENT_FIELDS as readonly string[]).includes(key));
 	if (unknownKey) {
@@ -188,10 +191,10 @@ function validatePricingInfo(raw: unknown, index: number, now: Date): ValidatedP
 		...(typeof raw.reasonForChange === 'string' ? { reasonForChange: raw.reasonForChange } : {}),
 	};
 
-	const ppeOnly = ['pricingPerEvent', 'minimalMaxTotalChargeUsd', 'isPPEPlatformUsagePaidByUser'] as const;
 	if (pricingModel === 'FREE') {
-		const misplaced = ppeOnly.find((field) => raw[field] !== undefined);
-		if (misplaced) return invalid(`${where}: "${misplaced}" is only valid with "pricingModel": "PAY_PER_EVENT"`);
+		if (raw.pricingPerEvent !== undefined) {
+			return invalid(`${where}: "pricingPerEvent" is only valid with "pricingModel": "PAY_PER_EVENT"`);
+		}
 		return { kind: 'ok', pricingInfos: [info] };
 	}
 
@@ -212,19 +215,6 @@ function validatePricingInfo(raw: unknown, index: number, now: Date): ValidatedP
 		return invalid(`${where}: "actorChargeEvents" must define at least one event`);
 	}
 	info.pricingPerEvent = { actorChargeEvents: events };
-
-	if (raw.minimalMaxTotalChargeUsd !== undefined) {
-		if (!isNonNegativeNumber(raw.minimalMaxTotalChargeUsd)) {
-			return invalid(`${where}: "minimalMaxTotalChargeUsd" must be a number >= 0`);
-		}
-		info.minimalMaxTotalChargeUsd = raw.minimalMaxTotalChargeUsd;
-	}
-	if (raw.isPPEPlatformUsagePaidByUser !== undefined) {
-		if (typeof raw.isPPEPlatformUsagePaidByUser !== 'boolean') {
-			return invalid(`${where}: "isPPEPlatformUsagePaidByUser" must be a boolean`);
-		}
-		info.isPPEPlatformUsagePaidByUser = raw.isPPEPlatformUsagePaidByUser;
-	}
 	return { kind: 'ok', pricingInfos: [info] };
 }
 
@@ -242,6 +232,59 @@ export function validatePricingInfos(raw: unknown, now = new Date()): ValidatedP
 		pricingInfos.push(...result.pricingInfos);
 	}
 	return { kind: 'ok', pricingInfos };
+}
+
+/**
+ * The platform's append-only rule: an update carries the Actor's existing entries unchanged and may add
+ * one more, so a price a run was charged at can always be read back. Making an Actor free is appending a
+ * `FREE` entry, never dropping the history.
+ */
+export function validatePricingInfosUpdate(
+	raw: unknown,
+	existing: readonly ActorPricingInfoRecord[] | undefined,
+	now = new Date(),
+): ValidatedPricingInfos {
+	const validated = validatePricingInfos(raw, now);
+	if (validated.kind === 'invalid') return validated;
+
+	const current = existing ?? [];
+	const submitted = validated.pricingInfos;
+	if (submitted.length < current.length) {
+		return invalid(
+			'You cannot remove pricing info. To make the Actor free, submit the current pricing infos and ' +
+				'add one with the FREE pricing model.',
+			'cannot-remove-pricing-info',
+		);
+	}
+	if (submitted.length - current.length > 1) {
+		return invalid('You cannot add multiple pricing infos at once.', 'cannot-add-multiple-pricing-infos');
+	}
+	for (const [index, entry] of current.entries()) {
+		if (!isDeepStrictEqual(submitted[index], entry)) {
+			return invalid(
+				`pricingInfos[${index}] differs from the Actor's existing pricing info - an update must start ` +
+					'with the existing entries unchanged and may only append one more.',
+				'incorrect-pricing-modifier-prefix',
+			);
+		}
+	}
+	if (submitted.length === current.length) return validated;
+
+	const added = submitted[submitted.length - 1]!;
+	const addedAt = Date.parse(added.startedAt);
+	if (current.some((entry) => addedAt <= Date.parse(entry.startedAt))) {
+		return invalid(
+			'The pricing info you are adding must start after all existing ones.',
+			'cannot-add-pricing-info-that-alters-past',
+		);
+	}
+	if (addedAt > now.getTime() && current.some((entry) => Date.parse(entry.startedAt) > now.getTime())) {
+		return invalid(
+			'There is already a pricing info starting in the future. You cannot add another one.',
+			'cannot-add-second-future-pricing-info',
+		);
+	}
+	return validated;
 }
 
 /** The entry with the latest `startedAt` not after `date`, the platform's own rule. */
@@ -286,12 +329,6 @@ export function resolveRunPricingInfo(
 		};
 	}
 	resolved.pricingPerEvent = { actorChargeEvents };
-	if (effective.minimalMaxTotalChargeUsd !== undefined) {
-		resolved.minimalMaxTotalChargeUsd = effective.minimalMaxTotalChargeUsd;
-	}
-	if (effective.isPPEPlatformUsagePaidByUser !== undefined) {
-		resolved.isPPEPlatformUsagePaidByUser = effective.isPPEPlatformUsagePaidByUser;
-	}
 	return resolved;
 }
 
