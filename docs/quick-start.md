@@ -16,19 +16,19 @@ The runtime is a single container that emulates the parts of the Apify platform 
 
     The version must read `1.10.1-runtime.x ... installed via npm`.
 
-    <details>
-    <summary>It reports an older version, or <code>Error: Command runtime not found</code></summary>
+<details>
+<summary>It reports an older version, or <code>Error: Command runtime not found</code></summary>
 
-    Your shell is resolving a different `apify`. The bundle installer puts one in `~/.local/bin` and Homebrew in its own prefix; `npm install -g` replaces neither. Run `hash -r`, or open a new terminal. `which -a apify` shows which copy wins.
+Your shell is resolving a different `apify`. The bundle installer puts one in `~/.local/bin` and Homebrew in its own prefix; `npm install -g` replaces neither. Run `hash -r`, or open a new terminal. `which -a apify` shows which copy wins.
 
-    A local install avoids the clash and leaves your stable `apify` alone:
+A local install avoids the clash and leaves your stable `apify` alone:
 
-    ```
-    npm install apify-cli@runtime
-    ./node_modules/.bin/apify --version
-    ```
+```
+npm install apify-cli@runtime
+./node_modules/.bin/apify --version
+```
 
-    </details>
+</details>
 
 ## 1. Start the runtime
 
