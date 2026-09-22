@@ -63,6 +63,7 @@
         - v2/actors/:actorId/builds
         - v2/actors/:actorId/builds/default
         - v2/actors/:actorId/runs
+        - v2/actors/:actorId/runs/last, and its sub-paths (see "Last-run shortcuts")
         - v2/actors/:actorId/versions
         - v2/actors/:actorId/versions/:versionNumber
     - Builds
@@ -132,6 +133,21 @@
 - All endpoints not present in specification must return `404 Not Found` - **except** `/actor-runtime/*`,
   which is not part of the Apify API at all and answers from its own specification instead ("Actor
   runtime API" below)
+
+# Last-run shortcuts
+
+- `v2/actors/:actorId/runs/last` answers with the caller's newest run of that Actor, and each sub-path
+  under it - `/log`, `/dataset/*`, `/key-value-store/*`, `/request-queue/*`, `/abort`, `/reboot`,
+  `/metamorph` - answers exactly as the same request against that run's own endpoint, for every method
+  the endpoint accepts. The bare form is `GET`-only; any other sub-path is `404` `not-found`.
+- `?status=` and `?origin=` narrow which run is picked, taking the platform's own values for each; any
+  other value is `400` `invalid-request`.
+- An unknown Actor and no matching run are both `404` `record-not-found`; past that the target endpoint's
+  own responses apply, `501` included.
+- `v2/actor-tasks/:taskId/runs/last*` is not implemented (`unsupported.md`).
+- **One source per request**: an Actor that resolves locally is answered locally, including every later
+  miss; only a request naming an Actor unknown here is eligible for the upstream fallback, and then as
+  the caller's original request, which the platform resolves end to end.
 
 # Actor runtime API
 

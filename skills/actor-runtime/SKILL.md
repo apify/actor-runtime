@@ -144,6 +144,9 @@ becomes a real write. Only turn it on with a token whose account you are willing
 so before enabling it on someone's behalf. A relayed response carries `x-actor-runtime-fallback`
 (which platform served it) and `x-actor-runtime-fallback-trigger` (which toggle let it through).
 
+A `runs/last` call is never split between the two: an Actor that exists here is answered here, even when
+a later step misses. Only a call naming an Actor this runtime does not know is relayed.
+
 ## Inspecting state directly
 
 - `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
@@ -159,6 +162,10 @@ so before enabling it on someone's behalf. A relayed response carries `x-actor-r
   than to a runtime. `http://localhost:3333/actor-runtime/openapi.json` serves it unenveloped, for
   OpenAPI tooling.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
+- The `runs/last` shortcuts address an Actor's newest run without knowing its id:
+  `apify api GET v2/actors/<actorId>/runs/last`, and the same under `/log`, `/dataset/items`,
+  `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
+  failed runs. `client.actor(id).lastRun()` in the SDKs uses these.
 - The console at `http://localhost:3000` shows the same objects, plus the dev-folder form, the
   Migrate button and the browser view.
 - The runtime's data directory holds every storage, build and run record on disk. Read it freely;

@@ -2,8 +2,8 @@
  * Covers the upstream API fallback (the `api-fallback` operations in `src/api/openapi/actor-runtime.json`, `services/api-fallback.ts`):
  * the `GET`/`POST /actor-runtime/api-fallback` toggle-state endpoint, the eligibility mapping (both
  * toggles, in isolation and together), the fail-closed guarantee, own-token-only forwarding, and the two
- * marker headers - against a stubbed upstream, exactly the pattern
- * `test/integration/identity-resolution.test.ts` established for the identity probe. Never real egress
+ * marker headers - against a stubbed upstream (`helpers/stub-upstream.ts`, the pattern
+ * `test/integration/identity-resolution.test.ts` established for the identity probe). Never real egress
  * to `api.apify.com`.
  *
  * Console-side coverage (the `/settings` page, its form, and the nav indicator on every page) lives in
@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
+import { startStubUpstream, warmUpIdentity, type CapturedRequest, type StubUpstream } from './helpers/stub-upstream.js';
 import {
 	resetApiFallbackStateForTests,
 	resetFallbackTimeoutMsForTests,
@@ -26,63 +27,6 @@ import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import type { RunRecord } from '../../src/storage/entities.js';
 import type { Driver, DevFolderProbeOutcome } from '../../src/driver/types.js';
-
-interface CapturedRequest {
-	method: string;
-	url: string;
-	headers: Record<string, string | string[] | undefined>;
-	body: Buffer;
-}
-
-interface StubUpstream {
-	baseUrl: string;
-	hitCount: () => number;
-	requests: () => CapturedRequest[];
-	close: () => Promise<void>;
-}
-
-/** Stands in for `https://api.apify.com`, generically: `respond` decides the status/body/headers for
- * every request; passing `'hang'` never calls back at all (simulating a stalled upstream past any
- * timeout). Every hit is recorded (method/url/headers/body), so a test can assert what the runtime
- * actually sent upstream, not just what it got back. A header value may be a `string[]` (not just a
- * `string`) so a test can make the stub send the same header name as two separate raw wire lines - e.g.
- * two `Set-Cookie` lines - rather than one value; `http.ServerResponse.writeHead` sends an array value as
- * repeated lines for any header name, not only `set-cookie`. */
-function startStubUpstream(
-	respond: (
-		req: CapturedRequest,
-	) => { status: number; body?: unknown; headers?: Record<string, string | string[]> } | 'hang',
-): Promise<StubUpstream> {
-	const requests: CapturedRequest[] = [];
-	return new Promise((resolveServer) => {
-		const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
-			const chunks: Buffer[] = [];
-			req.on('data', (chunk: Buffer) => chunks.push(chunk));
-			req.on('end', () => {
-				const captured: CapturedRequest = {
-					method: req.method ?? '',
-					url: req.url ?? '',
-					headers: req.headers,
-					body: Buffer.concat(chunks),
-				};
-				requests.push(captured);
-				const outcome = respond(captured);
-				if (outcome === 'hang') return; // never respond - the client's own timeout must fire
-				res.writeHead(outcome.status, { 'content-type': 'application/json', ...outcome.headers });
-				res.end(outcome.body === undefined ? '' : JSON.stringify(outcome.body));
-			});
-		});
-		server.listen(0, () => {
-			const { port } = server.address() as AddressInfo;
-			resolveServer({
-				baseUrl: `http://127.0.0.1:${port}`,
-				hitCount: () => requests.length,
-				requests: () => requests,
-				close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-			});
-		});
-	});
-}
 
 /** An upstream that completes a final `2xx` status line and headers - the point at which a relay would
  * normally commit - and then dies before the body finishes: it declares a `content-length` larger than
@@ -122,18 +66,6 @@ function startHeadersThenDieUpstream(): Promise<StubUpstream> {
 				close: () => new Promise<void>((resolve) => server.close(() => resolve())),
 			});
 		});
-	});
-}
-
-/** Makes one authenticated request so `services/users.ts: getOrCreateUserForToken()`'s one-time
- * identity probe for `token` runs and gets cached *now*, against whatever upstream is currently
- * configured - before a test points `APIFY_UPSTREAM_API_BASE_URL` at its own fallback stub. Without
- * this, the identity probe for a never-before-seen token would itself be the first request to reach
- * that stub. */
-async function warmUpIdentity(baseUrl: string, token: string): Promise<void> {
-	await axios.get(`${baseUrl}/v2/users/me`, {
-		headers: { Authorization: `Bearer ${token}` },
-		validateStatus: () => true,
 	});
 }
 
