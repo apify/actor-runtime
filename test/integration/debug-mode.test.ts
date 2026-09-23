@@ -62,6 +62,9 @@ function debugCapturingDriver(
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			return target;
 		},
@@ -748,6 +751,9 @@ describe('run-start debug-plan resolution (services/runs.ts, through the real st
 				throw new Error('not used by this stub');
 			},
 			async stopBrowserViewer() {},
+			async containerServerAddress() {
+				return undefined;
+			},
 			async inspectDebugTarget() {
 				return { cmd: ['node', 'dist/main.js'], env: {} };
 			},

@@ -23,6 +23,7 @@ import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
 import { formatRuntimeLogLines } from '../runtime-log.js';
 import { getRunTelemetry } from './events-channel.js';
 import { initialChargedEventCounts, resolveRunPricingInfo } from './pricing.js';
+import { consumeStandbyRunFinishing } from './standby-finish.js';
 import {
 	actorStartChargeMessage,
 	registerDefaultDatasetForCharging,
@@ -31,6 +32,8 @@ import {
 
 const DEFAULT_MEMORY_MBYTES = 1024;
 const DEFAULT_TIMEOUT_SECS = 300;
+/** `@apify/consts`' `DEFAULT_CONTAINER_PORT`. */
+const DEFAULT_CONTAINER_SERVER_PORT = 4321;
 /** The public API docs don't state a separate disk default; this mirrors the 2x ratio the public
  * OpenAPI examples use for the pair (`memoryMbytes: 1024` paired with `diskMbytes: 2048`), also the
  * exact ratio in `apify-client`'s `RunOptions` pydantic model examples. */
@@ -101,9 +104,34 @@ export interface StartRunOptions {
 	devFolder?: boolean;
 	/** Absent means no cap. */
 	maxTotalChargeUsd?: number;
+	/** `STANDBY` for a run the standby router starts; `API` otherwise. */
+	origin?: 'API' | 'STANDBY';
+	/** The Actor's standby URL, given to every run as `ACTOR_STANDBY_URL`, as on the platform. */
+	standbyUrl?: string;
 	proxyPassword?: string;
 	apiBaseUrl: string;
 	token: string;
+}
+
+function versionEnvOf(version: ActorVersionRecord | undefined): Record<string, string> {
+	const versionEnv: Record<string, string> = {};
+	for (const entry of version?.envVars ?? []) {
+		versionEnv[entry.name] = entry.value;
+	}
+	return versionEnv;
+}
+
+/**
+ * The port the Actor's HTTP server listens on: the platform reads a version-level
+ * `ACTOR_WEB_SERVER_PORT`, then `ACTOR_STANDBY_PORT`, then defaults to 4321.
+ */
+export function containerServerPortFor(version: ActorVersionRecord | undefined): number {
+	const versionEnv = versionEnvOf(version);
+	for (const name of ['ACTOR_WEB_SERVER_PORT', 'ACTOR_STANDBY_PORT']) {
+		const port = Number(versionEnv[name]);
+		if (Number.isInteger(port) && port > 0 && port < 65536) return port;
+	}
+	return DEFAULT_CONTAINER_SERVER_PORT;
 }
 
 /**
@@ -119,10 +147,7 @@ function buildEnv(
 	options: StartRunOptions,
 	debugPlan: DebugPlan | undefined,
 ): Record<string, string> {
-	const versionEnv: Record<string, string> = {};
-	for (const entry of version?.envVars ?? []) {
-		versionEnv[entry.name] = entry.value;
-	}
+	const versionEnv = versionEnvOf(version);
 
 	// Both names in each pair are byte-identical, deliberately: apify-sdk-js's `ENV_MAP` and pydantic's
 	// `AliasChoices` resolve `ACTOR_*`-vs-`APIFY_*` in OPPOSITE precedence order, so letting the two ever
@@ -143,7 +168,7 @@ function buildEnv(
 		// Below every platform-owned var so a debug run can never shadow one.
 		...debugEnv,
 		APIFY_IS_AT_HOME: '1',
-		APIFY_META_ORIGIN: 'API',
+		APIFY_META_ORIGIN: run.meta.origin,
 		APIFY_API_BASE_URL: options.apiBaseUrl,
 		APIFY_TOKEN: options.token,
 		APIFY_DEFAULT_KEY_VALUE_STORE_ID: run.defaultKeyValueStoreId,
@@ -160,7 +185,9 @@ function buildEnv(
 		APIFY_MEMORY_MBYTES: memoryMbytes,
 		// No `ACTOR_`-prefixed counterpart exists; only the Python SDK reads this.
 		APIFY_DEDICATED_CPUS: String(dedicatedCpusFor(run.options.memoryMbytes)),
+		ACTOR_STANDBY_PORT: String(containerServerPortFor(version)),
 	};
+	if (options.standbyUrl) env.ACTOR_STANDBY_URL = options.standbyUrl;
 	if (options.proxyPassword) env.APIFY_PROXY_PASSWORD = options.proxyPassword;
 	// Deliberately not accompanied by `APIFY_ACTOR_PRICING_INFO`/`APIFY_CHARGED_ACTOR_EVENT_COUNTS`: with
 	// both set the SDKs skip their fetch of the run object, and a container restarted by a migration would
@@ -212,7 +239,7 @@ export async function startRun(
 			diskMbytes: memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
 			...(options.maxTotalChargeUsd !== undefined ? { maxTotalChargeUsd: options.maxTotalChargeUsd } : {}),
 		},
-		meta: { origin: 'API' },
+		meta: { origin: options.origin ?? 'API' },
 		// Same zeros the platform writes at run creation (see `RunRecord.stats`).
 		stats: {
 			migrationCount: 0,
@@ -415,6 +442,9 @@ export async function runInBackground(
 					memoryMbytes: record.options.memoryMbytes,
 					// The timeout budget is per run, not per container - a restart gets only what is left.
 					timeoutSecs: remainingTimeoutSecs(record),
+					...(record.meta.origin === 'STANDBY'
+						? { containerServerPort: containerServerPortFor(version) }
+						: {}),
 					devMount,
 					debug: debugPlan ? { language: debugPlan.language, port: debugPlan.port } : undefined,
 					// The sidecar outlives a migration/reboot restart; the new container mounts the same volume.
@@ -439,7 +469,14 @@ export async function runInBackground(
 				}
 			}
 
-			const status: JobStatus = outcome.timedOut ? 'TIMED-OUT' : outcome.exitCode === 0 ? 'SUCCEEDED' : 'FAILED';
+			// A standby run the runtime wound down ends `SUCCEEDED` whatever its exit code, as on the platform.
+			const status: JobStatus = consumeStandbyRunFinishing(record.id)
+				? 'SUCCEEDED'
+				: outcome.timedOut
+					? 'TIMED-OUT'
+					: outcome.exitCode === 0
+						? 'SUCCEEDED'
+						: 'FAILED';
 			// Flush before writing the terminal status, not after: `driver.startRun` resolving is the signal
 			// that every `onLog` call for this run has already happened (the Docker driver waits for its log
 			// capture stream to fully drain before resolving - see `docker-driver.ts`'s doc comment on
@@ -491,6 +528,7 @@ export async function runInBackground(
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
 		clearRunRestartState(record.id);
+		consumeStandbyRunFinishing(record.id);
 		markLogTerminal(record.id);
 		// Also what actually drives the events websocket's `1000` close (`api/events-ws.ts` polls this
 		// exact flag, mirroring `api/routes/logs.ts`'s `?stream=true` handling of `isLogTerminal`).
@@ -507,8 +545,10 @@ async function persistRunTelemetry(runId: string): Promise<void> {
 	);
 }
 
-/** Clamped to at least 1s so a run migrated at the edge of its budget still starts and times out. */
+/** Clamped to at least 1s so a run migrated at the edge of its budget still starts and times out. A
+ * run with no timeout (`0`) keeps having none. */
 function remainingTimeoutSecs(record: RunRecord): number {
+	if (record.options.timeoutSecs === 0) return 0;
 	const elapsedSecs = (Date.now() - Date.parse(record.startedAt)) / 1000;
 	return Math.max(1, Math.ceil(record.options.timeoutSecs - elapsedSecs));
 }

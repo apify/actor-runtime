@@ -17,6 +17,9 @@ import { resetEventsChannelForTests } from '../../../src/services/events-channel
 import { resetMigrationsForTests } from '../../../src/services/migrations.js';
 import { resetGracefulAbortsForTests } from '../../../src/services/runs.js';
 import { resetChargingForTests } from '../../../src/services/charging.js';
+import { resetStandbyForTests } from '../../../src/services/standby.js';
+import { resetStandbyFinishingForTests } from '../../../src/services/standby-finish.js';
+import { handleStandbyUpgrade } from '../../../src/api/standby-proxy.js';
 import type {
 	BuildContext,
 	BuildOutcome,
@@ -51,6 +54,9 @@ export function unavailableDriver(): Driver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -85,6 +91,9 @@ export function fixedRunOutcomeDriver(outcome: RunOutcome): Driver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -123,6 +132,9 @@ export function fixedBuildOutcomeDriver(
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -190,6 +202,9 @@ export function deferredRunDriver(): DeferredRunDriver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -250,6 +265,9 @@ export function deferredBuildDriver(): DeferredBuildDriver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -337,6 +355,9 @@ export function multiRunDriver(): MultiRunDriver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -456,7 +477,9 @@ export async function startTestServer(
 	const wsBaseUrl = `ws://127.0.0.1:${port}`;
 	// Same server, same upgrade path as production (`index.ts`) - a real `ws` client against this handle
 	// exercises the actual `api/events-ws.ts` code, not a stand-in.
-	const eventsWebSocketServer = attachEventsWebSocket(server);
+	const eventsWebSocketServer = attachEventsWebSocket(server, (req, socket, head) =>
+		handleStandbyUpgrade(driver, req, socket, head),
+	);
 
 	// maxRetries: 0 - real apify-client retries 5xx (so a deliberate 501 from the request-deletion
 	// endpoints would otherwise burn ~8 exponential-backoff retries per test); production behaviour is
@@ -485,6 +508,8 @@ export async function startTestServer(
 			resetMigrationsForTests();
 			resetGracefulAbortsForTests();
 			resetChargingForTests();
+			resetStandbyForTests();
+			resetStandbyFinishingForTests();
 			await shutdownStorage();
 			resetStorageForTests();
 			resetRegistriesForTests();

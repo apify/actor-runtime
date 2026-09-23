@@ -92,6 +92,9 @@ function timedDriver(resolveAfterMs: number): Driver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -246,6 +249,9 @@ describe('CLI log-stream race: apify-cli outputJobLog must always settle (regres
 						throw new Error('not used by this stub');
 					},
 					async stopBrowserViewer() {},
+					async containerServerAddress() {
+						return undefined;
+					},
 					async inspectDebugTarget() {
 						throw new Error('not used by this stub');
 					},
@@ -382,6 +388,9 @@ describe('CLI log-stream race: apify-cli outputJobLog must always settle (regres
 						throw new Error('not used by this stub');
 					},
 					async stopBrowserViewer() {},
+					async containerServerAddress() {
+						return undefined;
+					},
 					async inspectDebugTarget() {
 						throw new Error('not used by this stub');
 					},

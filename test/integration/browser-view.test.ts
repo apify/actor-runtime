@@ -64,6 +64,9 @@ function viewerCapturingDriver(
 		async stopBrowserViewer(runId) {
 			events.push(`stopBrowserViewer:${runId}`);
 		},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			return { env: {} };
 		},

@@ -12,12 +12,12 @@ real account, not in the runtime.
 
 ## Running Actors
 
-- Actor server (Actor Standby)
+- Multi-tenant Actor Standby, Standby for tasks, and Standby's Console-auth and tokenless options
 - Run web server and live view (`containerUrl`)
 - Metamorph
 - Resurrecting finished runs
 - Restart on error
-- Infinite runs (timeout `0`)
+- Infinite runs (timeout `0`), other than standby runs
 - Synchronous runs returning output (`run-sync`)
 - Actor-set run status messages
 - Result cap (`maxItems`)
@@ -92,7 +92,7 @@ real account, not in the runtime.
 ## Inside the Actor container
 
 - Run metadata env vars (input key, build, task, user, timestamps)
-- Web server, Standby and proxy env vars
+- Web server and proxy env vars
 - Input secrets private key
 - Log rate limiting, line truncation and size cap
 - Secret redaction in logs

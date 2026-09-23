@@ -1,0 +1,13 @@
+{
+	"name": "my-standby-actor",
+	"version": "0.0.1",
+	"type": "module",
+	"description": "A sample Actor Standby server for actor-runtime.",
+	"dependencies": {
+		"apify": "^3.7.0"
+	},
+	"scripts": {
+		"start": "node src/main.js"
+	},
+	"license": "ISC"
+}

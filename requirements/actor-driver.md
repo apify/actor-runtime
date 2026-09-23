@@ -233,6 +233,35 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   leaves it to be discovered on the bill.
 - The pricing can also be set from the console (`console.md`).
 
+# Actor Standby
+
+- An Actor with Actor Standby enabled is served as an HTTP server, as on the platform: requests sent to its
+  standby URL (`api.md`) are handled by runs the runtime starts, reuses and stops on its own. Single-tenant
+  only: every standby run belongs to the Actor's owner.
+- Standby is enabled by the Actor's `actorStandby` settings, or by `usesStandbyMode: true` in the pushed
+  `.actor/actor.json` - `apify push` sends the flag either way.
+- The settings are the platform's, with its defaults and validation: `desiredRequestsPerActorRun` (3),
+  `maxRequestsPerActorRun` (4), `idleTimeoutSecs` (300), `build` (`latest`), `memoryMbytes` (1024),
+  `shouldPassActorInput` (false), `disableStandbyFieldsOverride`.
+- A standby run is an ordinary run with origin `STANDBY`: the standby build and memory, no timeout, and
+  input only when `shouldPassActorInput` is set (the input schema's defaults). Its container is sent
+  requests on its standby port once any HTTP request to `/` carrying the header
+  `x-apify-container-server-readiness-probe` gets an answer.
+- A request goes to the least loaded run below `maxRequestsPerActorRun`; with none, a new run is started
+  and the request waits for it. Once every run is above `desiredRequestsPerActorRun`, one more is started
+  ahead of demand.
+- A run with no request for `idleTimeoutSecs` is wound down gracefully like on the platform: `aborting` and
+  `persistState` events, a stop signal 15 seconds later, a kill 15 seconds after that. It ends
+  `SUCCEEDED` and its log says why. A run that crashes or is aborted just leaves the pool.
+- After a new build of the standby build tag, runs of the older build take no new requests and are wound
+  down once their last one completes. A dev-folder edit reaches the next standby run, not a running one.
+- The runtime reaches the run's server without publishing any port, except when the runtime itself is not
+  on the `apify-local` network (run outside a container, rootless Podman, Podman 3.x): the port is then
+  published on an engine-picked host port - on `127.0.0.1` for a runtime on the host itself.
+- The standby run pool lives in memory; a runtime restart aborts standby runs like every other run.
+- Not emulated: multi-tenant Standby, Standby for tasks, and the Console-auth and tokenless options
+  (`unsupported.md`).
+
 # Users
 
 - Users are created adhoc by the runtime for each new token used in the API call (`cli.md`'s User bootstrap).
@@ -245,8 +274,11 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   default storage ids, or any other contract var the runtime itself sets.
 - `APIFY_IS_AT_HOME=1` (mirrors the real platform; an SDK/client instantiated
   in the container reports `isAtHome`/`is_at_home = true`).
-- `APIFY_META_ORIGIN` — `API` for ordinary runs (every local run arrives via
-  the API, apify-cli included)
+- `APIFY_META_ORIGIN` — the run's origin: `STANDBY` for a standby run, `API` for every other run (every
+  local run arrives via the API, apify-cli included)
+- `ACTOR_STANDBY_PORT` — the port an Actor server listens on: a version-level `ACTOR_WEB_SERVER_PORT` or
+  `ACTOR_STANDBY_PORT`, else `4321`, as on the platform.
+- `ACTOR_STANDBY_URL` — the Actor's standby URL (`api.md`).
 - `APIFY_API_BASE_URL` — the runtime's own API, reachable by name from any
   Actor container on the shared Docker network (see "Networking" above).
 - `APIFY_TOKEN` — the run owner's token

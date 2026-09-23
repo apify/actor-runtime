@@ -72,6 +72,21 @@ and a schema the Apify meta-schema rejects fails the build with the defect in it
 not checked locally, and encrypted secret input fields stay unsupported - see
 `requirements/actor-driver.md`'s "Input schema, validation and defaults".
 
+## Actor Standby
+
+An Actor with Standby enabled - `"usesStandbyMode": true` in `.actor/actor.json`, or `actorStandby` set
+through the API - is served over HTTP at its `standbyUrl`, on the API port:
+
+```bash
+cd sample_actor_standby
+apify push
+curl "http://localhost:3333/actor-runtime/standby/<username>--my-standby-actor/hello?name=Ada&token=<token>"
+```
+
+Requests are handed to standby runs the runtime starts, scales by `desiredRequestsPerActorRun` /
+`maxRequestsPerActorRun` and winds down after `idleTimeoutSecs` without a request, as on the platform.
+Single-tenant only - see `requirements/actor-driver.md`'s "Actor Standby".
+
 ## Running with Podman instead of Docker
 
 The runtime talks to the container engine only through its Docker-compatible API socket, and Podman
