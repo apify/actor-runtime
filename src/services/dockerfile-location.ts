@@ -5,15 +5,18 @@
  * case-insensitive; the returned path is always the matched file's own name, never the candidate's
  * casing - Docker's tar lookup is case-sensitive. An exact-case match wins over a case-differing one.
  */
-import * as path from 'node:path';
-import JSON5 from 'json5';
-
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import type { SourceFile } from '../storage/entities.js';
+import {
+	ACTOR_DIR,
+	escapesActorRootMessage,
+	fallbackWarningLine,
+	findCaseInsensitive,
+	indexSourceFiles,
+	parseActorJson,
+	resolveActorJsonPathField,
+} from './actor-source-files.js';
 import { DEFAULT_DOCKERFILE_CONTENT, DEFAULT_DOCKERFILE_NAME } from './default-dockerfile.js';
-
-const ACTOR_DIR = '.actor';
-const ACTOR_JSON_NAME = `${ACTOR_DIR}/actor.json`;
 
 /** Why Dockerfile resolution failed. */
 export type DockerfileResolutionFailureReason =
@@ -26,44 +29,11 @@ export type DockerfileResolution =
 	| { outcome: 'default'; dockerfilePath: string; logLines: string[]; extraSourceFile: SourceFile }
 	| { outcome: 'failure'; reason: DockerfileResolutionFailureReason; message: string };
 
-function sourceFileToText(file: SourceFile): string {
-	return file.format === 'BASE64' ? Buffer.from(file.content, 'base64').toString('utf8') : file.content;
-}
-
-interface IndexedFile {
-	normalizedName: string;
-	lowerName: string;
-}
-
-function indexSourceFiles(sourceFiles: SourceFile[]): IndexedFile[] {
-	return sourceFiles.map((file) => {
-		const normalizedName = normalizeEntryName(file.name);
-		return { normalizedName, lowerName: normalizedName.toLowerCase() };
-	});
-}
-
-/** Exact-case match wins; otherwise the first match in `sourceFiles` order. */
-function findCaseInsensitive(indexed: IndexedFile[], candidate: string): IndexedFile | undefined {
-	const lowerCandidate = candidate.toLowerCase();
-	let firstMatch: IndexedFile | undefined;
-	for (const file of indexed) {
-		if (file.lowerName !== lowerCandidate) continue;
-		if (file.normalizedName === candidate) return file; // exact case always wins immediately
-		firstMatch ??= file;
-	}
-	return firstMatch;
-}
-
-/** `.actor/actor.json`'s own path is not case-folded, unlike the Dockerfile candidates. */
-function findExact(sourceFiles: SourceFile[], normalizedTarget: string): SourceFile | undefined {
-	return sourceFiles.find((file) => normalizeEntryName(file.name) === normalizedTarget);
-}
-
 function escapesActorRootFailure(rawField: string): DockerfileResolution {
 	return {
 		outcome: 'failure',
 		reason: 'escapes-actor-root',
-		message: `Dockerfile path "${rawField}" in .actor/actor.json points outside the Actor root directory.`,
+		message: escapesActorRootMessage(rawField, 'Dockerfile'),
 	};
 }
 
@@ -71,22 +41,14 @@ export function resolveDockerfileLocation(sourceFiles: SourceFile[]): Dockerfile
 	const indexed = indexSourceFiles(sourceFiles);
 	const logLines: string[] = [];
 
-	const actorJsonFile = findExact(sourceFiles, ACTOR_JSON_NAME);
-	let actorSpecification: unknown;
-	if (actorJsonFile) {
-		try {
-			actorSpecification = JSON5.parse(sourceFileToText(actorJsonFile));
-		} catch (error) {
-			return {
-				outcome: 'failure',
-				reason: 'unparseable-actor-json',
-				message: `Could not parse .actor/actor.json: ${(error as Error).message}`,
-			};
-		}
+	const actorJson = parseActorJson(sourceFiles);
+	if (actorJson.outcome === 'unparseable') {
+		return { outcome: 'failure', reason: 'unparseable-actor-json', message: actorJson.message };
 	}
+	const specification = actorJson.outcome === 'parsed' ? actorJson.specification : undefined;
 
-	if (actorSpecification !== null && typeof actorSpecification === 'object' && 'dockerfile' in actorSpecification) {
-		const field: unknown = actorSpecification.dockerfile;
+	if (specification !== null && typeof specification === 'object' && 'dockerfile' in specification) {
+		const field: unknown = specification.dockerfile;
 		if (typeof field !== 'string') {
 			return {
 				outcome: 'failure',
@@ -95,34 +57,19 @@ export function resolveDockerfileLocation(sourceFiles: SourceFile[]): Dockerfile
 			};
 		}
 
-		if (field === '') {
-			logLines.push(
-				'Warning: "" (from the "dockerfile" field in .actor/actor.json) is not in the pushed source; falling back to the default locations.\n',
-			);
-		} else if (field.startsWith('/')) {
-			return escapesActorRootFailure(field);
-		} else {
-			const joined = normalizeEntryName(path.posix.join(ACTOR_DIR, field));
-			if (joined === '..' || joined.startsWith('../')) {
-				return escapesActorRootFailure(field);
-			}
-
-			const match = findCaseInsensitive(indexed, joined);
-			if (match) {
-				return {
-					outcome: 'resolved',
-					dockerfilePath: match.normalizedName,
-					logLines: [
-						...logLines,
-						`Using Dockerfile "${match.normalizedName}" (from the "dockerfile" field in .actor/actor.json).\n`,
-					],
-				};
-			}
-
-			logLines.push(
-				`Warning: "${joined}" (from the "dockerfile" field in .actor/actor.json) is not in the pushed source; falling back to the default locations.\n`,
-			);
+		const resolved = resolveActorJsonPathField(indexed, field);
+		if (resolved.outcome === 'escapes-actor-root') return escapesActorRootFailure(field);
+		if (resolved.outcome === 'match') {
+			return {
+				outcome: 'resolved',
+				dockerfilePath: resolved.file.normalizedName,
+				logLines: [
+					...logLines,
+					`Using Dockerfile "${resolved.file.normalizedName}" (from the "dockerfile" field in .actor/actor.json).\n`,
+				],
+			};
 		}
+		logLines.push(fallbackWarningLine(resolved.shownPath, 'dockerfile'));
 	}
 
 	const actorDirCandidate = normalizeEntryName(`${ACTOR_DIR}/${DEFAULT_DOCKERFILE_NAME}`);

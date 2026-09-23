@@ -24,9 +24,11 @@ interface Input {
 // Initialize the Apify SDK
 await Actor.init();
 
-// Structure of input is defined in .actor/input_schema.json
-const { startUrls = [{ url: 'https://crawlee.dev/' }], maxRequestsPerCrawl = 3 } =
-	(await Actor.getInput<Input>()) ?? ({} as Input);
+// Structure of input is defined in .actor/input_schema.json. Every field has a `default` there, so
+// the runtime fills it in before the run starts - the Actor needs no fallback of its own.
+const input = await Actor.getInput<Input>();
+if (!input) throw new Error('No input: the input schema should have supplied its defaults.');
+const { startUrls, maxRequestsPerCrawl } = input;
 
 // Without a proxy password (a plain local run) the crawler connects directly instead of failing the access check.
 const proxyConfiguration = process.env.APIFY_PROXY_PASSWORD

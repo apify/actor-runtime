@@ -34,6 +34,20 @@
     4. the platform's bundled default Dockerfile, for that build only - the pushed source itself is unchanged.
     - Matching is case-insensitive, exact-case wins ties, and every outcome is stated in the build log.
 
+# Input schema, validation and defaults
+
+- **Input schemas work as on the Apify platform**: the schema is read from the pushed source when the
+  Actor is built - the `input` field of `.actor/actor.json`, else `.actor/INPUT_SCHEMA.json`, else
+  `INPUT_SCHEMA.json` - a build whose schema cannot be read or is not a valid input schema fails with
+  the reason in its log, and every run of a build is validated against that build's schema with its
+  defaults applied, a rejected input starting nothing (`api.md`). A build with no input schema takes
+  every input exactly as the caller sent it.
+- **Differences**: Apify Proxy group availability is not checked, so any `apifyProxyGroups` selection
+  is accepted, while the rest of a `proxy` field is still validated; encrypted secret input fields
+  stay unsupported (`unsupported.md`).
+- An Actor running from a registered dev folder uses its last build's schema: unlike a source edit,
+  an edited input schema takes effect only after `apify push`.
+
 # Bind mount volumes with Actor source code
 
 - To let an Actor be re-run with source changes and no rebuild, the Actor's registered local dev
@@ -215,6 +229,8 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   per subscription tier is charged at the lowest paid tier; nothing is ever billed or paid out; and the
   rules tying a price change to payout details, notice periods and subscription tiers do not apply.
 - An Actor's own charging code therefore runs here unchanged, with no local-testing switch.
+- A run's log states what it was pre-charged for starting, so the count is visible where the platform
+  leaves it to be discovered on the bill.
 - The pricing can also be set from the console (`console.md`).
 
 # Users

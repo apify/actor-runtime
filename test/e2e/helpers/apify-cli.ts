@@ -15,19 +15,37 @@ export function apify(args: string[], options: { cwd: string; env: NodeJS.Proces
 	});
 }
 
+interface ApifyOptions {
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+}
+
+function spawnApify(args: string[], options: ApifyOptions): ReturnType<typeof spawnSync<string>> {
+	return spawnSync('npx', ['-y', '-p', 'apify-cli', 'apify', ...args], {
+		cwd: options.cwd,
+		env: options.env,
+		encoding: 'utf8',
+	});
+}
+
 /**
  * Like `apify()`, but returns stdout AND stderr combined. The CLI writes human-readable output —
  * including the log content of `apify runs log` (see `outputJobLog`'s `process.stderr.write`) — to
  * stderr, keeping stdout for machine-readable payloads, so log-content assertions must read stderr.
  */
-export function apifyAllOutput(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): string {
-	const result = spawnSync('npx', ['-y', '-p', 'apify-cli', 'apify', ...args], {
-		cwd: options.cwd,
-		env: options.env,
-		encoding: 'utf8',
-	});
+export function apifyAllOutput(args: string[], options: ApifyOptions): string {
+	const result = spawnApify(args, options);
 	if (result.status !== 0) {
 		throw new Error(`apify ${args.join(' ')} exited with ${result.status}:\n${result.stderr}`);
+	}
+	return `${result.stdout}\n${result.stderr}`;
+}
+
+/** Like `apifyAllOutput()`, but requires a non-zero exit. */
+export function apifyExpectingFailure(args: string[], options: ApifyOptions): string {
+	const result = spawnApify(args, options);
+	if (result.status === 0) {
+		throw new Error(`apify ${args.join(' ')} was expected to fail, but succeeded:\n${result.stdout}`);
 	}
 	return `${result.stdout}\n${result.stderr}`;
 }

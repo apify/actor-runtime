@@ -18,12 +18,16 @@ import {
 	type DebugPlan,
 } from './debug-mode.js';
 import { browserViewLogLine, describeBrowserViewerStartFailure } from './browser-view.js';
-import { dedicatedCpusFor } from '../resources.js';
+import { dedicatedCpusFor, platformIncompatibleMemoryWarning } from '../resources.js';
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
-import { formatRuntimeLogLines, type RuntimeLogLine } from '../runtime-log.js';
+import { formatRuntimeLogLines } from '../runtime-log.js';
 import { getRunTelemetry } from './events-channel.js';
 import { initialChargedEventCounts, resolveRunPricingInfo } from './pricing.js';
-import { registerDefaultDatasetForCharging, unregisterDefaultDatasetForCharging } from './charging.js';
+import {
+	actorStartChargeMessage,
+	registerDefaultDatasetForCharging,
+	unregisterDefaultDatasetForCharging,
+} from './charging.js';
 
 const DEFAULT_MEMORY_MBYTES = 1024;
 const DEFAULT_TIMEOUT_SECS = 300;
@@ -227,6 +231,12 @@ export async function startRun(
 	await runs.set(record.id, record);
 	registerDefaultDatasetForCharging(record);
 
+	// Both lines are about what the caller asked for, so they are written before the run does anything.
+	const memoryWarning = platformIncompatibleMemoryWarning(memoryMbytes);
+	if (memoryWarning) appendRuntimeLog(record.id, memoryWarning);
+	const startCharge = actorStartChargeMessage(record);
+	if (startCharge) appendRuntimeLog(record.id, startCharge);
+
 	void runInBackground(driver, actor, record, options).catch(async (error: unknown) => {
 		// Every *expected* failure mode inside `runInBackground` is already caught internally and mapped
 		// to a terminal status - this is only reached by a genuinely unexpected exception (e.g. a
@@ -357,7 +367,7 @@ export async function runInBackground(
 		appendRuntimeLog(record.id, unknownWorkingDirectoryLine(actor.localDevFolder));
 	}
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
-	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));
+	if (runtimeSection.length > 0) appendLog(record.id, formatRuntimeLogLines(runtimeSection));
 
 	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
 	// so an abort landing during this (possibly slow) step is still caught by it.
@@ -438,6 +448,9 @@ export async function runInBackground(
 			// observes it turn terminal, and immediately does a non-stream `GET /v2/logs/:id` can never observe
 			// the persisted log lagging behind the status it just saw.
 			await flushLog(record.id);
+			// Before the status write for the same reason as the flush: the sampled figures live only in
+			// memory until this runs, and a client that sees the run turn terminal reads the record next.
+			await persistRunTelemetry(record.id);
 			// Guarded: `container.wait()` resolving is not proof the run wasn't aborted - `container.stop()`
 			// (from an in-flight `abortRun`) and the container exiting on its own race off the same
 			// underlying Docker event with no ordering guarantee. If `abortRun` already moved the record to
@@ -459,6 +472,7 @@ export async function runInBackground(
 		// unusable mount) is what `apify call` streams, and the status message alone leaves it empty.
 		appendRuntimeLog(record.id, `Cannot start run: ${statusMessage}`);
 		await flushLog(record.id);
+		await persistRunTelemetry(record.id);
 		await transitionJobStatus(runs, record.id, 'FAILED', {
 			finishedAt: new Date().toISOString(),
 			statusMessage,
@@ -467,11 +481,12 @@ export async function runInBackground(
 		// The container is gone, so an open graceful-abort window has nothing left to wait out - the path an
 		// Actor that honours the `aborting` frame takes. The log is already flushed by both the success
 		// path above and the catch below, so a client seeing this terminal status can still read all of it.
+		// The accumulators are in-memory, so a finished run keeps its figures only if they are written
+		// here - before the transition below, and again for the paths above that end the run elsewhere.
+		await persistRunTelemetry(record.id);
 		if (cancelGracefulAbort(record.id)) {
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
-		// The accumulators are in-memory, so a finished run keeps its figures only if they are written here.
-		await persistRunTelemetry(record.id);
 		unregisterDefaultDatasetForCharging(record);
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
@@ -626,17 +641,4 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 			}),
 		),
 	);
-}
-
-/** 80 columns, not a terminal's full width: every line already carries a timestamp and the runtime
- * marker, so a wider rule only forces wrapping. */
-function renderRuntimeLogSection(lines: readonly RuntimeLogLine[]): string {
-	const title = ' Local Actor runtime ';
-	const width = 80;
-	const head = `${'='.repeat(4)}${title}${'='.repeat(width - 4 - title.length)}`;
-	return formatRuntimeLogLines([
-		{ text: head, emphasis: true },
-		...lines,
-		{ text: '='.repeat(width), emphasis: true },
-	]);
 }

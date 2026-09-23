@@ -24,11 +24,13 @@ async def request_handler(context: ParselCrawlingContext) -> None:
 
 async def main() -> None:
     async with Actor:
+        # Both fields have a `default` in the input schema, so the runtime fills them in before the
+        # run starts (the Apify platform does the same) - the Actor needs no fallback of its own.
         actor_input = await Actor.get_input() or {}
-        start_url = actor_input.get("startUrl", "https://crawlee.dev")
+        start_url = actor_input["startUrl"]
 
         proxy_configuration = await Actor.create_proxy_configuration(
-            actor_proxy_input=actor_input.get("proxyConfiguration")
+            actor_proxy_input=actor_input["proxyConfiguration"]
         )
 
         crawler = ParselCrawler(

@@ -3,10 +3,14 @@
  * effect at a date, per-run resolution (tiered prices collapsed to the BRONZE tier), and the initial
  * `chargedEventCounts` with the synthetic start event (`actor-driver.md`'s "Pay-per-event pricing").
  */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
 	ACTOR_START_EVENT_NAME,
+	DEFAULT_DATASET_ITEM_EVENT_NAME,
 	effectivePricingInfo,
 	initialChargedEventCounts,
 	isPayPerEvent,
@@ -14,6 +18,8 @@ import {
 	validatePricingInfos,
 	validatePricingInfosUpdate,
 } from '../../src/services/pricing.js';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const NOW = new Date('2026-09-21T10:00:00.000Z');
 
@@ -261,6 +267,25 @@ describe('validatePricingInfosUpdate (the append-only history)', () => {
 		);
 	});
 
+	it('names the field that differs, so the usual "rebuilt from a file" mistake is visible', () => {
+		expect(rejection([{ ...existing[0]!, startedAt: '2026-01-02T00:00:00.000Z' }]).message).toContain(
+			'at "startedAt" (sent "2026-01-02T00:00:00.000Z", stored "2026-01-01T00:00:00.000Z")',
+		);
+		// An entry sent without the timestamps the stored one carries: they are stamped with the time of
+		// the request, so `createdAt` is the first thing that cannot match.
+		expect(rejection([ppe({ result: { eventTitle: 'Result', eventPriceUsd: 0.01 } })]).message).toContain(
+			'at "createdAt"',
+		);
+		expect(
+			rejection([
+				{
+					...existing[0]!,
+					pricingPerEvent: { actorChargeEvents: { result: { eventTitle: 'Result', eventPriceUsd: 0.02 } } },
+				},
+			]).message,
+		).toContain('at "pricingPerEvent.actorChargeEvents.result.eventPriceUsd" (sent 0.02, stored 0.01)');
+	});
+
 	it('refuses a new entry that starts at or before one already stored', () => {
 		expect(rejection([...existing, { pricingModel: 'FREE', startedAt: '2025-12-01T00:00:00.000Z' }]).type).toBe(
 			'cannot-add-pricing-info-that-alters-past',
@@ -285,4 +310,30 @@ describe('validatePricingInfosUpdate (the append-only history)', () => {
 		expect(update([], []).kind).toBe('ok');
 		expect(update([ppe({ result: { eventTitle: 'Result', eventPriceUsd: 0.01 } })], []).kind).toBe('ok');
 	});
+});
+
+describe('the pricing the bundled samples ship', () => {
+	// The README tells a developer to PUT these files at the Actor verbatim, so what the runtime would
+	// answer to that is worth knowing here rather than from a 400 at the terminal.
+	it.each(['sample_actor_ts', 'sample_actor_py'])(
+		'%s/pricing.json is accepted and prices both synthetic events',
+		(sample) => {
+			const { pricingInfos } = JSON.parse(readFileSync(join(REPO_ROOT, sample, 'pricing.json'), 'utf8')) as {
+				pricingInfos: unknown;
+			};
+
+			const resolved = resolveRunPricingInfo(ok(pricingInfos), NOW);
+			if (!isPayPerEvent(resolved)) throw new Error('expected the sample to be priced per event');
+			expect(Object.keys(resolved.pricingPerEvent.actorChargeEvents).sort()).toEqual([
+				ACTOR_START_EVENT_NAME,
+				DEFAULT_DATASET_ITEM_EVENT_NAME,
+				'crawl-finished',
+				'page-scraped',
+			]);
+
+			// Neither synthetic event is ever charged by the sample's own code: the start event is
+			// pre-charged per whole GB, the item event by the dataset route on every push.
+			expect(initialChargedEventCounts(resolved, 2048)?.[ACTOR_START_EVENT_NAME]).toBe(2);
+		},
+	);
 });

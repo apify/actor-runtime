@@ -21,6 +21,7 @@ import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import { subscribeEvents } from '../../src/services/events-channel.js';
+import { isTerminalJobStatus } from '../../src/services/job-status.js';
 import type { ActorRecord, BuildRecord } from '../../src/storage/entities.js';
 
 const PAGE_EVENT = 'page-scraped';
@@ -219,11 +220,32 @@ describe('pay-per-event: runs and charging', () => {
 			0.01,
 		);
 
+		// A grant the platform accepts draws no warning, only the pre-charge line.
+		const log = await server.client.log(runId).get();
+		expect(log).not.toContain('Warning: the requested memory');
+		expect(log).toContain("Pre-charged 2 'apify-actor-start' event(s), $0.01 in total, for 2048 MB of memory");
+
 		const env = driver.startCalls[0]!.ctx.env;
 		expect(env.ACTOR_MAX_TOTAL_CHARGE_USD).toBe('1.5');
 		// The SDKs must fetch the run object for pricing, never read stale env copies (`services/runs.ts`).
 		expect(Object.hasOwn(env, 'APIFY_ACTOR_PRICING_INFO')).toBe(false);
 		expect(Object.hasOwn(env, 'APIFY_CHARGED_ACTOR_EVENT_COUNTS')).toBe(false);
+
+		await finishRun(server, driver, runId);
+	});
+
+	it("warns about memory the platform would refuse, and says what the run's start pre-charge covers", async () => {
+		const actorId = await seedRunnableActor(server, 'odd-memory-actor', PPE_PRICING);
+		// 8096 MB is between two steps: the platform refuses it outright, this runtime runs it and
+		// pre-charges for the 7 whole gigabytes it covers.
+		const runId = await startLiveRun(server, driver, actorId, { memory: 8096 });
+
+		const log = await server.client.log(runId).get();
+		expect(log).toContain('8096 MB is not a power of two');
+		expect(log).toContain("Pre-charged 7 'apify-actor-start' event(s), $0.035 in total, for 8096 MB of memory");
+
+		const run = (await server.client.run(runId).get()) as unknown as Record<string, unknown>;
+		expect((run.chargedEventCounts as Record<string, number>)['apify-actor-start']).toBe(7);
 
 		await finishRun(server, driver, runId);
 	});
@@ -489,7 +511,8 @@ describe('run usage estimate', () => {
 		const usage = run.usage as Record<string, number>;
 		const usageUsd = run.usageUsd as Record<string, number>;
 		expect(usage.ACTOR_COMPUTE_UNITS).toBe(stats.computeUnits);
-		expect(usageUsd.ACTOR_COMPUTE_UNITS).toBeCloseTo(stats.computeUnits! * 0.2, 6);
+		// The runtime's own rounding rather than a tolerance - see the same assertion in the e2e test.
+		expect(usageUsd.ACTOR_COMPUTE_UNITS).toBe(Number((stats.computeUnits! * 0.2).toFixed(6)));
 		expect(run.usageTotalUsd).toBe(usageUsd.ACTOR_COMPUTE_UNITS);
 		expect(run).not.toHaveProperty('eventUsage');
 
@@ -523,7 +546,18 @@ describe('run usage estimate', () => {
 		expect(live.stats.computeUnits).toBeGreaterThan(0);
 		expect(live.stats.computeUnits).toBeGreaterThanOrEqual(before.stats.computeUnits!);
 
+		// The sampled figures are written before the status turns terminal, the same guarantee the log
+		// flush has: whoever sees the run finish reads the record next, and must not find them missing.
+		const firstTerminalRead = (async () => {
+			for (;;) {
+				const current = await getRegistries().runs.get(runId);
+				if (current && isTerminalJobStatus(current.status)) return current;
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+		})();
 		await finishRun(server, driver, runId);
+		expect((await firstTerminalRead).stats?.memAvgBytes).toBe(200);
+
 		const finished = (await server.client.run(runId).get()) as unknown as { stats: Record<string, number> };
 		expect(finished.stats.memAvgBytes).toBe(200);
 		expect(finished.stats.cpuMaxUsage).toBe(30);

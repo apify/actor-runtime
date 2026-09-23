@@ -131,7 +131,11 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			expect(freeRun.pricingInfo).toBeUndefined();
 			expect(freeRun.chargedEventCounts).toBeUndefined();
 			expect(freeRun.stats.computeUnits).toBeGreaterThan(0);
-			expect(freeRun.usageUsd.ACTOR_COMPUTE_UNITS).toBeCloseTo(freeRun.usage.ACTOR_COMPUTE_UNITS * 0.2, 6);
+			// Exactly the runtime's own rounding, not a tolerance: a product whose 7th decimal is a 5 is
+			// moved by the full tolerance of `toBeCloseTo(..., 6)`, which then fails on the boundary.
+			expect(freeRun.usageUsd.ACTOR_COMPUTE_UNITS).toBe(
+				Number((freeRun.usage.ACTOR_COMPUTE_UNITS * 0.2).toFixed(6)),
+			);
 			expect(freeRun.usageTotalUsd).toBe(freeRun.usageUsd.ACTOR_COMPUTE_UNITS);
 			// The container was sampled while it ran.
 			expect(freeRun.stats.memAvgBytes).toBeGreaterThan(0);
