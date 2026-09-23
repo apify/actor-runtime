@@ -337,6 +337,7 @@ label {
 
 input[type='text'],
 input[type='number'],
+textarea,
 select {
 	padding: 0.6rem 1rem;
 	border: 1px solid var(--color-neutral-border);
@@ -412,6 +413,15 @@ button:active {
 .wide-input {
 	width: 40rem;
 	max-width: 100%;
+}
+
+/* The pricing form's JSON editor: full width, monospace, resizable downwards only. */
+.json-input {
+	flex-basis: 100%;
+	width: 100%;
+	font-family: 'IBM Plex Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+	font-size: 1.3rem;
+	resize: vertical;
 }
 
 .browser-view-screen {

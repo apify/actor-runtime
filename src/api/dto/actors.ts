@@ -1,4 +1,6 @@
 import type { ActorRecord, BuildRecord, RunRecord } from '../../storage/entities.js';
+import { getRunTelemetry } from '../../services/events-channel.js';
+import { computeRunUsage } from '../../services/run-usage.js';
 
 /** Matches `services/actors.ts`'s `DEFAULT_BUILD_TAG` - backfilled here only for run records that
  * predate `options.build` (directly-seeded test fixtures); every real run always has it set already. */
@@ -21,6 +23,7 @@ export function actorDto(actor: ActorRecord, username: string) {
 		versions: actor.versions,
 		defaultRunOptions: { build: 'latest', timeoutSecs: 300, memoryMbytes: 1024 },
 		deploymentKey: actor.id,
+		pricingInfos: actor.pricingInfos ?? [],
 		taggedBuilds: Object.fromEntries(
 			Object.entries(actor.taggedBuilds).map(([tag, info]) => [
 				tag,
@@ -50,6 +53,10 @@ export function buildDto(build: BuildRecord) {
 }
 
 export function runDto(run: RunRecord) {
+	// The accumulators outlive the run, and a run turns terminal a moment before they are copied onto its
+	// record, so reading them for a finished run too is what keeps its figures from briefly disappearing.
+	// Only a run whose figures were accumulated by an earlier process falls back to the record.
+	const usage = computeRunUsage(run, getRunTelemetry(run.id));
 	return {
 		id: run.id,
 		userId: run.userId,
@@ -74,16 +81,22 @@ export function runDto(run: RunRecord) {
 			memoryMbytes: run.options.memoryMbytes,
 			timeoutSecs: run.options.timeoutSecs,
 			diskMbytes: run.options.diskMbytes ?? run.options.memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
+			...(run.options.maxTotalChargeUsd !== undefined
+				? { maxTotalChargeUsd: run.options.maxTotalChargeUsd }
+				: {}),
 		},
 		generalAccess: run.generalAccess ?? 'FOLLOW_USER_SETTING',
 		meta: run.meta,
-		// The platform's restart-bookkeeping stats (see `RunRecord.stats`); zeros backfill old fixtures.
-		stats: {
-			migrationCount: run.stats?.migrationCount ?? 0,
-			rebootCount: run.stats?.rebootCount ?? 0,
-			restartCount: run.stats?.restartCount ?? 0,
-			resurrectCount: run.stats?.resurrectCount ?? 0,
-		},
+		stats: usage.stats,
+		usage: usage.usage,
+		usageUsd: usage.usageUsd,
+		usageTotalUsd: usage.usageTotalUsd,
+		...(usage.eventUsage ? { eventUsage: usage.eventUsage } : {}),
+		// Omitted, not nulled, on a run without pricing - the SDKs key their "is this pay-per-event" check
+		// off the field's presence.
+		...(run.pricingInfo ? { pricingInfo: run.pricingInfo } : {}),
+		...(run.chargedEventCounts ? { chargedEventCounts: run.chargedEventCounts } : {}),
+		...(run.chargingStoppedAt ? { chargingStoppedAt: run.chargingStoppedAt } : {}),
 		statusMessage: run.statusMessage,
 		containerUrl: undefined,
 	};

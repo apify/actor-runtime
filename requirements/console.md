@@ -6,10 +6,10 @@
 - The console has no login of its own, so with multiple users it lists and shows every user's objects
   rather than scoping to one - the API's own endpoints stay strictly scoped to the calling token's user
   (`storage.md`'s "Users" section).
-- The console is unauthenticated. Every route is a read except the console's only five writes: the
-  dev-folder form, the debug-mode form, the browser-view form, the run detail view's Migrate button, and
-  the Settings form (all below).
-- All five of those writes reject a submission that identifies itself as cross-site (via the
+- The console is unauthenticated. Every route is a read except the console's only six writes: the
+  pricing form, the dev-folder form, the debug-mode form, the browser-view form, the run detail view's
+  Migrate button, and the Settings form (all below).
+- All six of those writes reject a submission that identifies itself as cross-site (via the
   `Sec-Fetch-Site` header) with a plain `403`; a submission that does not is unaffected.
 - There are three types of objects: key-value store, dataset, request queue.
     - For each object type there must be exactly one widget for inspection.
@@ -44,6 +44,17 @@
   link to its viewer page (below). Absent for other runs; never in the emulated `/v2` run object.
 - Log views render ANSI colors from actor output as HTML, while the `/v2/logs/:id` API keeps serving logs raw (unconverted) for the CLI to render itself.
 - The console accepts the real Apify Console's URL shapes (as printed by stock apify-cli, e.g. `/actors/:actorId/runs/:runId`, `/storage/datasets/:id`) via redirects to its own pages.
+
+## Pricing form (Actor detail view)
+
+- The Actor detail view shows the Actor's pay-per-event pricing (`actor-driver.md`) and a form that sets
+  it, with exactly the API's behaviour and validation for any given input. A rejected submission redirects
+  back to the same detail page with the message shown inline, leaving the stored pricing unchanged.
+
+## Usage and cost (run detail view)
+
+- The run detail view shows the run's usage estimate (`actor-driver.md`), its charged events and its
+  maximum total charge; the runs list shows each run's total cost.
 
 ## Local dev-folder registration form (Actor detail view)
 

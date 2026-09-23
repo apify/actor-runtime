@@ -20,6 +20,8 @@ import { createStorage, listOwnedStorages, renameStorage, dropStorage, touchStor
 import { applyDatasetProjection, type DatasetItem } from '../../services/dataset-projection.js';
 import { datasetDto } from '../dto/storages.js';
 import type { StorageRecord } from '../../storage/entities.js';
+import { recordDefaultDatasetItems } from '../../services/charging.js';
+import type { ApiServerDeps } from '../server.js';
 
 type ResolveDataset = (req: Request) => Promise<StorageRecord | null>;
 
@@ -28,7 +30,12 @@ type ResolveDataset = (req: Request) => Promise<StorageRecord | null>;
  * directly by `:datasetId`, or via a run's `defaultDatasetId` for the `actor-runs/:runId/dataset/*`
  * aliases. Both mount points get byte-identical behaviour.
  */
-export function mountDatasetOperations(router: Router, basePath: string, resolveDataset: ResolveDataset): void {
+export function mountDatasetOperations(
+	router: Router,
+	basePath: string,
+	resolveDataset: ResolveDataset,
+	deps: ApiServerDeps,
+): void {
 	async function requireDataset(req: Request): Promise<StorageRecord> {
 		const record = await resolveDataset(req);
 		if (!record) throw recordNotFound();
@@ -51,6 +58,9 @@ export function mountDatasetOperations(router: Router, basePath: string, resolve
 			const body = jsonBody<DatasetItem | DatasetItem[]>(req);
 			const dataset = await openDataset(record.id);
 			await dataset.pushData(body);
+			// The platform's synthetic per-item pay-per-event charge (`services/charging.ts`) - a no-op for
+			// every dataset that is not a pay-per-event run's default dataset.
+			await recordDefaultDatasetItems(deps.driver, record.id, Array.isArray(body) ? body.length : 1);
 			sendData(res, null, 201);
 		}),
 	);
@@ -100,7 +110,7 @@ export function mountDatasetOperations(router: Router, basePath: string, resolve
 	);
 }
 
-export function mountDatasets(router: Router): void {
+export function mountDatasets(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/datasets',
 		h(async (req, res) => {
@@ -154,7 +164,10 @@ export function mountDatasets(router: Router): void {
 		}),
 	);
 
-	mountDatasetOperations(router, '/datasets/:datasetId', async (req) =>
-		resolveStorageParam(req, 'datasetId', 'dataset'),
+	mountDatasetOperations(
+		router,
+		'/datasets/:datasetId',
+		async (req) => resolveStorageParam(req, 'datasetId', 'dataset'),
+		deps,
 	);
 }

@@ -1,6 +1,7 @@
 import { generateId } from '../storage/ids.js';
 import type { ActorRecord, ActorVersionRecord, UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
+import { validatePricingInfosUpdate, type InvalidPricingInfos } from './pricing.js';
 import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
 
 /** The tag a build/run resolves to when the caller names none. `api/routes/actors.ts` and
@@ -104,4 +105,17 @@ export function findVersion(actor: ActorRecord, versionNumber: string): ActorVer
 /** Record a successful build against its tag - stock `apify push` polls `taggedBuilds[<tag>]`. */
 export function recordTaggedBuild(actor: ActorRecord, tag: string, buildId: string, buildNumber: string): ActorRecord {
 	return { ...actor, taggedBuilds: { ...actor.taggedBuilds, [tag]: { buildId, buildNumber } } };
+}
+
+export type SetActorPricingResult = { kind: 'ok'; actor: ActorRecord } | InvalidPricingInfos;
+
+/**
+ * Shared by the API and the console's form, so the two cannot drift apart. Unlike the `local*` toggles
+ * this goes through `updateActor`: pricing is a real Actor field, so bumping `modifiedAt` is right.
+ */
+export async function setActorPricingInfos(actor: ActorRecord, raw: unknown): Promise<SetActorPricingResult> {
+	const result = validatePricingInfosUpdate(raw, actor.pricingInfos);
+	if (result.kind === 'invalid') return result;
+	const updated = await updateActor(actor.id, (current) => ({ ...current, pricingInfos: result.pricingInfos }));
+	return { kind: 'ok', actor: updated ?? { ...actor, pricingInfos: result.pricingInfos } };
 }
