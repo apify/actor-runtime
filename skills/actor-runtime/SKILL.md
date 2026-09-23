@@ -1,6 +1,6 @@
 ---
 name: apify-actor-runtime
-description: Drive the local Apify Actor runtime - a self-contained local Apify platform that emulates the Apify API and console so Actors can be developed, run and debugged without the cloud. Covers pointing the Apify CLI at it, the no-rebuild dev-folder loop, IDE debugging, watching a Playwright/Puppeteer browser, migration testing, and relaying unimplemented calls to the real platform.
+description: Drive the local Apify Actor runtime - a self-contained local Apify platform that emulates the Apify API and console so Actors can be developed, run and debugged without the cloud. Covers pointing the Apify CLI at it, the no-rebuild dev-folder loop, IDE debugging, watching a Playwright/Puppeteer browser, migration testing, pay-per-event pricing and run cost estimates, and relaying unimplemented calls to the real platform.
 ---
 
 # Local Apify Actor runtime
@@ -107,6 +107,49 @@ the display the Actor's browser draws on. Add `"interactive": true` to also send
 input. The browser must run **headful** to show anything; Apify's templates default to headless,
 which shows as a black display. Disable with `{"enabled": false}`.
 
+## Test pay-per-event pricing and see what a run costs
+
+Give the Actor a pricing exactly the way the platform stores it - the `pricingInfos` array on the Actor
+object, which only an update takes, never the call that creates the Actor. Only `FREE` and
+`PAY_PER_EVENT` are emulated:
+
+```sh
+apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY_PER_EVENT",
+  "pricingPerEvent":{"actorChargeEvents":{
+    "page-scraped":{"eventTitle":"Page scraped","eventPriceUsd":0.002},
+    "apify-actor-start":{"eventTitle":"Actor start","eventPriceUsd":0.005,"isOneTimeEvent":true}}}}]}'
+```
+
+Both bundled samples already charge `page-scraped` per page and `crawl-finished` once at the end, and
+carry the matching pricing in `pricing.json`: `apify api PUT /v2/actors/<actorId> --body "$(cat
+sample_actor_ts/pricing.json)"` prices one in a single call.
+
+From then on every run of the Actor is a pay-per-event run: the SDKs read `pricingInfo` and
+`chargedEventCounts` off the run object exactly as on the platform, and `Actor.charge()` (or
+`apify actor charge`) posts to `POST /v2/actor-runs/<runId>/charge`. Do not set
+`ACTOR_TEST_PAY_PER_EVENT` - the runtime already looks like the platform to the SDK, which refuses that
+variable together with `APIFY_IS_AT_HOME`. The synthetic events work too: `apify-actor-start` is charged
+at run start (once per GB of memory) and `apify-default-dataset-item` once per item pushed to the run's
+default dataset, when the pricing defines them. Tiered event prices resolve to the `BRONZE` (Starter)
+tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
+plus at most one new one starting after all of them - so making the Actor free again means appending a
+`{"pricingModel":"FREE"}` entry, not sending `[]`. The same form is on the Actor's console page.
+
+Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
+(there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,
+its status message and log say so, and `chargingStoppedAt` is set on the run. An SDK with budget left
+for the next event stops charging by itself below the cap, so the abort only fires on a charge that
+crosses it - the JavaScript SDK's deliberate one-event overshoot does, the Python SDK never does.
+
+Read the outcome off the run object, `apify api GET actor-runs/<runId>`, or the run's console page:
+
+- `chargedEventCounts` and `eventUsage` - what was charged and what it adds up to per event.
+- `stats.computeUnits`, `usage`, `usageUsd` - the compute units (memory times run time) priced at the
+  lowest paid tier ($0.20 per unit), plus the sampled CPU and memory figures.
+- `usageTotalUsd` - compute units plus events. An estimate, never a bill: storage operations, data
+  transfer and proxy are not metered. On the platform a user of a pay-per-event Actor pays only the
+  events unless the pricing sets `isPPEPlatformUsagePaidByUser`.
+
 ## Test how an Actor handles a platform migration
 
 While a run is `RUNNING`:
@@ -166,8 +209,8 @@ a later step misses. Only a call naming an Actor this runtime does not know is r
   `apify api GET v2/actors/<actorId>/runs/last`, and the same under `/log`, `/dataset/items`,
   `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
   failed runs. `client.actor(id).lastRun()` in the SDKs uses these.
-- The console at `http://localhost:3000` shows the same objects, plus the dev-folder form, the
-  Migrate button and the browser view.
+- The console at `http://localhost:3000` shows the same objects, plus the pricing and dev-folder forms,
+  each run's usage and cost, the Migrate button and the browser view.
 - The runtime's data directory holds every storage, build and run record on disk. Read it freely;
   write to it only through the API, never by editing the files.
 

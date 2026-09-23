@@ -5,8 +5,8 @@
  * shared rather than reimplemented.
  *
  * The console itself has no login of its own - it is unauthenticated, and every route is a read except
- * four mutations (`console.md`): the dev-folder form and the debug-mode form, both on the Actor detail
- * view, the Migrate button on the run detail view, and the `/settings` form below. With multiple users
+ * six mutations (`console.md`): the pricing, dev-folder, debug-mode and browser-view forms on the Actor
+ * detail view, the Migrate button on the run detail view, and the `/settings` form below. With multiple users
  * it does not scope reads to any one of them: every list/detail route below reads through the
  * `listAll*`/`get*ById` cross-user service functions (see e.g. `services/actors.ts: listAllActors`),
  * never the API's own per-user `listOwned*`/`getOwned*`, and every list row and detail view shows the
@@ -20,7 +20,9 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import express, { type Express, type Request } from 'express';
 
-import { getActorById, listAllActors } from '../services/actors.js';
+import { getActorById, listAllActors, setActorPricingInfos } from '../services/actors.js';
+import { getRunTelemetry } from '../services/events-channel.js';
+import { computeRunUsage } from '../services/run-usage.js';
 import type { ActorRecord } from '../storage/entities.js';
 import {
 	describeDevFolderFailure,
@@ -51,10 +53,13 @@ import {
 	definitionList,
 	devFolderForm,
 	escapeHtml,
+	formatUsd,
 	layout,
 	migrateRunForm,
+	pricingSection,
 	settingsForm,
 	table,
+	usageSection,
 	type LinkedCell,
 } from './templates.js';
 import { CONSOLE_CSS } from './styles.js';
@@ -158,9 +163,9 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.set('Cache-Control', 'no-cache');
 		res.type('text/css').send(CONSOLE_CSS);
 	});
-	// The dev-folder form, the debug-mode form, the run detail view's Migrate button, and the `/settings`
-	// form below are the console's only four writes - every other route is a plain `GET` (`console.md`'s
-	// "Every route is a read except..." list).
+	// The Actor detail view's four forms (pricing, dev folder, debug mode, browser view), the run detail
+	// view's Migrate button, and the `/settings` form below are the console's only six writes - every other
+	// route is a plain `GET` (`console.md`'s "Every route is a read except..." list).
 	app.use(express.urlencoded({ extended: false }));
 
 	app.get('/', async (_req, res) => {
@@ -192,6 +197,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const debugModeError = typeof req.query.debugModeError === 'string' ? req.query.debugModeError : undefined;
 		const browserViewError =
 			typeof req.query.browserViewError === 'string' ? req.query.browserViewError : undefined;
+		const pricingError = typeof req.query.pricingError === 'string' ? req.query.pricingError : undefined;
 		const body =
 			definitionList([
 				['id', actor.id],
@@ -213,10 +219,41 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				1,
 				'/builds',
 			) +
+			pricingSection(actor.id, actor.pricingInfos, pricingError) +
 			devFolderSection(actor.id, devFolderStatus(actor), devFolderError) +
 			debugModeSection(actor.id, actor.localDebug, debugModeError) +
 			browserViewSection(actor.id, actor.localBrowserView, browserViewError);
 		res.send(layout(`Actor ${actor.name}`, body));
+	});
+
+	/** Same `setActorPricingInfos` as the API, cross-user like the other Actor forms. Only the JSON parse
+	 * is this route's own; every other rejection comes from the shared validator. */
+	app.post('/actors/:id/pricing', async (req, res) => {
+		if (isCrossSiteWrite(req)) {
+			res.status(403).send('Cross-site form submissions are not allowed.');
+			return;
+		}
+		const actor = await getActorById(req.params.id);
+		if (!actor) {
+			res.status(404).send(layout('Not found', '<p>Actor not found.</p>'));
+			return;
+		}
+		const body = req.body as Record<string, unknown> | undefined;
+		const submitted = typeof body?.pricingInfos === 'string' ? body.pricingInfos.trim() : '';
+		let parsed: unknown;
+		try {
+			parsed = submitted === '' ? [] : JSON.parse(submitted);
+		} catch (error) {
+			const message = `Not valid JSON: ${error instanceof Error ? error.message : String(error)}`;
+			res.redirect(`/actors/${encodeURIComponent(actor.id)}?pricingError=${encodeURIComponent(message)}`);
+			return;
+		}
+		const result = await setActorPricingInfos(actor, parsed);
+		if (result.kind !== 'ok') {
+			res.redirect(`/actors/${encodeURIComponent(actor.id)}?pricingError=${encodeURIComponent(result.message)}`);
+			return;
+		}
+		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
 	/** Same `setBrowserView` as the API endpoint, cross-user like the debug-mode form above. */
@@ -245,7 +282,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
-	/** One of the console's four mutations - funnels through the same `setDevFolder` the API endpoint uses,
+	/** One of the console's six mutations - funnels through the same `setDevFolder` the API endpoint uses,
 	 * resolving the Actor cross-user by the id already in the page URL (no token) rather than through
 	 * `resolveOwnedActor`. A failure redirects back with `describeDevFolderFailure`'s message in a query
 	 * param, so it's surfaced inline rather than swallowed by the redirect. */
@@ -274,7 +311,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
-	/** One of the console's four mutations - funnels through the same `setDebugMode` the API endpoint
+	/** One of the console's six mutations - funnels through the same `setDebugMode` the API endpoint
 	 * uses, resolving the Actor cross-user by the id already in the page URL, like the dev-folder form
 	 * above. A failure redirects back with the classified message in a query param. */
 	app.post('/actors/:id/debug', async (req, res) => {
@@ -392,11 +429,17 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			r.status,
 			r.startedAt,
 			storageLink('/datasets', r.defaultDatasetId),
+			formatUsd(computeRunUsage(r, getRunTelemetry(r.id)).usageTotalUsd),
 		]);
 		res.send(
 			layout(
 				'Runs',
-				table(['id', 'userId', 'actorId', 'status', 'startedAt', 'defaultDatasetId'], rows, 0, '/runs'),
+				table(
+					['id', 'userId', 'actorId', 'status', 'startedAt', 'defaultDatasetId', 'usageTotalUsd'],
+					rows,
+					0,
+					'/runs',
+				),
 			),
 		);
 	});
@@ -427,6 +470,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			['status', run.status],
 			['startedAt', run.startedAt],
 			['finishedAt', run.finishedAt ?? ''],
+			['statusMessage', run.statusMessage ?? ''],
 			['migrationCount', run.stats?.migrationCount ?? 0],
 			['rebootCount', run.stats?.rebootCount ?? 0],
 			['defaultDatasetId', storageLink('/datasets', run.defaultDatasetId)],
@@ -446,8 +490,10 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				},
 			]);
 		}
+		const usage = computeRunUsage(run, getRunTelemetry(run.id));
 		const body =
 			definitionList(rows) +
+			usageSection(run, usage) +
 			migrateSection +
 			'<h2>Log</h2><pre>' +
 			(log ? ansiToHtml(log) : '(empty)') +
@@ -510,7 +556,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		);
 	});
 
-	/** One of the console's four writes (`console.md`) - the same `migrateRun` as the API endpoint, cross-user
+	/** One of the console's six writes (`console.md`) - the same `migrateRun` as the API endpoint, cross-user
 	 * like the dev-folder form. */
 	app.post('/runs/:id/migrate', async (req, res) => {
 		if (isCrossSiteWrite(req)) {

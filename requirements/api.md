@@ -17,7 +17,7 @@
 - `DELETE /v2/actor-builds/:buildId` and `DELETE /v2/actor-runs/:runId` on a **non-terminal** build/run
   are rejected, not aborted-then-deleted: `400` with error type `deleting-unfinished-build` (builds) or
   `cannot-remove-running-run` (runs), matching the Apify platform.
-- Four endpoints are exceptions to the `{data}` envelope:
+- Five endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
     - `GET /v2/datasets/:datasetId/items` (and its `actor-runs/:runId/dataset/items` alias): the body is
@@ -28,6 +28,7 @@
     - `GET /actor-runtime/openapi.json`: the runtime's own OpenAPI document, served bare so standard
       OpenAPI tooling can consume the URL - see "Actor runtime API" below. The same document _is_
       `{data}`-enveloped at `GET /actor-runtime`, which is what the CLI reads.
+    - `POST /v2/actor-runs/:runId/charge`: a bare `{}`, matching the platform.
 - `*At` timestamp fields are ISO-8601 strings.
 - Log content matches the Apify platform's log format: every log line starts with an ISO-8601 UTC
   timestamp with millisecond precision followed by a space (`2026-08-31T09:13:25.123Z `), exactly one
@@ -76,6 +77,7 @@
         - v2/actor-runs/:runId
         - v2/actor-runs/:runId/abort
         - v2/actor-runs/:runId/reboot
+        - v2/actor-runs/:runId/charge
         - v2/actor-runs/:runId/log
     - Datasets
         - v2/datasets
