@@ -267,6 +267,25 @@ describe('validatePricingInfosUpdate (the append-only history)', () => {
 		);
 	});
 
+	it('names the field that differs, so the usual "rebuilt from a file" mistake is visible', () => {
+		expect(rejection([{ ...existing[0]!, startedAt: '2026-01-02T00:00:00.000Z' }]).message).toContain(
+			'at "startedAt" (sent "2026-01-02T00:00:00.000Z", stored "2026-01-01T00:00:00.000Z")',
+		);
+		// An entry sent without the timestamps the stored one carries: they are stamped with the time of
+		// the request, so `createdAt` is the first thing that cannot match.
+		expect(rejection([ppe({ result: { eventTitle: 'Result', eventPriceUsd: 0.01 } })]).message).toContain(
+			'at "createdAt"',
+		);
+		expect(
+			rejection([
+				{
+					...existing[0]!,
+					pricingPerEvent: { actorChargeEvents: { result: { eventTitle: 'Result', eventPriceUsd: 0.02 } } },
+				},
+			]).message,
+		).toContain('at "pricingPerEvent.actorChargeEvents.result.eventPriceUsd" (sent 0.02, stored 0.01)');
+	});
+
 	it('refuses a new entry that starts at or before one already stored', () => {
 		expect(rejection([...existing, { pricingModel: 'FREE', startedAt: '2025-12-01T00:00:00.000Z' }]).type).toBe(
 			'cannot-add-pricing-info-that-alters-past',

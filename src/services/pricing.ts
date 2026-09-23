@@ -262,8 +262,8 @@ export function validatePricingInfosUpdate(
 	for (const [index, entry] of current.entries()) {
 		if (!isDeepStrictEqual(submitted[index], entry)) {
 			return invalid(
-				`pricingInfos[${index}] differs from the Actor's existing pricing info - an update must start ` +
-					'with the existing entries unchanged and may only append one more.',
+				`pricingInfos[${index}] differs from the Actor's existing pricing info ${describeDifference(submitted[index], entry)} - ` +
+					'an update must start with the existing entries unchanged and may only append one more.',
 				'incorrect-pricing-modifier-prefix',
 			);
 		}
@@ -285,6 +285,29 @@ export function validatePricingInfosUpdate(
 		);
 	}
 	return validated;
+}
+
+/**
+ * The first field the submitted entry gets wrong, named as a path. Worth the code: the usual cause is an
+ * entry rebuilt from a file rather than from what the Actor already has, and the difference is then a
+ * timestamp nobody thinks to look at.
+ */
+function describeDifference(submitted: unknown, stored: unknown, path = ''): string {
+	if (isPlainObject(submitted) && isPlainObject(stored)) {
+		for (const key of new Set([...Object.keys(stored), ...Object.keys(submitted)])) {
+			const where = path === '' ? key : `${path}.${key}`;
+			if (!isDeepStrictEqual(submitted[key], stored[key]))
+				return describeDifference(submitted[key], stored[key], where);
+		}
+	}
+	const at = path === '' ? '' : `at "${path}" `;
+	return `${at}(sent ${describeValue(submitted)}, stored ${describeValue(stored)})`;
+}
+
+function describeValue(value: unknown): string {
+	if (value === undefined) return 'nothing';
+	const json = JSON.stringify(value) ?? String(value);
+	return json.length > 60 ? `${json.slice(0, 57)}...` : json;
 }
 
 /** The entry with the latest `startedAt` not after `date`, the platform's own rule. */
