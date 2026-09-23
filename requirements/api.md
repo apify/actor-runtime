@@ -23,7 +23,7 @@
   parseable JSON, is not a JSON object, or that the schema rejects (every validation error,
   comma-separated); `invalid-input-schema` for a stored schema that cannot be compiled at all. A build
   with no input schema accepts any body, unvalidated.
-- Three endpoints are exceptions to the `{data}` envelope:
+- Four endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
     - `GET /v2/datasets/:datasetId/items` (and its `actor-runs/:runId/dataset/items` alias): the body is
@@ -31,6 +31,7 @@
       `x-apify-pagination-*` response headers, matching apify-client-js's pagination handling.
     - `GET /actor-runtime/events/:runId`: a websocket upgrade, not a JSON response at all - see "Actor
       runtime API" below.
+    - `POST /v2/actor-runs/:runId/charge`: a bare `{}`, matching the platform.
 - `*At` timestamp fields are ISO-8601 strings.
 - Log content matches the Apify platform's log format: every log line starts with an ISO-8601 UTC
   timestamp with millisecond precision followed by a space (`2026-08-31T09:13:25.123Z `), exactly one
@@ -77,6 +78,7 @@
         - v2/actor-runs/:runId
         - v2/actor-runs/:runId/abort
         - v2/actor-runs/:runId/reboot
+        - v2/actor-runs/:runId/charge
         - v2/actor-runs/:runId/log
     - Datasets
         - v2/datasets

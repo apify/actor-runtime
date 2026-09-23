@@ -1,0 +1,27 @@
+{
+	"pricingInfos": [
+		{
+			"pricingModel": "PAY_PER_EVENT",
+			"pricingPerEvent": {
+				"actorChargeEvents": {
+					"page-scraped": {
+						"eventTitle": "Page scraped",
+						"eventDescription": "One page fetched, parsed and pushed to the dataset.",
+						"eventPriceUsd": 0.01
+					},
+					"crawl-finished": {
+						"eventTitle": "Crawl finished",
+						"eventDescription": "Charged once when the crawl is over.",
+						"eventPriceUsd": 0.02
+					},
+					"apify-actor-start": {
+						"eventTitle": "Actor start",
+						"eventDescription": "Charged by the runtime at run start, once per GB of memory.",
+						"eventPriceUsd": 0.005,
+						"isOneTimeEvent": true
+					}
+				}
+			}
+		}
+	]
+}

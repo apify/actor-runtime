@@ -61,6 +61,7 @@
           Same rules as `localDebug`: set only through its endpoint or console form, never bumping `modifiedAt`.
         - Neither `localDevFolder`, `localDebug`, `localBrowserView`, nor any build's
           `imageWorkingDirectory` is ever exposed on the public `/v2` API.
+        - `pricingInfos` - **optional**, the Actor's pricing (`actor-driver.md`); exposed on `/v2`.
 - The system stores Actor runs in dedicated key-value store called `__RUNS__`:
     - `key` is the id of the Actor run `runId`
     - `value` is the metadata of the Actor
@@ -74,6 +75,7 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
           Never exposed on the emulated `/v2` run object.
         - `localBrowserView` - **optional**, specific to this one run: `{ interactive, vncHost, vncPort }`,
           the run's browser view once it is up. Absent otherwise. Never exposed on the emulated `/v2` run object.
+        - the run's pricing, its charges and its usage figures (`actor-driver.md`); all exposed on `/v2`.
 - The system stores Actor builds in dedicated key-value store called `__BUILDS__`:
     - `key` is the id of the Actor build (`buildId`)
     - `value` is the metadata of the Actor
@@ -120,4 +122,5 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
 5. **`hadMultipleClients` is always `false`; `stats` fields are zeroed** on every storage type.
    Dataset options `fields`/`omit`/`clean`/`skipHidden`/`skipEmpty`/`unwind` are applied after paging,
    so `total` always counts unfiltered items.
-6. One runtime process per data directory; no usage/billing fields.
+6. One runtime process per data directory. A run's usage fields are an estimate
+   (`actor-driver.md`'s "Run usage estimate"); nothing is ever billed.

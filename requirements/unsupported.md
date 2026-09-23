@@ -20,10 +20,10 @@ real account, not in the runtime.
 - Infinite runs (timeout `0`)
 - Synchronous runs returning output (`run-sync`)
 - Actor-set run status messages
-- Pay-per-event charging from a run
-- Result and cost caps (`maxItems`, `maxTotalChargeUsd`)
+- Result cap (`maxItems`)
 - Ad-hoc webhooks on run start
-- Run usage, cost and compute units
+- Metered usage other than compute units: storage operations, data transfer and proxy
+- Billing: a run's charges and costs are reported, never invoiced or paid out
 - Encrypted secret input fields
 - Actor-level default run options
 - Dynamic and bounded memory from `.actor/actor.json`
@@ -40,7 +40,8 @@ real account, not in the runtime.
 - Generated per-build OpenAPI definition
 - Output, key-value store and web server schemas
 - Publishing to Apify Store
-- Actor monetization (rental, pay per result, pay per event)
+- Actor monetization other than pay-per-event pricing (`actor-driver.md`): rental, pay per result, and the
+  Store-side flows (payouts, pricing-change notifications, per-tier prices above the lowest paid tier)
 - Actor status, deprecation and maintenance notices
 - README, changelog, categories and SEO metadata
 
@@ -82,7 +83,7 @@ real account, not in the runtime.
 ## Console
 
 - Input editor and run start from the console
-- Run charts, usage and cost
+- Run charts
 - Output tab, storage export and download
 - Login, account, token and billing settings
 - Actor insights, analytics and monitoring

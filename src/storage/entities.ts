@@ -81,6 +81,50 @@ export interface ActorLocalBrowserView {
 	interactive: boolean;
 }
 
+/** The platform's `pricingModel` enum in full; only `FREE` and `PAY_PER_EVENT` are ever accepted here. */
+export type ActorPricingModel = 'FREE' | 'FLAT_PRICE_PER_MONTH' | 'PRICE_PER_DATASET_ITEM' | 'PAY_PER_EVENT';
+
+/** A chargeable event as the Actor stores it: exactly one of `eventPriceUsd`/`eventTieredPricingUsd`. */
+export interface ActorChargeEventRecord {
+	eventTitle: string;
+	eventDescription: string;
+	eventPriceUsd?: number;
+	eventTieredPricingUsd?: Record<string, { tieredEventPriceUsd: number }>;
+	isOneTimeEvent?: boolean;
+	isPrimaryEvent?: boolean;
+}
+
+/** Always normalized by `services/pricing.ts` before it lands here, so it can go out on `/v2` verbatim. */
+export interface ActorPricingInfoRecord {
+	pricingModel: ActorPricingModel;
+	createdAt: string;
+	startedAt: string;
+	apifyMarginPercentage: number;
+	reasonForChange?: string;
+	pricingPerEvent?: { actorChargeEvents: Record<string, ActorChargeEventRecord> };
+}
+
+/** One run's pricing: tiered prices already collapsed to the tier's own `eventPriceUsd`, the shape the
+ * SDKs expect on the run object. */
+export interface RunPricingInfoRecord {
+	pricingModel: ActorPricingModel;
+	createdAt: string;
+	startedAt: string;
+	apifyMarginPercentage: number;
+	pricingPerEvent?: {
+		actorChargeEvents: Record<
+			string,
+			{
+				eventTitle: string;
+				eventDescription: string;
+				eventPriceUsd: number;
+				isOneTimeEvent?: boolean;
+				isPrimaryEvent?: boolean;
+			}
+		>;
+	};
+}
+
 export interface ActorRecord {
 	id: string;
 	userId: string;
@@ -89,6 +133,9 @@ export interface ActorRecord {
 	createdAt: string;
 	modifiedAt: string;
 	versions: ActorVersionRecord[];
+	/** The Actor's pricing history (`actor-driver.md`). Unlike the `local*` fields below, it is exposed
+	 * on `/v2`. Absent or empty means the Actor is free. */
+	pricingInfos?: ActorPricingInfoRecord[];
 	/** tag -> latest successful build for that tag; `apify push` polls this after a build. */
 	taggedBuilds: Record<string, { buildId: string; buildNumber: string }>;
 	/** Host path bind-mounted over the image's working directory at run start (`actor-driver.md`). Set or
@@ -166,6 +213,8 @@ export interface RunRecord {
 		 * default). Optional here for the same test-fixture-compatibility reason as `build`; `startRun`
 		 * always sets it for real runs, and `runDto` backfills a sensible default when absent. */
 		diskMbytes?: number;
+		/** Absent means no cap. */
+		maxTotalChargeUsd?: number;
 	};
 	exitCode?: number;
 	statusMessage?: string;
@@ -177,7 +226,23 @@ export interface RunRecord {
 		rebootCount?: number;
 		restartCount?: number;
 		resurrectCount?: number;
+		inputBodyLen?: number;
+		/** The run's final resource figures, written when it ends. While it is live the equivalent figures
+		 * are the events channel's live accumulators, which is what `runDto` reads instead. */
+		memAvgBytes?: number;
+		memMaxBytes?: number;
+		memCurrentBytes?: number;
+		cpuAvgUsage?: number;
+		cpuMaxUsage?: number;
+		cpuCurrentUsage?: number;
 	};
+	/** Resolved at run creation and never rewritten, so an Actor's later pricing change cannot reprice a
+	 * run that already exists. Absent for a run of an Actor with no pricing. */
+	pricingInfo?: RunPricingInfoRecord;
+	/** Charges so far, keyed by event name; present only on a pay-per-event run. */
+	chargedEventCounts?: Record<string, number>;
+	/** When the run first reached `options.maxTotalChargeUsd`; set once (`services/charging.ts`). */
+	chargingStoppedAt?: string;
 	/** Required by the real Apify API contract (`Run.generalAccess`) but optional here for the same
 	 * test-fixture-compatibility reason as `options.build`/`options.diskMbytes` above; `startRun` always
 	 * sets it for real runs (`FOLLOW_USER_SETTING`, the platform's run-creation default), and `runDto`

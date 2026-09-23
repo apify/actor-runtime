@@ -225,6 +225,26 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - The bundled sample Actors log their granted resources and each `systemInfo` event they receive, so the
   contract is observable from a single `apify call`.
 
+## Run usage estimate
+
+- Every run reports its usage and what it would cost, as on the platform. It differs in two ways: only
+  compute units are metered, so storage operations, data transfer and proxy usage are neither counted nor
+  priced; and every price is the lowest paid subscription tier's.
+- Nothing is billed anywhere. The figures exist so a developer can see what a run of their Actor would
+  cost the user running it.
+
+# Pay-per-event pricing
+
+- An Actor can be given a pay-per-event pricing, and its runs are charged against it, as on the platform:
+  the same pricing on the Actor, set only on an existing Actor and only ever appended to, the same events
+  charged by the Actor and by the runtime on its behalf, the same per-run maximum total charge, which
+  ends the run when reached.
+- It differs in four ways: only the free and pay-per-event pricing models are accepted; an event priced
+  per subscription tier is charged at the lowest paid tier; nothing is ever billed or paid out; and the
+  rules tying a price change to payout details, notice periods and subscription tiers do not apply.
+- An Actor's own charging code therefore runs here unchanged, with no local-testing switch.
+- The pricing can also be set from the console (`console.md`).
+
 # Users
 
 - Users are created adhoc by the runtime for each new token used in the API call (`cli.md`'s User bootstrap).
@@ -258,5 +278,6 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - `ACTOR_MEMORY_MBYTES` / `APIFY_MEMORY_MBYTES` — the run's requested `memoryMbytes`.
 - `APIFY_DEDICATED_CPUS` — the run's granted CPU cores. No `ACTOR_`-prefixed counterpart; only the
   Python SDK reads it.
+- `ACTOR_MAX_TOTAL_CHARGE_USD` — the run's maximum total charge; absent when it was started without one.
 - Every `ACTOR_*`/`APIFY_*` pair above is set to an identical value (the two SDKs disagree on which name
   wins).

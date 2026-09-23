@@ -3,7 +3,7 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sendPaginated, sortByTimestamp } from '../envelope.js';
-import { ApiError, recordNotFound, invalidRequest } from '../errors.js';
+import { ApiError, cannotSetPricingOnCreate, recordNotFound, invalidRequest } from '../errors.js';
 import { h, jsonBody, paginationParams, queryBoolean, queryNumber, queryString, rawBody } from '../handler.js';
 import {
 	addOrReplaceVersion,
@@ -25,16 +25,33 @@ import {
 import { listOwnedRuns, startRun, waitForRunFinish } from '../../services/runs.js';
 import { getRegistries } from '../../storage/registries.js';
 import { actorDto, buildDto, runDto } from '../dto/actors.js';
-import type { ActorVersionRecord, BuildRecord } from '../../storage/entities.js';
+import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord, BuildRecord } from '../../storage/entities.js';
 import type { ApiServerDeps } from '../server.js';
 import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
+import { validatePricingInfosUpdate } from '../../services/pricing.js';
 import {
 	describeInputProcessingFailure,
 	processActorInput,
 	type ActorInput,
 	type InputProcessingResult,
 } from '../../services/input-schema.js';
+
+/**
+ * `undefined` when the body does not mention the field; a body that does but is invalid throws, with the
+ * platform's own error type where it has one for the same rule.
+ */
+function pricingInfosFromBody(
+	body: { pricingInfos?: unknown },
+	actor: ActorRecord,
+): ActorPricingInfoRecord[] | undefined {
+	if (body.pricingInfos === undefined) return undefined;
+	const result = validatePricingInfosUpdate(body.pricingInfos, actor.pricingInfos);
+	if (result.kind === 'invalid') {
+		throw result.type ? new ApiError(400, result.type, result.message) : invalidRequest(result.message);
+	}
+	return result.pricingInfos;
+}
 
 export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.get(
@@ -53,8 +70,14 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 	router.post(
 		'/actors',
 		h(async (req, res) => {
-			const body = jsonBody<{ name: string; title?: string; versions?: ActorVersionRecord[] }>(req);
+			const body = jsonBody<{
+				name: string;
+				title?: string;
+				versions?: ActorVersionRecord[];
+				pricingInfos?: unknown;
+			}>(req);
 			if (!body.name) throw invalidRequest('Actor "name" is required');
+			if (body.pricingInfos !== undefined) throw cannotSetPricingOnCreate();
 			const actor = await createActor(requireUser(req).id, body);
 			sendData(res, actorDto(actor, requireUser(req).username), 201);
 		}),
@@ -74,11 +97,13 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
-			const body = jsonBody<{ name?: string; title?: string }>(req);
+			const body = jsonBody<{ name?: string; title?: string; pricingInfos?: unknown }>(req);
+			const pricingInfos = pricingInfosFromBody(body, actor);
 			const updated = await updateActor(actor.id, (current) => ({
 				...current,
 				name: body.name ?? current.name,
 				title: body.title ?? current.title,
+				...(pricingInfos !== undefined ? { pricingInfos } : {}),
 			}));
 			sendData(res, actorDto(updated ?? actor, requireUser(req).username));
 		}),
@@ -254,6 +279,10 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			if (!actor) throw recordNotFound();
 
 			const tag = queryString(req, 'build') ?? DEFAULT_TAG;
+			const maxTotalChargeUsd = queryNumber(req, 'maxTotalChargeUsd');
+			if (maxTotalChargeUsd !== undefined && maxTotalChargeUsd < 0) {
+				throw invalidRequest('"maxTotalChargeUsd" must be a number >= 0');
+			}
 			const lookup = await resolveTaggedBuild(actor, tag);
 			if (!lookup.found) {
 				// `no-such-tag` names the tag, matching base behavior exactly. `build-deleted` (the tag
@@ -282,6 +311,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				input,
 				memoryMbytes: queryNumber(req, 'memory'),
 				timeoutSecs: queryNumber(req, 'timeout'),
+				maxTotalChargeUsd,
 				build: tag,
 				// Runtime-only extension (`api.md`): `?devFolder=false` skips the dev-folder mount for this run.
 				devFolder: queryBoolean(req, 'devFolder'),

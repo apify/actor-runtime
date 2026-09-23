@@ -231,6 +231,38 @@ black display - the bundled `sample_actor_playwright` and `sample_actor_playwrig
 `headless=False`), and the image must provide an X display, which the Apify Playwright and Puppeteer base images
 do. Like Python debug mode, this needs the runtime to run from its own built image.
 
+## Testing pay-per-event charging
+
+Both bundled samples charge two events when their Actor is priced - `page-scraped` once per page and
+`crawl-finished` once at the end - and ship the pricing that defines them in `pricing.json`, so a run
+charges for real right after a push:
+
+```bash
+cd sample_actor_ts    # or sample_actor_py
+apify push
+apify api PUT /v2/actors/<actorId> --body "$(cat pricing.json)"
+apify call --input '{"maxPages":3}'
+apify api GET actor-runs/<runId>
+```
+
+The run object then carries `chargedEventCounts`, `eventUsage` and `usageTotalUsd` - what was charged,
+what it adds up to per event, and the events plus the compute units priced at the lowest paid tier. The
+run's console page and the runs list show the same figures.
+
+`pricingInfos` is append-only and is never accepted while the Actor is being created, both as on the
+platform: an update sends the Actor's existing entries unchanged plus at most one new one, starting after
+all of them. Making the Actor free again is therefore appending a `{"pricingModel": "FREE"}` entry.
+
+Cap a run's spend the way a user does - the cap is a query parameter, with no `apify call` flag for it:
+
+```bash
+apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.02&waitForFinish=60' --body '{"maxPages":10}'
+```
+
+An SDK with budget left for the next event stops charging by itself below the cap, so the runtime's
+abort only fires on a charge that crosses it anyway - the JavaScript SDK deliberately overshoots by one
+event there, the Python SDK never does.
+
 ## Publishing the image
 
 Images go to [`apify/actor-runtime`](https://hub.docker.com/r/apify/actor-runtime) on Docker Hub by

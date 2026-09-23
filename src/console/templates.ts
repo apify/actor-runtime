@@ -1,7 +1,9 @@
 /** Minimal server-rendered HTML helpers. No SPA, no bundler, no build step (`console.md`). */
 
 import { getApiFallbackState, type ApiFallbackState } from '../services/api-fallback.js';
-import type { ActorLocalBrowserView, ActorLocalDebug, RunRecord } from '../storage/entities.js';
+import type { ActorLocalBrowserView, ActorLocalDebug, ActorPricingInfoRecord, RunRecord } from '../storage/entities.js';
+import { effectivePricingInfo, RESOLVED_PRICING_TIER } from '../services/pricing.js';
+import { STARTER_PLAN_COMPUTE_UNIT_PRICE_USD, type RunUsage } from '../services/run-usage.js';
 
 export function escapeHtml(value: unknown): string {
 	return String(value ?? '')
@@ -218,6 +220,118 @@ function connect() {
 }
 connect();
 </script>`
+	);
+}
+
+/** Six decimals at most, trailing zeros trimmed, never exponent notation. */
+export function formatUsd(value: number): string {
+	return `$${Number(value.toFixed(6)).toString()}`;
+}
+
+/** The pricing in effect plus a form carrying the whole array, the same value the API takes
+ * (`console.md`). Tiered prices are shown resolved, since that is what a local run would be charged. */
+export function pricingSection(
+	actorId: string,
+	pricingInfos: ActorPricingInfoRecord[] | undefined,
+	errorMessage?: string,
+): string {
+	const effective = effectivePricingInfo(pricingInfos);
+	let summary: string;
+	if (!effective) {
+		summary = '<p class="empty">No pricing - the Actor is free. Runs report platform usage only.</p>';
+	} else if (effective.pricingModel !== 'PAY_PER_EVENT' || !effective.pricingPerEvent) {
+		summary = definitionList([
+			['pricingModel', effective.pricingModel],
+			['startedAt', effective.startedAt],
+		]);
+	} else {
+		const rows = Object.entries(effective.pricingPerEvent.actorChargeEvents).map(([eventName, event]) => [
+			eventName,
+			event.eventTitle,
+			event.eventPriceUsd !== undefined
+				? formatUsd(event.eventPriceUsd)
+				: `${formatUsd(event.eventTieredPricingUsd?.[RESOLVED_PRICING_TIER]?.tieredEventPriceUsd ?? 0)} (${RESOLVED_PRICING_TIER} tier)`,
+			event.isOneTimeEvent ? 'yes' : '',
+		]);
+		summary =
+			definitionList([
+				['pricingModel', effective.pricingModel],
+				['startedAt', effective.startedAt],
+			]) + table(['event', 'title', 'price per event', 'one-time'], rows);
+	}
+	const errorHtml = errorMessage ? `<p class="error"><strong>Error:</strong> ${escapeHtml(errorMessage)}</p>` : '';
+	const currentJson = JSON.stringify(pricingInfos ?? [], null, 2);
+	return (
+		'<h2>Pricing</h2>' +
+		summary +
+		errorHtml +
+		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/pricing">` +
+		`<textarea name="pricingInfos" class="json-input" rows="12" spellcheck="false">${escapeHtml(currentJson)}</textarea>` +
+		'<button type="submit">Save</button>' +
+		'</form>' +
+		'<p class="empty">The whole <code>pricingInfos</code> array, as <code>PUT /v2/actors/:actorId</code> takes it - ' +
+		'only <code>FREE</code> and <code>PAY_PER_EVENT</code> are emulated. The array is append-only: keep the entries ' +
+		'already in the box and add at most one below them, starting after all of them. An entry with ' +
+		'<code>"pricingModel":"FREE"</code> makes the Actor free again. ' +
+		`Example: <code>[{"pricingModel":"PAY_PER_EVENT","pricingPerEvent":{"actorChargeEvents":{"page-scraped":{"eventTitle":"Page scraped","eventPriceUsd":0.002}}}}]</code></p>`
+	);
+}
+
+/** The run object's own estimate, with the compute and event components split and the assumptions named
+ * (`console.md`) - the figures are easy to mistake for a bill otherwise. */
+export function usageSection(run: RunRecord, usage: RunUsage): string {
+	const { stats } = usage;
+	const megabytes = (bytes: number | undefined) =>
+		bytes === undefined ? '' : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	const percent = (value: number | undefined) => (value === undefined ? '' : `${value.toFixed(1)} %`);
+	const rows: Array<[string, unknown]> = [
+		['run time', `${stats.runTimeSecs.toFixed(1)} s`],
+		[
+			'compute units',
+			`${stats.computeUnits.toFixed(6)} (${run.options.memoryMbytes} MB for ${stats.runTimeSecs.toFixed(1)} s)`,
+		],
+		[
+			'platform usage',
+			`${formatUsd(usage.platformUsageUsd)} (compute units at ${formatUsd(STARTER_PLAN_COMPUTE_UNIT_PRICE_USD)} each)`,
+		],
+		[
+			'memory avg / max / current',
+			[stats.memAvgBytes, stats.memMaxBytes, stats.memCurrentBytes].map(megabytes).join(' / '),
+		],
+		[
+			'CPU avg / max / current (of one core)',
+			[stats.cpuAvgUsage, stats.cpuMaxUsage, stats.cpuCurrentUsage].map(percent).join(' / '),
+		],
+	];
+	let events = '';
+	if (usage.eventUsage) {
+		rows.push(['pay-per-event charges', formatUsd(usage.eventsUsd)]);
+		rows.push([
+			'maxTotalChargeUsd',
+			run.options.maxTotalChargeUsd !== undefined && run.options.maxTotalChargeUsd > 0
+				? formatUsd(run.options.maxTotalChargeUsd) +
+					(run.chargingStoppedAt ? ` - reached at ${run.chargingStoppedAt}` : '')
+				: '(no cap)',
+		]);
+		const eventRows = Object.entries(usage.eventUsage).map(([eventName, event]) => [
+			eventName,
+			event.eventTitle,
+			String(run.chargedEventCounts?.[eventName] ?? 0),
+			formatUsd(run.pricingInfo?.pricingPerEvent?.actorChargeEvents[eventName]?.eventPriceUsd ?? 0),
+			formatUsd(event.eventTotalUsd),
+		]);
+		events =
+			'<h3>Charged events</h3>' + table(['event', 'title', 'charged', 'price per event', 'total'], eventRows);
+	}
+	rows.push(['usageTotalUsd', formatUsd(usage.usageTotalUsd)]);
+	return (
+		'<h2>Usage and cost</h2>' +
+		definitionList(rows) +
+		events +
+		`<p class="empty">An estimate, not a bill: compute units are the run's memory times its wall-clock time, priced at the ` +
+		`lowest paid subscription tier (${RESOLVED_PRICING_TIER}). Storage operations, data transfer and proxy usage are not counted. ` +
+		'<code>usageTotalUsd</code> is the platform usage plus the pay-per-event charges; on the platform a user of a ' +
+		'pay-per-event Actor pays only the events unless the pricing says otherwise.</p>'
 	);
 }
 
