@@ -36,29 +36,17 @@
 
 # Input schema, validation and defaults
 
-- **An Actor's input schema is read when the Actor is built**, and every run of that build has its
-  input validated against it with the schema's defaults applied. A build with no input schema takes
+- **Input schemas work as on the Apify platform**: the schema is read from the pushed source when the
+  Actor is built - the `input` field of `.actor/actor.json`, else `.actor/INPUT_SCHEMA.json`, else
+  `INPUT_SCHEMA.json` - a build whose schema cannot be read or is not a valid input schema fails with
+  the reason in its log, and every run of a build is validated against that build's schema with its
+  defaults applied, a rejected input starting nothing (`api.md`). A build with no input schema takes
   every input exactly as the caller sent it.
-- The schema is the `input` field of `.actor/actor.json` - an inline schema, or a path relative to
-  `.actor/` - else `.actor/INPUT_SCHEMA.json`, else `INPUT_SCHEMA.json` at the Actor root, whichever
-  comes first. Matching is case-insensitive, exact-case wins ties, and every outcome is stated in the
-  build log.
-- **A build fails**, with the reason in its log and status message, when the `input` field is neither
-  a path nor a schema or points outside the Actor root, when the schema cannot be parsed, or when it
-  is not a valid Apify input schema. A path naming no pushed file only warns; the default locations
-  are tried instead.
-- **A run whose input the schema rejects never starts**: no run is created, and the call is answered
-  `400` naming the offending field (`api.md`).
-- **Every field the input leaves out is filled from the schema**, nested objects and array items
-  included, and the run's `INPUT` holds the result - so a run started with no input at all runs on
-  the schema's defaults. A required field that has a default is satisfied by it; a required array
-  must hold at least one item.
-- A run is validated against the schema of the build it runs, never another tag's. An Actor running
-  from a registered dev folder therefore uses its last build's schema: unlike a source edit, an
-  edited input schema takes effect only after `apify push`.
-- **Known differences from the platform**: Apify Proxy group availability is not checked, so any
-  `apifyProxyGroups` selection is accepted; a `proxy` field's shape, its custom proxy URLs and its
-  country code still are. Encrypted secret input fields stay unsupported (`unsupported.md`).
+- **Differences**: Apify Proxy group availability is not checked, so any `apifyProxyGroups` selection
+  is accepted, while the rest of a `proxy` field is still validated; encrypted secret input fields
+  stay unsupported (`unsupported.md`).
+- An Actor running from a registered dev folder uses its last build's schema: unlike a source edit,
+  an edited input schema takes effect only after `apify push`.
 
 # Bind mount volumes with Actor source code
 
