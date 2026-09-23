@@ -1,382 +1,198 @@
 # actor-runtime
 
-A minimal, self-contained "local Apify platform" in a single Docker image. Start
-it with one `docker run`, point the stock `apify-cli` at it, and run the full
-Actor dev loop: `apify push` -> build -> run -> inspect runs, builds and
-the run's default storages (key-value store, dataset, request queue). The
-runtime itself needs no outbound network access after the first build/push (see
-`requirements/system.md`); the bundled sample Actors crawl the live web, so
-running them does.
-
-See `requirements/*.md` for the full behavioural spec (`system.md`, `api.md`,
-`storage.md`, `actor-driver.md`, `cli.md`, `console.md`, `test.md`, and `unsupported.md` for the platform
-behavior it deliberately leaves out).
-
-## Documentation
-
-- [Quick start](docs/quick-start.md) - install and start the runtime with `apify runtime`, point the
-  CLI at it, push and run your Actor, view the results, and iterate without rebuilding.
-
-The sections below are the condensed reference; the guide above is the walkthrough. For everything
-past the basic loop - IDE debugging, browser view, migration testing, API fallback - read the
-runtime's own Agent Skill (`apify runtime skill`, or `skills/actor-runtime/SKILL.md`).
+A local Apify platform in a single container. Point the stock Apify CLI at it and push, build and run
+your Actors on your own machine, with the same commands you use against the platform. It is a
+development tool, not a place to host Actors.
 
 ## Quick start
 
 ```bash
-docker build -t actor-runtime .
-mkdir -p data
-docker run --rm -p 3333:3333 -p 3000:3000 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd)/data:/data" \
-  actor-runtime
-```
+npm install -g apify-cli@runtime
+apify runtime install
+apify runtime start --detach
+apify runtime connect
 
-This mounts `./data` on the host as the runtime's `/data`, so every storage, build and run record
-lands under `./data` for easy inspection.
-
-```bash
-export APIFY_CLIENT_BASE_URL=http://localhost:3333
-export APIFY_CONSOLE_URL=http://localhost:3000
-npm install -g apify-cli
-
-cd sample_actor_ts
+cd your-actor
 apify push
-apify call --input '{"maxPages":3}'
+apify call
 ```
 
-This assumes you're already logged in (`apify login`, any stored token works - the runtime maps any
-non-empty token to its single local user). If that token happens to be a real Apify account token and
-the real platform is reachable, the runtime also adopts that account's real username/id/proxy password
-the first time it sees the token; fully offline (or with any other non-empty token) it just keeps using
-the single local user, with no error either way - see `requirements/cli.md`'s User bootstrap section.
+The console is at [http://localhost:3000](http://localhost:3000). The full walkthrough is in
+[docs/quick-start.md](docs/quick-start.md). The complete reference ships with the runtime as an Agent
+Skill: `apify runtime skill` prints it, and `apify runtime skill --install` installs it for your coding
+agent.
 
-In a build or run log, everything the runtime itself has to say - dev-folder notices, the debug-mode
-attach line, the browser-view URL, migration markers, a run that could not be started - opens with a
-blue `[actor-runtime]` prefix. Your Actor's own output is passed through byte for byte.
+If you are not logged in, any non-empty token works (`apify login --token local-dev-token`).
 
-## Input schema: defaults and validation
+In build and run logs, everything the runtime itself says opens with a blue `[actor-runtime]` prefix.
+Your Actor's own output is passed through unchanged.
 
-An Actor that declares an input schema (the `input` field of `.actor/actor.json`, `.actor/INPUT_SCHEMA.json`,
-or `INPUT_SCHEMA.json` at its root) gets the platform's behaviour locally: the schema's defaults are filled into
-every run's input, and an input the schema rejects fails the call with the API's own message instead of starting a
-container.
+## What you can do only locally
 
-```bash
-apify call                              # runs on the schema's defaults
-apify call --input '{"maxPages":0}'     # 400 Input is not valid: Field input.maxPages must be >= 1
-```
+- **Run offline, at no cost.** Builds and runs use no platform compute. After the first build, the
+  runtime needs no network access (your Actor may still need it).
+- **Edit without rebuilding.** Run your Actor from your local source folder.
+- **Debug with a real IDE.** Set breakpoints and step through a run in VS Code or PyCharm.
+- **Watch the browser.** See, and optionally control, the browser your Actor drives.
+- **Trigger a migration.** Test how your Actor survives a migration, whenever you want.
+- **Test pay-per-event pricing for free.** See what a run charges and costs, without spending money.
+- **Relay missing calls to the platform.** Send calls the runtime cannot answer to the real Apify API.
 
-The schema is read at build time, so editing it locally needs an `apify push` even under a registered dev folder,
-and a schema the Apify meta-schema rejects fails the build with the defect in its log. Proxy group availability is
-not checked locally, and encrypted secret input fields stay unsupported - see
-`requirements/actor-driver.md`'s "Input schema, validation and defaults".
-
-## Running with Podman instead of Docker
-
-The runtime talks to the container engine only through its Docker-compatible API socket, and Podman
-serves that same API. Everything works the same on Docker and Podman, rootful or rootless; the only
-difference is which socket you mount.
-
-```bash
-sudo systemctl enable --now podman.socket   # one-time: serve Podman's API socket
-
-podman build -t actor-runtime .
-mkdir -p data
-sudo podman run --rm -p 3333:3333 -p 3000:3000 \
-  -v /run/podman/podman.sock:/var/run/docker.sock \
-  -v "$(pwd)/data:/data" \
-  actor-runtime
-```
-
-Rootless Podman serves the socket at `$XDG_RUNTIME_DIR/podman/podman.sock` instead
-(`systemctl --user enable --now podman.socket`); mount that path and drop the `sudo`. Rootless Docker
-works the same way with its `$XDG_RUNTIME_DIR/docker.sock`. The socket can also be mounted at any other
-path together with `-e DOCKER_HOST=unix:///that/path`.
-
-```bash
-mkdir -p data
-podman run --rm -p 3333:3333 -p 3000:3000 \
-  -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
-  -v "$(pwd)/data:/data" \
-  actor-runtime
-```
-
-Good to know:
-
-- Podman 3.4 (Ubuntu 22.04's stock package) and newer work. On Podman 4 and newer, Actors run on the
-  runtime's own `apify-local` network; on Podman 3.x they run on the engine's default network instead
-  (its user-defined networks are unreliable: Ubuntu 22.04's CNI plugins reject the config Podman writes),
-  and the runtime says so at startup. Whenever the runtime's own container is not on `apify-local`
-  (Podman 3.x, or rootless Podman, which refuses to attach it), Actors reach the API through the published
-  port 3333, so keep `-p 3333:3333` published on all interfaces. Optionally, on Podman 4 and newer, create
-  the network first and add `--network apify-local` to `podman run` for the direct route.
-- Podman does not create a missing host directory for a bind mount (Docker does), hence the
-  `mkdir -p data` before `podman run`. `apify runtime start` creates its data directory itself.
-- Actors run on the engine whose socket you mount, so a dev folder registered for the bind-mount dev
-  loop below is a path on the machine that engine runs on (inside the VM for `podman machine`), and
-  under a rootless engine it must be readable by that user.
-- A short image name in an Actor's `FROM` line (`apify/actor-node:20`, `python:3.11`) means Docker Hub,
-  as on the platform. The runtime qualifies it to `docker.io/...` before building, so Podman resolves it
-  without any `unqualified-search-registries` entry in `registries.conf`. The build log shows the
-  substitution.
-- A rootless engine can only enforce the per-run limits whose cgroup controllers are delegated to your
-  user: on cgroups v1 none are, and Ubuntu 22.04 delegates `memory` and `pids` but not `cpu`. The runtime
-  asks Podman which controllers it has, leaves out the limits it cannot apply, and says so at startup;
-  runs still start. (To get CPU limits under rootless Podman on Ubuntu 22.04, delegate the controller:
-  `sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload`, then log out and in.)
-- If you restart a hand-started `podman system service`, the socket file mounted into the runtime goes
-  stale; restart the runtime container too. The `podman.socket` unit does not have this problem.
-- `podman images` lists the images the runtime builds as `actor-runtime/<actor>:<buildId>` under the
-  registry prefix Podman adds itself (`docker.io/` or `localhost/`, depending on the version).
-
-## What this runtime adds on top of the Apify API
-
-Everything under `/actor-runtime/*` is local-runtime-only - the dev folder, debug mode, browser view,
-migration emulation and the upstream API fallback used in the sections below. The runtime describes
-that namespace to itself in an OpenAPI document (`src/api/openapi/actor-runtime.json`) and serves it,
-so you never have to guess what a given runtime supports:
+Most of these are driven by endpoints under `/actor-runtime/*`, which the real Apify API does not have.
+The runtime describes that namespace in an OpenAPI document and serves it, so you never have to guess
+what a given runtime supports - and, since the platform answers `404` there, the same call also tells you
+whether you are pointed at a runtime at all:
 
 ```bash
 apify api GET /actor-runtime            # every runtime-specific endpoint, its body and its responses
 curl -s http://localhost:3333/actor-runtime/openapi.json | jq .paths   # same document, for tooling
 ```
 
-Both are unauthenticated, and the real Apify platform has no such endpoint - so the same call also
-answers "am I pointed at a local runtime or at the platform?". Anything under `/actor-runtime/*` the
-document does not describe is rejected from the document too: an unknown path is a `404` pointing you
-back at `GET /actor-runtime`, and a known path with the wrong method is a `405` naming the methods it
-does have.
+### Edit without rebuilding
 
-## Rapid dev loop: bind-mounting your local source (no rebuild per edit)
-
-After the one push+build above, register your Actor's local source folder so every future run picks up
-local edits without a rebuild. An `apify-cli` that knows about the runtime does this for you: when
-`APIFY_CLIENT_BASE_URL` points at the runtime, `apify push` registers the pushed folder as the dev folder
-right after uploading it, and `apify call --no-dev-folder` runs once from the built image alone without
-touching the registration. Against the real Apify platform the flag is a no-op. To register by hand instead:
+`apify push` registers the pushed folder as the Actor's **dev folder**. Every later run mounts it over
+the built image, so you edit, recompile locally and call again:
 
 ```bash
-apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/sample_actor_ts"'
+npm run build
+apify call
 ```
 
-`<actorId>` is the id `apify push --json` printed (`.actor.id`); the path must be absolute and must
-already exist on the **host** - the runtime checks this and rejects the call with a clear error if the
-path can't be confirmed. The check runs again at every run start, so a folder deleted after
-registration fails the run instead of running against an empty directory.
-The same thing is also a single-field form on the Actor's page in the console (`http://localhost:3000`).
+- Edits apply to the **next** run, not to one already running.
+- Dependencies come from the built image, so a change to `package.json` or `requirements.txt` needs
+  `apify push`.
+- `apify call --no-dev-folder` runs once from the built image alone.
+- To register a different folder, run `apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path"'`.
+  To clear the registration, send `--body '""'`. The Actor's console page has the same field.
 
-From then on:
+The path is resolved on the machine your container engine runs on. Under Docker Desktop or
+`podman machine`, that is the VM, not your own filesystem.
 
-```bash
-# edit src/main.ts, then:
-npm run build        # recompile locally - tsc, no apify push
-apify call --input '{"maxPages":3}'   # picks up the new dist/, no rebuild
-```
+### Debug with a real IDE
 
-Node doesn't hot-reload a running process, so a local recompile is picked up by the **next** run's
-container start, not by any run already in progress. `node_modules` inside the container still comes
-from the built image - a per-run volume preserves it underneath the bind mount - so a new dependency
-in `package.json` still needs a real `apify push`/build; only source edits skip it. An entrypoint script
-the image keeps in its working directory (Apify's Playwright images start through an Xvfb wrapper there)
-stays available too, unless your folder carries its own copy. Clear the
-registration with an empty body (`--body '""'`) to go back to running purely from the built image, or
-skip it for a single run with `apify call --no-dev-folder` (the raw form is
-`POST /v2/actors/<actorId>/runs?devFolder=false`, which the run's log then records). Full
-mechanics: `requirements/actor-driver.md`'s "Bind mount volumes with Actor source code";
-endpoint/console details: `requirements/api.md`'s `/actor-runtime/*` section and
-`requirements/console.md`.
-
-## Debugging a run with a real IDE (breakpoints, step-through)
-
-Turn debug mode on for an Actor once, then every `apify call` against it starts paused, waiting for a
-debugger to attach - no change to the Actor's own source, Dockerfile, or `requirements.txt`:
+Turn debug mode on once. After that, every run of the Actor starts paused and waits for a debugger to
+attach. You don't need to change the Actor's source or Dockerfile:
 
 ```bash
 apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": true}'
 apify call
 ```
 
-The run's log prints one line with everything you need: the resolved language, the debug tool, the
-listen/publish address, and the attach action for the relevant IDE - PyCharm's **Attach to DAP** or
-VS Code's **Python: Remote Attach** for Python (default port `5678`), VS Code's **Attach** for Node
-(default port `9229`). Connect, and execution proceeds to your own first breakpoint - the runtime never
-sets one of its own.
+The run log prints the attach action for your IDE:
 
-Override the language (for an image the auto-detection can't classify) and/or the port:
+- **Python:** PyCharm's **Attach to DAP** or VS Code's **Python: Remote Attach**, on port `5678`.
+- **Node:** VS Code's **Attach**, on port `9229`.
 
-```bash
-apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": true, "language": "node", "port": 9230}'
-```
+Set `"language"` or `"port"` in the body to override the defaults. Send `{"enabled": false}` to turn
+debug mode off.
 
-A `POST` fully replaces the prior toggle state - omitting `language`/`port` resets them to their own
-defaults, it does not keep whatever a previous call set. Clear the toggle to go back to running
-normally:
+- The run's timeout is not extended while it waits for the debugger, so pass a larger `--timeout` up
+  front.
+- A Node Actor must start with `node` directly, for example `CMD ["node", "dist/main.js"]`. An Actor
+  that starts through `npm start` fails with a message naming the fix. This includes a Node Actor pushed
+  without its own `Dockerfile`.
 
-```bash
-apify api POST /actor-runtime/debug/<actorId> --body '{"enabled": false}'
-```
-
-The run's own `timeoutSecs` (`apify call --timeout`) is **not** extended while paused - a session that
-runs long still needs a larger `--timeout` passed up front. An image whose `CMD` can't be debugged this
-way (e.g. `npm start` - it would attach to npm, not your Actor) fails the run immediately, before any
-container is created, with a message naming the fix. **This includes any Node Actor pushed without its
-own `Dockerfile`**: this runtime's injected default Dockerfile inherits its base image's own
-`CMD ["npm", "start", "--silent"]`, so it's refused the same way. The fix: give the Actor a `Dockerfile`
-whose `CMD` invokes `node` directly, e.g. `CMD ["node", "dist/main.js"]`. The same toggle is also a
-three-field form (`enabled`/`language`/`port`) on the Actor's page in the console. Full mechanics:
-`requirements/actor-driver.md`'s "Debug mode" section; endpoint/console details: `requirements/api.md`'s
-`/actor-runtime/*` section and `requirements/console.md`.
-
-## Watching an Actor's browser
-
-Turn **browser view** on for an Actor once, and every run of it gets a live view of the display its browser draws
-on, served by the console:
+### Watch the browser
 
 ```bash
 apify api POST /actor-runtime/browser-view/<actorId> --body '{"enabled": true}'
 apify call
 ```
 
-The run log prints the viewer URL (`http://localhost:3000/runs/<runId>/browser`); the run's console page links to
-it, and the Actor's console page has the same toggle as a form. `"interactive": true` also sends your mouse and
-keyboard to the display; `{"enabled": false}` turns the view off.
+The run log prints the viewer URL (`http://localhost:3000/runs/<runId>/browser`). Add
+`"interactive": true` to send your mouse and keyboard to the browser.
 
-The view only reads the display's pixels. The Actor's container, command, environment, network and ports are
-those of an ordinary run, so neither the browser nor the sites it visits can tell whether anyone is watching.
-Two things follow: the browser must run **headful** (Apify's templates default to headless, which shows as a
-black display - the bundled `sample_actor_playwright` and `sample_actor_playwright_py` set `headless: false` /
-`headless=False`), and the image must provide an X display, which the Apify Playwright and Puppeteer base images
-do. Like Python debug mode, this needs the runtime to run from its own built image.
+The view only reads the screen, so neither the browser nor the sites it visits can tell anyone is
+watching. The browser must run **headful**, on an image that provides a display, such as Apify's
+Playwright and Puppeteer base images.
 
-## Testing pay-per-event charging
+### Trigger a migration
 
-Both bundled samples charge two events when their Actor is priced - `page-scraped` once per page and
-`crawl-finished` once at the end - and ship the pricing that defines them in `pricing.json`, so a run
-charges for real right after a push. That pricing also declares both synthetic events, which the Actor
-never charges itself: `apify-actor-start` at run start (once per whole GB of the run's memory) and
-`apify-default-dataset-item` per item pushed to the default dataset.
+While a run is `RUNNING`:
 
 ```bash
-cd sample_actor_ts    # or sample_actor_py
-apify push
+apify api POST /actor-runtime/migrate/<runId>
+```
+
+The run receives a `migrating` event. A few seconds later its container stops, and a fresh one starts
+for the same run, with the same run id, environment and storages but no in-memory state. The run's
+console page has a **Migrate** button that does the same.
+
+### Test pay-per-event pricing for free
+
+Give the Actor a pay-per-event pricing, and every run charges events as it would on the platform. No
+money is spent. The bundled `sample_actor_ts` and `sample_actor_py` charge events, and include the
+matching pricing in `pricing.json`:
+
+```bash
 apify api PUT /v2/actors/<actorId> --body "$(cat pricing.json)"
 apify call --input '{"maxPages":3}'
 apify api GET actor-runs/<runId>
 ```
 
-The run object then carries `chargedEventCounts`, `eventUsage` and `usageTotalUsd` - what was charged,
-what it adds up to per event, and the events plus the compute units priced at the lowest paid tier. The
-run's console page and the runs list show the same figures.
+The run object and its console page show the charged events and the run's estimated cost
+(`usageTotalUsd`). The estimate covers compute units and events, but not storage, data transfer or
+proxy.
 
-`pricingInfos` is append-only and is never accepted while the Actor is being created, both as on the
-platform: an update sends the Actor's existing entries unchanged plus at most one new one, starting after
-all of them. Making the Actor free again is therefore appending a `{"pricingModel": "FREE"}` entry.
-
-The `PUT` above therefore prices an Actor that has no pricing yet. Once it has one, a second `PUT` of the
-same file is refused (`pricingInfos[0] differs from the Actor's existing pricing info`) - the stored
-entries carry the timestamps they were given, which the file does not. Append the file's entry to what
-the Actor already has instead:
+### Relay missing calls to the platform
 
 ```bash
-apify api PUT /v2/actors/<actorId> --body "$(apify api GET /v2/actors/<actorId> |
-  jq --argjson new "$(jq '.pricingInfos[-1]' pricing.json)" '{pricingInfos: (.data.pricingInfos + [$new])}')"
+apify api POST /actor-runtime/api-fallback \
+  --body '{"fallbackUnimplementedEnabled": true, "fallbackNotFoundEnabled": true}'
 ```
 
-The Actor's console page has the same thing as a form: the box holds the stored array, and adding an
-entry below the existing ones does it without the shell.
+Calls to endpoints the runtime does not implement, or to ids it does not know, then go to the real
+Apify API with your token. This includes named storages such as `apify~some-public-dataset`. Both
+options are off by default and reset on every restart.
 
-Cap a run's spend the way a user does - the cap is a query parameter, with no `apify call` flag for it:
-
-```bash
-apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.02&waitForFinish=60' --body '{"maxPages":10}'
-```
-
-An SDK with budget left for the next event stops charging by itself below the cap, so the runtime's
-abort only fires on a charge that crosses it anyway - the JavaScript SDK deliberately overshoots by one
-event there, the Python SDK never does.
-
-## Publishing the image
-
-Images go to [`apify/actor-runtime`](https://hub.docker.com/r/apify/actor-runtime) on Docker Hub by
-default; the target repository is a workflow input, so a one-off build can be pushed elsewhere.
-
-The **Release Docker image** workflow (`.github/workflows/release.yml`) is manual only: Actions ->
-Release Docker image -> Run workflow, pick the branch in **Use workflow from**, and run it. That is
-the only branch to choose - the workflow always builds the branch it was dispatched from. Everything
-else is optional: an extra tag such as `v0.1.0`, whether to also move `:latest`, and which platforms
-to build.
-
-It pushes one multi-arch manifest per tag - `linux/amd64` and `linux/arm64` by default - so the same
-tag serves x86_64 and Apple Silicon. Every run publishes `<branch>-<short-sha>` (immutable) and
-`<branch>` (moving), with `/` in a branch name slugified to `-`. It pushes as the Apify service
-account, using the same two repository secrets as
-[apify-actor-docker](https://github.com/apify/apify-actor-docker):
-`APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME` and `APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN`. They are
-synced into this repository's Actions secrets from the org's secret manager, so they are managed
-there rather than added by hand.
-
-### Deleting published tags
-
-Per-branch and per-commit tags pile up on Docker Hub as branches come and go. The **Delete Docker
-image tags** workflow (`.github/workflows/delete-image-tags.yml`) removes them: Actions -> Delete
-Docker image tags -> Run workflow, then give it the tags to delete - comma- or newline-separated,
-either exact tag names or shell-style globs matched against the repository's current tags
-(`claude-*`, `master-*`, `*` for everything deletable). The repository it deletes from is hardcoded
-to `apify/actor-runtime`, unlike the release workflow's target: it deletes, so it can only ever reach
-the one repository it is written for.
-
-`master`, `main` and `latest` are never deleted: a glob covering one of them skips it and says so, so
-the tags users pull cannot be removed from here. Every other tag in the repository can be.
-
-Runs are a dry run by default - they list what would go and delete nothing. Uncheck **dry_run** to
-delete for real. Either way the run summary lists the tags. It authenticates with the same two
-service-account secrets as the release workflow; the token needs delete permission on the repository,
-or each delete comes back 403.
-
-Deleting a tag only removes that tag. The manifest and layers stay until Docker Hub's own garbage
-collection reclaims them, and any other tag pointing at the same digest keeps working - so deleting
-`master-<sha>` does not break `master` when both point at the same build.
-
-## Development
-
-```bash
-pnpm install
-pnpm run build     # tsc
-pnpm test          # unit + integration (no Docker needed)
-pnpm run test:e2e  # full CLI-driven dev loop against a built image (requires Docker, or Podman with CONTAINER_CLI=podman; the browser-view case pulls the ~2 GB Playwright base image)
-pnpm run dev       # run the server directly against ./data with tsx
-```
-
-`pnpm run dev` sets `ACTOR_RUNTIME_DATA_DIR=./data` inline in the script (`DEFAULT_DATA_DIR` otherwise
-falls back to the container path `/data` - see `src/config.ts`); this only works as written on a
-POSIX shell (Linux/macOS). On Windows, set the env var separately before running `tsx src/index.ts`
-(e.g. in PowerShell: `$env:ACTOR_RUNTIME_DATA_DIR="./data"; tsx src/index.ts`), or use a cross-platform
-env-setter like `cross-env` if you add it as a dependency.
-
-## Bumping the pinned Crawlee v4 version
-
-`@crawlee/core` and `@crawlee/fs-storage` are pinned to the exact version the npm `v4` dist-tag
-resolves to (both must move in lockstep - `@crawlee/fs-storage` pins its own native addon,
-`@crawlee/fs-storage-native`). To bump:
-
-```bash
-pnpm view @crawlee/core dist-tags.v4
-pnpm view @crawlee/fs-storage dist-tags.v4   # should match
-# update both versions in package.json, then:
-pnpm install
-pnpm run build && pnpm test
-```
-
-While bumping, check whether the `pnpm.overrides` pin on `@crawlee/fs-storage-native` in
-`package.json` is still needed: it forces the first release with linux-arm64 bindings
-(`0.1.5-beta.19`, API-identical to the `0.1.5-beta.18` that released `@crawlee/fs-storage`
-versions still depend on). Once the bumped `@crawlee/fs-storage` depends on `>= 0.1.5-beta.19`
-on its own, delete the override.
+**This can write to your real Apify account.** Every HTTP method is relayed, so only turn it on with a
+token whose account you are willing to change.
 
 ## Apify Proxy
 
-Set `APIFY_PROXY_PASSWORD` in the runtime container's own environment (e.g. `docker run -e
-APIFY_PROXY_PASSWORD=your-password ...`) to have it forwarded, unscoped, into every Actor container's
-`APIFY_PROXY_PASSWORD`. Leave it unset and the variable is simply absent from every Actor container -
-never a placeholder value.
+Set `APIFY_PROXY_PASSWORD` in the runtime container's environment
+(`docker run -e APIFY_PROXY_PASSWORD=...`) to pass it into every Actor container. If it is unset, Actor
+containers don't get the variable at all.
+
+## Running with Podman instead of Docker
+
+The runtime works the same on Docker and Podman, rootful or rootless. `apify runtime` uses the first
+engine on your `PATH`; set `APIFY_CONTAINER_ENGINE=podman` to choose Podman.
+
+To start the container yourself, mount your engine's API socket:
+
+```bash
+systemctl --user enable --now podman.socket   # one-time
+mkdir -p data
+podman run --rm -p 3333:3333 -p 3000:3000 \
+  -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
+  -v "$(pwd)/data:/data" \
+  docker.io/apify/actor-runtime
+```
+
+- For rootful Podman, mount `/run/podman/podman.sock` and run with `sudo`. For rootless Docker, mount
+  `$XDG_RUNTIME_DIR/docker.sock`. To mount the socket at another path, also set
+  `-e DOCKER_HOST=unix:///that/path`.
+- Podman 3.4 (Ubuntu 22.04's stock package) and newer are supported. Keep `-p 3333:3333` published on
+  all interfaces: under Podman 3.x and rootless Podman, Actors reach the API through it.
+- Podman does not create a missing bind-mount directory, hence `mkdir -p data`. `apify runtime start`
+  creates its data directory itself.
+- Short image names in an Actor's `FROM` line (`apify/actor-node:20`) resolve to Docker Hub, as on the
+  platform. You don't need `unqualified-search-registries` in `registries.conf`.
+- A rootless engine enforces only the run limits whose cgroup controllers your user has. Ubuntu 22.04
+  delegates `memory` and `pids` but not `cpu`. The runtime says at startup which limits it leaves out,
+  and runs still start. To get CPU limits, delegate the controller:
+  `sudo mkdir -p /etc/systemd/system/user@.service.d && printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload`,
+  then log out and back in.
+- If you restart a hand-started `podman system service`, restart the runtime container too. The
+  `podman.socket` unit does not have this problem.
+
+## What is not supported
+
+The runtime covers the development loop, not the whole platform. See
+[requirements/unsupported.md](requirements/unsupported.md) for what it leaves out.
+
+## Contributing
+
+To build the runtime from source, run its tests or publish the image, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
