@@ -76,10 +76,13 @@ describe('formatRuntimeLogLines', () => {
 	it('renders a block whose emphasis differs line by line as one chunk', () => {
 		expect(
 			formatRuntimeLogLines([
-				{ text: '==== Local Actor runtime ====', emphasis: true },
+				{ text: '!! Running in `Live dev folder mode`', emphasis: true },
 				{ text: 'Live dev folder: /src' },
 			]),
-		).toBe(`${BOLD_MARKER} ${BOLD}==== Local Actor runtime ====${RESET}\n` + `${MARKER} Live dev folder: /src\n`);
+		).toBe(
+			`${BOLD_MARKER} ${BOLD}!! Running in \`Live dev folder mode\`${RESET}\n` +
+				`${MARKER} Live dev folder: /src\n`,
+		);
 	});
 });
 

@@ -20,7 +20,7 @@ import {
 import { browserViewLogLine, describeBrowserViewerStartFailure } from './browser-view.js';
 import { dedicatedCpusFor, platformIncompatibleMemoryWarning } from '../resources.js';
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
-import { formatRuntimeLogLines, type RuntimeLogLine } from '../runtime-log.js';
+import { formatRuntimeLogLines } from '../runtime-log.js';
 import { getRunTelemetry } from './events-channel.js';
 import { initialChargedEventCounts, resolveRunPricingInfo } from './pricing.js';
 import {
@@ -367,7 +367,7 @@ export async function runInBackground(
 		appendRuntimeLog(record.id, unknownWorkingDirectoryLine(actor.localDevFolder));
 	}
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
-	if (runtimeSection.length > 0) appendLog(record.id, renderRuntimeLogSection(runtimeSection));
+	if (runtimeSection.length > 0) appendLog(record.id, formatRuntimeLogLines(runtimeSection));
 
 	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
 	// so an abort landing during this (possibly slow) step is still caught by it.
@@ -640,17 +640,4 @@ export async function reconcileOrphanedJobs(driver: Driver): Promise<void> {
 			}),
 		),
 	);
-}
-
-/** 80 columns, not a terminal's full width: every line already carries a timestamp and the runtime
- * marker, so a wider rule only forces wrapping. */
-function renderRuntimeLogSection(lines: readonly RuntimeLogLine[]): string {
-	const title = ' Local Actor runtime ';
-	const width = 80;
-	const head = `${'='.repeat(4)}${title}${'='.repeat(width - 4 - title.length)}`;
-	return formatRuntimeLogLines([
-		{ text: head, emphasis: true },
-		...lines,
-		{ text: '='.repeat(width), emphasis: true },
-	]);
 }

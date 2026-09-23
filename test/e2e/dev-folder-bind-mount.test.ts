@@ -224,7 +224,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(optedOutLog).toContain(`Skipping the registered local dev folder ${actorDir}`);
 			expect(optedOutLog).toContain(ORIGINAL_MARKER);
 			expect(optedOutLog).not.toContain(EDITED_MARKER);
-			expect(optedOutLog).not.toContain('Local Actor runtime');
+			expect(optedOutLog).not.toContain('Live dev folder');
 
 			// The registration survived.
 			const call = JSON.parse(
@@ -233,7 +233,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 			const callLog = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
 			expect(callLog).toContain(EDITED_MARKER);
-			expect(callLog).toContain('Local Actor runtime');
 			expect(callLog).toContain(`Live dev folder: ${actorDir}`);
 			expect(callLog).toContain('Live dev folder mode');
 			expect(callLog).toContain('apify call --no-dev-folder');
@@ -342,7 +341,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 
 			const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
-			expect(log).not.toContain('Local Actor runtime');
+			expect(log).not.toContain('Live dev folder');
 		},
 		5 * 60 * 1000,
 	);
