@@ -158,7 +158,10 @@ its count is written to the run log, so `-m 8192` charges eight start events, no
 platform would refuse (anything but a power of two between 128 MB and 32 GB) is warned about in the log
 and then used anyway. Tiered event prices resolve to the `BRONZE` (Starter) tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
 plus at most one new one starting after all of them - so making the Actor free again means appending a
-`{"pricingModel":"FREE"}` entry, not sending `[]`. The same form is on the Actor's console page.
+`{"pricingModel":"FREE"}` entry, not sending `[]`. Re-sending a file that was already applied is refused
+for the same reason (`pricingInfos[0] differs ...`): the stored entries carry timestamps the file does
+not, so append its entry to what `GET /v2/actors/<actorId>` returns rather than sending the file again.
+The same form is on the Actor's console page.
 
 Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
 (there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,

@@ -255,6 +255,19 @@ run's console page and the runs list show the same figures.
 platform: an update sends the Actor's existing entries unchanged plus at most one new one, starting after
 all of them. Making the Actor free again is therefore appending a `{"pricingModel": "FREE"}` entry.
 
+The `PUT` above therefore prices an Actor that has no pricing yet. Once it has one, a second `PUT` of the
+same file is refused (`pricingInfos[0] differs from the Actor's existing pricing info`) - the stored
+entries carry the timestamps they were given, which the file does not. Append the file's entry to what
+the Actor already has instead:
+
+```bash
+apify api PUT /v2/actors/<actorId> --body "$(apify api GET /v2/actors/<actorId> |
+  jq --argjson new "$(jq '.pricingInfos[-1]' pricing.json)" '{pricingInfos: (.data.pricingInfos + [$new])}')"
+```
+
+The Actor's console page has the same thing as a form: the box holds the stored array, and adding an
+entry below the existing ones does it without the shell.
+
 Cap a run's spend the way a user does - the cap is a query parameter, with no `apify call` flag for it:
 
 ```bash
