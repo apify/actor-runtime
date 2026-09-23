@@ -36,9 +36,11 @@ async def main() -> None:
             cap = f'${pricing.max_total_charge_usd}' if pricing.max_total_charge_usd.is_finite() else 'none'
             Actor.log.info(f'Pay-per-event pricing in effect, max total charge: {cap}.')
 
+        # Both fields have a `default` in the input schema, so the runtime fills them in before the
+        # run starts (the Apify platform does the same) - the Actor needs no fallback of its own.
         actor_input = await Actor.get_input() or {}
-        start_url = actor_input.get('startUrl', 'https://crawlee.dev/')
-        max_pages = int(actor_input.get('maxPages', 2))
+        start_url = actor_input['startUrl']
+        max_pages = int(actor_input['maxPages'])
         Actor.log.info(f'Crawling up to {max_pages} page(s) starting from {start_url}.')
 
         # Crawling through the Actor's default request queue exercises the runtime's

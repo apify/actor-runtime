@@ -46,7 +46,9 @@ def main() -> None:
 
     raw_input = api_request('GET', f'key-value-stores/{key_value_store_id}/records/INPUT')
     actor_input = json.loads(raw_input) if raw_input else {}
-    item_count = int(actor_input.get('itemCount', 2))
+    # `itemCount` has a `default` in the input schema, so the runtime fills it in before the run
+    # starts - no fallback needed here.
+    item_count = int(actor_input['itemCount'])
     print(f'main.py: pushing {item_count} item(s) to dataset {dataset_id}.')
 
     # Both accepted body shapes of `POST /v2/datasets/:id/items`: one object, then an array.
