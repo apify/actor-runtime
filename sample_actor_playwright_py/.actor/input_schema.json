@@ -9,7 +9,8 @@
 			"type": "array",
 			"description": "URLs to start with.",
 			"editor": "requestListSources",
-			"prefill": [{ "url": "https://crawlee.dev/" }]
+			"prefill": [{ "url": "https://crawlee.dev/" }],
+			"default": [{ "url": "https://crawlee.dev/" }]
 		},
 		"max_requests_per_crawl": {
 			"title": "Max requests per crawl",

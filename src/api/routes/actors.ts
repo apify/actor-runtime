@@ -3,7 +3,14 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sendPaginated, sortByTimestamp } from '../envelope.js';
-import { ApiError, cannotSetPricingOnCreate, recordNotFound, invalidRequest } from '../errors.js';
+import {
+	ApiError,
+	cannotSetPricingOnCreate,
+	invalidInput,
+	invalidInputSchema,
+	invalidRequest,
+	recordNotFound,
+} from '../errors.js';
 import { h, jsonBody, paginationParams, queryBoolean, queryNumber, queryString, rawBody } from '../handler.js';
 import {
 	addOrReplaceVersion,
@@ -30,6 +37,7 @@ import type { ApiServerDeps } from '../server.js';
 import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
 import { validatePricingInfosUpdate } from '../../services/pricing.js';
+import { resolveBuildInput } from '../../services/input-schema.js';
 
 /**
  * `undefined` when the body does not mention the field; a body that does but is invalid throws, with the
@@ -275,8 +283,15 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const build = lookup.build;
 
 			const body = rawBody(req);
-			const input =
-				body.length > 0 ? { body, contentType: req.header('content-type') ?? 'application/json' } : undefined;
+			const processed = resolveBuildInput(
+				build,
+				body.length > 0 ? { body, contentType: req.header('content-type') ?? 'application/json' } : undefined,
+			);
+			if (processed.kind !== 'ok') {
+				throw processed.kind === 'invalid-input-schema'
+					? invalidInputSchema(processed.message)
+					: invalidInput(processed.message);
+			}
 
 			// `resolveProxyPassword(requireUser(req))` is the *run owner's* proxy password, not just "the
 			// caller's": `actor` was resolved via `resolveActorParam(req)` above, so
@@ -284,7 +299,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			// their own Actor - which makes the two the same user record (`actor-driver.md`'s "one
 			// harvested-per-account password used specifically for each user").
 			const run = await startRun(deps.driver, actor, build, {
-				input,
+				input: processed.input,
 				memoryMbytes: queryNumber(req, 'memory'),
 				timeoutSecs: queryNumber(req, 'timeout'),
 				maxTotalChargeUsd,

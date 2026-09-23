@@ -11,9 +11,14 @@ import type { RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { isTerminalJobStatus } from './job-status.js';
 import { appendRuntimeLog } from './logs.js';
-import { APIFY_EVENTS_PREFIX, DEFAULT_DATASET_ITEM_EVENT_NAME, isPayPerEvent } from './pricing.js';
+import {
+	ACTOR_START_EVENT_NAME,
+	APIFY_EVENTS_PREFIX,
+	DEFAULT_DATASET_ITEM_EVENT_NAME,
+	isPayPerEvent,
+} from './pricing.js';
 import { abortRun } from './runs.js';
-import { eventUsageFor, sumEventUsageUsd } from './run-usage.js';
+import { eventUsageFor, roundUsd, sumEventUsageUsd } from './run-usage.js';
 
 /** The platform's own window. */
 const IDEMPOTENCY_TTL_MS = 3 * 60 * 1000;
@@ -146,6 +151,25 @@ export async function enforceCostLimit(driver: Driver, run: RunRecord): Promise<
 	if (isTerminalJobStatus(stamped.status)) return;
 	appendRuntimeLog(run.id, message);
 	if (stamped.status === 'RUNNING') await abortRun(driver, stamped, true, message);
+}
+
+/**
+ * What the run was pre-charged for starting, or `undefined` when nothing was. The platform charges this
+ * silently, and its count follows the run's memory rather than anything the Actor does - so a developer
+ * who raises the memory sees the bill rise with no line in the log to explain it.
+ */
+export function actorStartChargeMessage(run: RunRecord): string | undefined {
+	if (!isPayPerEvent(run.pricingInfo)) return undefined;
+	const count = run.chargedEventCounts?.[ACTOR_START_EVENT_NAME];
+	if (!count) return undefined;
+
+	const { eventPriceUsd } = run.pricingInfo.pricingPerEvent.actorChargeEvents[ACTOR_START_EVENT_NAME] ?? {
+		eventPriceUsd: 0,
+	};
+	return (
+		`Pre-charged ${count} '${ACTOR_START_EVENT_NAME}' event(s), $${roundUsd(count * eventPriceUsd)} in total, ` +
+		`for ${run.options.memoryMbytes} MB of memory - one event per whole gigabyte, minimum one.`
+	);
 }
 
 export function resetChargingForTests(): void {

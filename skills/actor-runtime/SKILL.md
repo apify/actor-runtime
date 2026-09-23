@@ -53,6 +53,28 @@ both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - a
 those is retried for `linux/amd64`, the architecture the Apify platform builds and runs on, with the
 reason in the build log. The engine emulates it (Rosetta on Apple Silicon), so it works, just slower.
 
+## Input schema: defaults and validation
+
+If the Actor declares an input schema - the `input` field of `.actor/actor.json`, or
+`.actor/INPUT_SCHEMA.json`, or `INPUT_SCHEMA.json` at its root - the runtime uses it the way the
+platform does:
+
+```sh
+apify call                                  # no input: the run gets the schema's defaults
+apify call --input '{"maxPages":0}'         # rejected before anything starts, if the schema forbids it
+```
+
+- Every field left out of `--input` is filled from the schema's `default`, and that filled-in input is
+  what the run reads back as `INPUT`.
+- An input the schema rejects fails the call with the same message the real API gives (`Input is not
+valid: Field input.maxPages must be >= 1`); no run is created and no container starts.
+- The schema comes from the **build**, so a locally edited `INPUT_SCHEMA.json` needs an `apify push` to
+  take effect - unlike a source edit under a registered dev folder.
+- A schema the Apify input-schema meta-schema rejects fails the **build**, with the defect in the build
+  log, instead of being silently ignored.
+- Two local differences: Apify Proxy groups are not checked (any `apifyProxyGroups` selection is
+  accepted), and encrypted secret input fields are not supported.
+
 ## Iterate without rebuilding (dev folder)
 
 After that first `apify push`, the runtime registers the pushed directory as the Actor's **dev
@@ -121,8 +143,9 @@ apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY
 ```
 
 Both bundled samples already charge `page-scraped` per page and `crawl-finished` once at the end, and
-carry the matching pricing in `pricing.json`: `apify api PUT /v2/actors/<actorId> --body "$(cat
-sample_actor_ts/pricing.json)"` prices one in a single call.
+carry the matching pricing in `pricing.json` - including both synthetic events, so one run shows all
+four being charged: `apify api PUT /v2/actors/<actorId> --body "$(cat sample_actor_ts/pricing.json)"`
+prices one in a single call.
 
 From then on every run of the Actor is a pay-per-event run: the SDKs read `pricingInfo` and
 `chargedEventCounts` off the run object exactly as on the platform, and `Actor.charge()` (or
@@ -130,10 +153,15 @@ From then on every run of the Actor is a pay-per-event run: the SDKs read `prici
 `ACTOR_TEST_PAY_PER_EVENT` - the runtime already looks like the platform to the SDK, which refuses that
 variable together with `APIFY_IS_AT_HOME`. The synthetic events work too: `apify-actor-start` is charged
 at run start (once per GB of memory) and `apify-default-dataset-item` once per item pushed to the run's
-default dataset, when the pricing defines them. Tiered event prices resolve to the `BRONZE` (Starter)
-tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
+default dataset, when the pricing defines them. The start pre-charge scales with the run's memory and
+its count is written to the run log, so `-m 8192` charges eight start events, not one; a memory the
+platform would refuse (anything but a power of two between 128 MB and 32 GB) is warned about in the log
+and then used anyway. Tiered event prices resolve to the `BRONZE` (Starter) tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
 plus at most one new one starting after all of them - so making the Actor free again means appending a
-`{"pricingModel":"FREE"}` entry, not sending `[]`. The same form is on the Actor's console page.
+`{"pricingModel":"FREE"}` entry, not sending `[]`. Re-sending a file that was already applied is refused
+for the same reason (`pricingInfos[0] differs ...`): the stored entries carry timestamps the file does
+not, so append its entry to what `GET /v2/actors/<actorId>` returns rather than sending the file again.
+The same form is on the Actor's console page.
 
 Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
 (there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,

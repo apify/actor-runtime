@@ -42,6 +42,17 @@ export interface SourceFile {
 	content: string;
 }
 
+/**
+ * An Actor's input schema, exactly as it was pushed. A loose record rather than a modelled type: it is
+ * the developer's own document, handed to the platform's validator verbatim, and the runtime itself
+ * reads only `properties`/`required` out of it.
+ */
+export interface InputSchema {
+	[key: string]: unknown;
+	properties?: Record<string, unknown>;
+	required?: string[];
+}
+
 export interface ActorVersionRecord {
 	versionNumber: string;
 	buildTag: string;
@@ -167,6 +178,11 @@ export interface BuildRecord {
 	 * inspect failed or the working directory was empty/`/` (mounting over `/` would destroy the
 	 * container) - never present on a non-`SUCCEEDED` build. */
 	imageWorkingDirectory?: string;
+	/** The input schema this build's own source files declared, written with `SUCCEEDED` like
+	 * `imageWorkingDirectory` above, and build-specific for the same reason: a run validates against the
+	 * schema of the build it resolved, never another tag's more recently pushed one. Absent when the
+	 * Actor declares none - such a run takes its input exactly as the caller sent it. */
+	inputSchema?: InputSchema;
 	exitCode?: number;
 	statusMessage?: string;
 }

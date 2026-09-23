@@ -24,7 +24,6 @@ real account, not in the runtime.
 - Ad-hoc webhooks on run start
 - Metered usage other than compute units: storage operations, data transfer and proxy
 - Billing: a run's charges and costs are reported, never invoiced or paid out
-- Input validation and defaults from the input schema
 - Encrypted secret input fields
 - Actor-level default run options
 - Dynamic and bounded memory from `.actor/actor.json`
@@ -101,7 +100,8 @@ real account, not in the runtime.
 
 ## Platform limits not enforced
 
-- Memory steps and bounds (128 MB - 32 GB, powers of two)
+- Memory steps and bounds (128 MB - 32 GB, powers of two); a run asking for anything else is warned
+  about in its log and started with it anyway
 - Record, item and input size limits
 - Concurrent run, rate and per-account quotas
 - Process, file-descriptor and shared-memory limits

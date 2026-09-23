@@ -55,6 +55,23 @@ In a build or run log, everything the runtime itself has to say - dev-folder not
 attach line, the browser-view URL, migration markers, a run that could not be started - opens with a
 blue `[actor-runtime]` prefix. Your Actor's own output is passed through byte for byte.
 
+## Input schema: defaults and validation
+
+An Actor that declares an input schema (the `input` field of `.actor/actor.json`, `.actor/INPUT_SCHEMA.json`,
+or `INPUT_SCHEMA.json` at its root) gets the platform's behaviour locally: the schema's defaults are filled into
+every run's input, and an input the schema rejects fails the call with the API's own message instead of starting a
+container.
+
+```bash
+apify call                              # runs on the schema's defaults
+apify call --input '{"maxPages":0}'     # 400 Input is not valid: Field input.maxPages must be >= 1
+```
+
+The schema is read at build time, so editing it locally needs an `apify push` even under a registered dev folder,
+and a schema the Apify meta-schema rejects fails the build with the defect in its log. Proxy group availability is
+not checked locally, and encrypted secret input fields stay unsupported - see
+`requirements/actor-driver.md`'s "Input schema, validation and defaults".
+
 ## Running with Podman instead of Docker
 
 The runtime talks to the container engine only through its Docker-compatible API socket, and Podman
@@ -218,7 +235,9 @@ do. Like Python debug mode, this needs the runtime to run from its own built ima
 
 Both bundled samples charge two events when their Actor is priced - `page-scraped` once per page and
 `crawl-finished` once at the end - and ship the pricing that defines them in `pricing.json`, so a run
-charges for real right after a push:
+charges for real right after a push. That pricing also declares both synthetic events, which the Actor
+never charges itself: `apify-actor-start` at run start (once per whole GB of the run's memory) and
+`apify-default-dataset-item` per item pushed to the default dataset.
 
 ```bash
 cd sample_actor_ts    # or sample_actor_py
@@ -235,6 +254,19 @@ run's console page and the runs list show the same figures.
 `pricingInfos` is append-only and is never accepted while the Actor is being created, both as on the
 platform: an update sends the Actor's existing entries unchanged plus at most one new one, starting after
 all of them. Making the Actor free again is therefore appending a `{"pricingModel": "FREE"}` entry.
+
+The `PUT` above therefore prices an Actor that has no pricing yet. Once it has one, a second `PUT` of the
+same file is refused (`pricingInfos[0] differs from the Actor's existing pricing info`) - the stored
+entries carry the timestamps they were given, which the file does not. Append the file's entry to what
+the Actor already has instead:
+
+```bash
+apify api PUT /v2/actors/<actorId> --body "$(apify api GET /v2/actors/<actorId> |
+  jq --argjson new "$(jq '.pricingInfos[-1]' pricing.json)" '{pricingInfos: (.data.pricingInfos + [$new])}')"
+```
+
+The Actor's console page has the same thing as a form: the box holds the stored array, and adding an
+entry below the existing ones does it without the shell.
 
 Cap a run's spend the way a user does - the cap is a query parameter, with no `apify call` flag for it:
 

@@ -23,10 +23,11 @@ async def main() -> None:
     """
     # Enter the context of the Actor.
     async with Actor:
-        # Retrieve the Actor input, and use default values if not provided.
+        # Every field has a `default` in the input schema, so the runtime fills it in before the run
+        # starts (the Apify platform does the same) - the Actor needs no fallback of its own.
         actor_input = await Actor.get_input() or {}
-        start_urls = [url.get('url') for url in actor_input.get('start_urls', [{'url': 'https://crawlee.dev/'}])]
-        max_requests_per_crawl = int(actor_input.get('max_requests_per_crawl', 3))
+        start_urls = [url.get('url') for url in actor_input['start_urls']]
+        max_requests_per_crawl = int(actor_input['max_requests_per_crawl'])
 
         # Exit if no start URLs are provided.
         if not start_urls:

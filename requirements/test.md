@@ -36,6 +36,7 @@ Test case must verify full Actor development flow:
 - Push and build Actor in local actor runtime `apify push`
 - Run each sample Actor in the local actor runtime with `apify call --input '{"maxPages":N}'` for at least two different values of `N`, waiting for each run to finish
 - Assert via `apify datasets info <default dataset id>` that the default dataset's `itemCount` tracks `N` - the assertion is input-dependent, not just "some items exist"
+- Cover the input schema through the CLI too (`actor-driver.md`): `apify call` with no `--input` must run on the schema's defaults, asserted from the run's own `INPUT`, and `apify call` with an input the schema rejects must fail, naming the offending field
 
 ## Browser view
 

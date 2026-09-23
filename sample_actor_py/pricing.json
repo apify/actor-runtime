@@ -19,6 +19,11 @@
 						"eventDescription": "Charged by the runtime at run start, once per GB of memory.",
 						"eventPriceUsd": 0.005,
 						"isOneTimeEvent": true
+					},
+					"apify-default-dataset-item": {
+						"eventTitle": "Dataset item",
+						"eventDescription": "Charged by the runtime for every item pushed to the default dataset.",
+						"eventPriceUsd": 0.001
 					}
 				}
 			}

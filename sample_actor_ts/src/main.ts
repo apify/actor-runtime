@@ -7,8 +7,8 @@ import { CheerioCrawler } from '@crawlee/cheerio';
 await Actor.init();
 
 interface Input {
-	startUrl?: string;
-	maxPages?: number;
+	startUrl: string;
+	maxPages: number;
 }
 
 const { memoryMbytes } = Actor.getEnv();
@@ -27,16 +27,20 @@ Actor.on('systemInfo', (info: { cpuCurrentUsage?: number; memCurrentBytes?: numb
 
 // Under pay-per-event pricing (set on the Actor through the runtime's API or console) this Actor charges
 // two events: 'page-scraped' once per page and 'crawl-finished' once at the end. A free Actor skips both,
-// so a plain push-and-call stays unchanged.
+// so a plain push-and-call stays unchanged. `pricing.json` prices two more, 'apify-actor-start' and
+// 'apify-default-dataset-item': those are charged by the runtime itself, which is why no code here
+// charges them.
 const { isPayPerEvent, maxTotalChargeUsd } = Actor.getChargingManager().getPricingInfo();
 if (isPayPerEvent) {
 	const cap = Number.isFinite(maxTotalChargeUsd) ? `$${maxTotalChargeUsd}` : 'none';
 	log.info(`Pay-per-event pricing in effect, max total charge: ${cap}.`);
 }
 
+// Both fields have a `default` in the input schema, so the runtime fills them in before the run
+// starts (the Apify platform does the same) - the Actor needs no fallback of its own.
 const input = await Actor.getInput<Input>();
-const startUrl = input?.startUrl ?? 'https://crawlee.dev/';
-const maxPages = input?.maxPages ?? 2;
+if (!input) throw new Error('No input: the input schema should have supplied its defaults.');
+const { startUrl, maxPages } = input;
 
 log.info(`Crawling up to ${maxPages} page(s) starting from ${startUrl}.`);
 

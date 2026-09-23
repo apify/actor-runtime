@@ -21,6 +21,7 @@ import {
 	apify,
 	apifyAllOutput,
 	apifyEnv,
+	apifyExpectingFailure,
 	createIsolatedApifyHome,
 	loginApifyCli,
 	removeIsolatedApifyHome,
@@ -131,6 +132,41 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 
 		const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
 		expect(log).toMatch(/Processing/);
+	});
+
+	it("a call with no input at all runs on the input schema's defaults, and one the schema rejects never starts", () => {
+		const env = apifyEnv(isolatedApifyHome);
+		const actorDir = join(REPO_ROOT, 'sample_actor_ts');
+
+		const callOutput = apify(['call', '--json'], { cwd: actorDir, env });
+		const call = JSON.parse(callOutput) as CallResult;
+		expect(call.run.status).toBe('SUCCEEDED');
+
+		// The run's own INPUT record, which only the runtime ever writes: every field of the schema, at
+		// its default. This is what distinguishes the schema's defaults from the Actor's own internal
+		// fallback for a missing field - the item count alone cannot tell the two apart.
+		const storedInput = apify(['key-value-stores', 'get-value', call.storage.defaultKeyValueStoreId, 'INPUT'], {
+			cwd: actorDir,
+			env,
+		});
+		expect(JSON.parse(storedInput) as Record<string, unknown>).toEqual({
+			startUrl: 'https://crawlee.dev/',
+			maxPages: 2,
+		});
+
+		const infoOutput = apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		expect((JSON.parse(infoOutput) as DatasetInfoResult).itemCount).toBe(2);
+
+		// `maxPages` has `minimum: 1` - the run is refused before any container starts, and the CLI
+		// surfaces the runtime's validation message.
+		const rejected = apifyExpectingFailure(['call', '--input', JSON.stringify({ maxPages: 0 }), '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		expect(rejected).toMatch(/maxPages/);
 	});
 
 	it('apify api reads back the run and its default dataset (requirements/cli.md: `apify api`)', () => {

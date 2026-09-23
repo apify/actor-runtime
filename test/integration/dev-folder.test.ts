@@ -834,11 +834,10 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			imageWorkingDirectory: '/usr/src/app',
 		});
 		const log = await server.client.log(run.id).get();
-		expect(log).toContain('Local Actor runtime');
 		expect(log).toContain('Live dev folder: /abs/dev/src');
 		expect(log).toContain('Live dev folder mode');
 		expect(log).toContain('apify call --no-dev-folder');
-		expect(log!.indexOf('Local Actor runtime')).toBeLessThan(log!.indexOf('done'));
+		expect(log!.indexOf('Live dev folder:')).toBeLessThan(log!.indexOf('done'));
 	});
 
 	it("marks every runtime-authored line of a run's log with the runtime prefix and its blue, and leaves the Actor's own output untouched", async () => {
@@ -877,7 +876,7 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 		const run = await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
 		expect(run.status).toBe('SUCCEEDED');
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
-		expect(await server.client.log(run.id).get()).not.toContain('Local Actor runtime');
+		expect(await server.client.log(run.id).get()).not.toContain('Live dev folder');
 	});
 
 	it('an Actor whose registration was set and then cleared also gets devMount: undefined, not the stale pair', async () => {
@@ -988,7 +987,7 @@ describe('per-run opt-out: POST /v2/actors/:actorId/runs?devFolder=false (servic
 		expect(capturing.getCapturedDevMount()).toBeUndefined();
 		const log = await server.client.log(run.id).get();
 		expect(log).toContain('Skipping the registered local dev folder /abs/dev/src for this run');
-		expect(log).not.toContain('Local Actor runtime');
+		expect(log).not.toContain('Live dev folder');
 	});
 
 	it('devFolder=false leaves the registration itself untouched - the next run without the opt-out mounts again', async () => {
