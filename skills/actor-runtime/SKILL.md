@@ -152,8 +152,10 @@ From then on every run of the Actor is a pay-per-event run: the SDKs read `prici
 `ACTOR_TEST_PAY_PER_EVENT` - the runtime already looks like the platform to the SDK, which refuses that
 variable together with `APIFY_IS_AT_HOME`. The synthetic events work too: `apify-actor-start` is charged
 at run start (once per GB of memory) and `apify-default-dataset-item` once per item pushed to the run's
-default dataset, when the pricing defines them. Tiered event prices resolve to the `BRONZE` (Starter)
-tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
+default dataset, when the pricing defines them. The start pre-charge scales with the run's memory and
+its count is written to the run log, so `-m 8192` charges eight start events, not one; a memory the
+platform would refuse (anything but a power of two between 128 MB and 32 GB) is warned about in the log
+and then used anyway. Tiered event prices resolve to the `BRONZE` (Starter) tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
 plus at most one new one starting after all of them - so making the Actor free again means appending a
 `{"pricingModel":"FREE"}` entry, not sending `[]`. The same form is on the Actor's console page.
 

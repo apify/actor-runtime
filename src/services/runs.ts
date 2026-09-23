@@ -18,12 +18,16 @@ import {
 	type DebugPlan,
 } from './debug-mode.js';
 import { browserViewLogLine, describeBrowserViewerStartFailure } from './browser-view.js';
-import { dedicatedCpusFor } from '../resources.js';
+import { dedicatedCpusFor, platformIncompatibleMemoryWarning } from '../resources.js';
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
 import { formatRuntimeLogLines, type RuntimeLogLine } from '../runtime-log.js';
 import { getRunTelemetry } from './events-channel.js';
 import { initialChargedEventCounts, resolveRunPricingInfo } from './pricing.js';
-import { registerDefaultDatasetForCharging, unregisterDefaultDatasetForCharging } from './charging.js';
+import {
+	actorStartChargeMessage,
+	registerDefaultDatasetForCharging,
+	unregisterDefaultDatasetForCharging,
+} from './charging.js';
 
 const DEFAULT_MEMORY_MBYTES = 1024;
 const DEFAULT_TIMEOUT_SECS = 300;
@@ -226,6 +230,12 @@ export async function startRun(
 	};
 	await runs.set(record.id, record);
 	registerDefaultDatasetForCharging(record);
+
+	// Both lines are about what the caller asked for, so they are written before the run does anything.
+	const memoryWarning = platformIncompatibleMemoryWarning(memoryMbytes);
+	if (memoryWarning) appendRuntimeLog(record.id, memoryWarning);
+	const startCharge = actorStartChargeMessage(record);
+	if (startCharge) appendRuntimeLog(record.id, startCharge);
 
 	void runInBackground(driver, actor, record, options).catch(async (error: unknown) => {
 		// Every *expected* failure mode inside `runInBackground` is already caught internally and mapped

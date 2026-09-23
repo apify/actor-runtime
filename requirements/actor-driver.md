@@ -241,6 +241,8 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   per subscription tier is charged at the lowest paid tier; nothing is ever billed or paid out; and the
   rules tying a price change to payout details, notice periods and subscription tiers do not apply.
 - An Actor's own charging code therefore runs here unchanged, with no local-testing switch.
+- A run's log states what it was pre-charged for starting, so the count is visible where the platform
+  leaves it to be discovered on the bill.
 - The pricing can also be set from the console (`console.md`).
 
 # Users
