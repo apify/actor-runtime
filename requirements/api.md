@@ -17,12 +17,12 @@
 - `DELETE /v2/actor-builds/:buildId` and `DELETE /v2/actor-runs/:runId` on a **non-terminal** build/run
   are rejected, not aborted-then-deleted: `400` with error type `deleting-unfinished-build` (builds) or
   `cannot-remove-running-run` (runs), matching the Apify platform.
-- `POST /v2/actors/:actorId/runs` validates the input against the resolved build's input schema, when
-  it has one (`actor-driver.md`), and rejects it with `400` and the platform's own error types and
-  messages, starting nothing: `invalid-input` for a body that is not `application/json`, is not
-  parseable JSON, is not a JSON object, or that the schema rejects (every validation error,
-  comma-separated); `invalid-input-schema` for a stored schema that cannot be compiled at all. A build
-  with no input schema accepts any body, unvalidated.
+- `POST /v2/actors/:actorId/runs` validates the input against the input schema of the build it
+  resolved, when that build has one (`actor-driver.md`), and starts nothing when it does not pass:
+  `400` `invalid-input` for a body that is not `application/json`, is not parseable JSON, is not a
+  JSON object, or that the schema rejects, naming every offending field; `400` `invalid-input-schema`
+  when the Actor's own schema is not valid. Both messages match the Apify platform's. A build with no
+  input schema accepts any body, unvalidated.
 - Four endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
