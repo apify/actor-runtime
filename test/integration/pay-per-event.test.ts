@@ -21,6 +21,7 @@ import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import { subscribeEvents } from '../../src/services/events-channel.js';
+import { isTerminalJobStatus } from '../../src/services/job-status.js';
 import type { ActorRecord, BuildRecord } from '../../src/storage/entities.js';
 
 const PAGE_EVENT = 'page-scraped';
@@ -544,7 +545,18 @@ describe('run usage estimate', () => {
 		expect(live.stats.computeUnits).toBeGreaterThan(0);
 		expect(live.stats.computeUnits).toBeGreaterThanOrEqual(before.stats.computeUnits!);
 
+		// The sampled figures are written before the status turns terminal, the same guarantee the log
+		// flush has: whoever sees the run finish reads the record next, and must not find them missing.
+		const firstTerminalRead = (async () => {
+			for (;;) {
+				const current = await getRegistries().runs.get(runId);
+				if (current && isTerminalJobStatus(current.status)) return current;
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+		})();
 		await finishRun(server, driver, runId);
+		expect((await firstTerminalRead).stats?.memAvgBytes).toBe(200);
+
 		const finished = (await server.client.run(runId).get()) as unknown as { stats: Record<string, number> };
 		expect(finished.stats.memAvgBytes).toBe(200);
 		expect(finished.stats.cpuMaxUsage).toBe(30);

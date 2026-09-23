@@ -448,6 +448,9 @@ export async function runInBackground(
 			// observes it turn terminal, and immediately does a non-stream `GET /v2/logs/:id` can never observe
 			// the persisted log lagging behind the status it just saw.
 			await flushLog(record.id);
+			// Before the status write for the same reason as the flush: the sampled figures live only in
+			// memory until this runs, and a client that sees the run turn terminal reads the record next.
+			await persistRunTelemetry(record.id);
 			// Guarded: `container.wait()` resolving is not proof the run wasn't aborted - `container.stop()`
 			// (from an in-flight `abortRun`) and the container exiting on its own race off the same
 			// underlying Docker event with no ordering guarantee. If `abortRun` already moved the record to
@@ -469,6 +472,7 @@ export async function runInBackground(
 		// unusable mount) is what `apify call` streams, and the status message alone leaves it empty.
 		appendRuntimeLog(record.id, `Cannot start run: ${statusMessage}`);
 		await flushLog(record.id);
+		await persistRunTelemetry(record.id);
 		await transitionJobStatus(runs, record.id, 'FAILED', {
 			finishedAt: new Date().toISOString(),
 			statusMessage,
@@ -477,11 +481,12 @@ export async function runInBackground(
 		// The container is gone, so an open graceful-abort window has nothing left to wait out - the path an
 		// Actor that honours the `aborting` frame takes. The log is already flushed by both the success
 		// path above and the catch below, so a client seeing this terminal status can still read all of it.
+		// The accumulators are in-memory, so a finished run keeps its figures only if they are written
+		// here - before the transition below, and again for the paths above that end the run elsewhere.
+		await persistRunTelemetry(record.id);
 		if (cancelGracefulAbort(record.id)) {
 			await transitionJobStatus(runs, record.id, 'ABORTED', { finishedAt: new Date().toISOString() });
 		}
-		// The accumulators are in-memory, so a finished run keeps its figures only if they are written here.
-		await persistRunTelemetry(record.id);
 		unregisterDefaultDatasetForCharging(record);
 		if (browserViewer) await driver.stopBrowserViewer(record.id);
 		// A run that ends for real must not leave an armed migration-stop timer behind.
