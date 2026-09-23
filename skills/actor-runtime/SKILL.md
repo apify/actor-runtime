@@ -143,8 +143,9 @@ apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY
 ```
 
 Both bundled samples already charge `page-scraped` per page and `crawl-finished` once at the end, and
-carry the matching pricing in `pricing.json`: `apify api PUT /v2/actors/<actorId> --body "$(cat
-sample_actor_ts/pricing.json)"` prices one in a single call.
+carry the matching pricing in `pricing.json` - including both synthetic events, so one run shows all
+four being charged: `apify api PUT /v2/actors/<actorId> --body "$(cat sample_actor_ts/pricing.json)"`
+prices one in a single call.
 
 From then on every run of the Actor is a pay-per-event run: the SDKs read `pricingInfo` and
 `chargedEventCounts` off the run object exactly as on the platform, and `Actor.charge()` (or

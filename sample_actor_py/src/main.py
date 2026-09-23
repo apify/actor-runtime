@@ -30,7 +30,9 @@ async def main() -> None:
 
         # Under pay-per-event pricing (set on the Actor through the runtime's API or console) this Actor
         # charges two events: 'page-scraped' once per page and 'crawl-finished' once at the end. A free
-        # Actor skips both, so a plain push-and-call stays unchanged.
+        # Actor skips both, so a plain push-and-call stays unchanged. `pricing.json` prices two more,
+        # 'apify-actor-start' and 'apify-default-dataset-item': those are charged by the runtime itself,
+        # which is why no code here charges them.
         pricing = Actor.get_charging_manager().get_pricing_info()
         if pricing.is_pay_per_event:
             cap = f'${pricing.max_total_charge_usd}' if pricing.max_total_charge_usd.is_finite() else 'none'

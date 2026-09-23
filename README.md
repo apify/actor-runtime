@@ -235,7 +235,9 @@ do. Like Python debug mode, this needs the runtime to run from its own built ima
 
 Both bundled samples charge two events when their Actor is priced - `page-scraped` once per page and
 `crawl-finished` once at the end - and ship the pricing that defines them in `pricing.json`, so a run
-charges for real right after a push:
+charges for real right after a push. That pricing also declares both synthetic events, which the Actor
+never charges itself: `apify-actor-start` at run start (once per whole GB of the run's memory) and
+`apify-default-dataset-item` per item pushed to the default dataset.
 
 ```bash
 cd sample_actor_ts    # or sample_actor_py

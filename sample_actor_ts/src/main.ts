@@ -27,7 +27,9 @@ Actor.on('systemInfo', (info: { cpuCurrentUsage?: number; memCurrentBytes?: numb
 
 // Under pay-per-event pricing (set on the Actor through the runtime's API or console) this Actor charges
 // two events: 'page-scraped' once per page and 'crawl-finished' once at the end. A free Actor skips both,
-// so a plain push-and-call stays unchanged.
+// so a plain push-and-call stays unchanged. `pricing.json` prices two more, 'apify-actor-start' and
+// 'apify-default-dataset-item': those are charged by the runtime itself, which is why no code here
+// charges them.
 const { isPayPerEvent, maxTotalChargeUsd } = Actor.getChargingManager().getPricingInfo();
 if (isPayPerEvent) {
 	const cap = Number.isFinite(maxTotalChargeUsd) ? `$${maxTotalChargeUsd}` : 'none';

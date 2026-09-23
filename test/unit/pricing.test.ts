@@ -3,10 +3,14 @@
  * effect at a date, per-run resolution (tiered prices collapsed to the BRONZE tier), and the initial
  * `chargedEventCounts` with the synthetic start event (`actor-driver.md`'s "Pay-per-event pricing").
  */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
 	ACTOR_START_EVENT_NAME,
+	DEFAULT_DATASET_ITEM_EVENT_NAME,
 	effectivePricingInfo,
 	initialChargedEventCounts,
 	isPayPerEvent,
@@ -14,6 +18,8 @@ import {
 	validatePricingInfos,
 	validatePricingInfosUpdate,
 } from '../../src/services/pricing.js';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const NOW = new Date('2026-09-21T10:00:00.000Z');
 
@@ -285,4 +291,30 @@ describe('validatePricingInfosUpdate (the append-only history)', () => {
 		expect(update([], []).kind).toBe('ok');
 		expect(update([ppe({ result: { eventTitle: 'Result', eventPriceUsd: 0.01 } })], []).kind).toBe('ok');
 	});
+});
+
+describe('the pricing the bundled samples ship', () => {
+	// The README tells a developer to PUT these files at the Actor verbatim, so what the runtime would
+	// answer to that is worth knowing here rather than from a 400 at the terminal.
+	it.each(['sample_actor_ts', 'sample_actor_py'])(
+		'%s/pricing.json is accepted and prices both synthetic events',
+		(sample) => {
+			const { pricingInfos } = JSON.parse(readFileSync(join(REPO_ROOT, sample, 'pricing.json'), 'utf8')) as {
+				pricingInfos: unknown;
+			};
+
+			const resolved = resolveRunPricingInfo(ok(pricingInfos), NOW);
+			if (!isPayPerEvent(resolved)) throw new Error('expected the sample to be priced per event');
+			expect(Object.keys(resolved.pricingPerEvent.actorChargeEvents).sort()).toEqual([
+				ACTOR_START_EVENT_NAME,
+				DEFAULT_DATASET_ITEM_EVENT_NAME,
+				'crawl-finished',
+				'page-scraped',
+			]);
+
+			// Neither synthetic event is ever charged by the sample's own code: the start event is
+			// pre-charged per whole GB, the item event by the dataset route on every push.
+			expect(initialChargedEventCounts(resolved, 2048)?.[ACTOR_START_EVENT_NAME]).toBe(2);
+		},
+	);
 });
