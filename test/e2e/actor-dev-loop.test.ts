@@ -138,11 +138,21 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 		const env = apifyEnv(isolatedApifyHome);
 		const actorDir = join(REPO_ROOT, 'sample_actor_ts');
 
-		// No `--input`: the Actor's input schema defaults `maxPages` to 2, so the item count is 2 -
-		// input-dependent, like every other assertion here, just with the input coming from the schema.
 		const callOutput = apify(['call', '--json'], { cwd: actorDir, env });
 		const call = JSON.parse(callOutput) as CallResult;
 		expect(call.run.status).toBe('SUCCEEDED');
+
+		// The run's own INPUT record, which only the runtime ever writes: every field of the schema, at
+		// its default. This is what distinguishes the schema's defaults from the Actor's own internal
+		// fallback for a missing field - the item count alone cannot tell the two apart.
+		const storedInput = apify(['key-value-stores', 'get-value', call.storage.defaultKeyValueStoreId, 'INPUT'], {
+			cwd: actorDir,
+			env,
+		});
+		expect(JSON.parse(storedInput) as Record<string, unknown>).toEqual({
+			startUrl: 'https://crawlee.dev/',
+			maxPages: 2,
+		});
 
 		const infoOutput = apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], {
 			cwd: actorDir,
