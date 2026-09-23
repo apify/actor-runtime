@@ -6,6 +6,7 @@ import { recordTaggedBuild, updateActor } from './actors.js';
 import type { Driver } from '../driver/types.js';
 import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
+import { sourceFileToText } from './actor-source-files.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
 import { resolveInputSchemaLocation } from './input-schema-location.js';
@@ -90,8 +91,7 @@ function qualifyDockerfileImages(
 ): SourceFile[] {
 	return sourceFiles.map((file) => {
 		if (normalizeEntryName(file.name) !== dockerfilePath) return file;
-		const text = file.format === 'BASE64' ? Buffer.from(file.content, 'base64').toString('utf8') : file.content;
-		const { dockerfile, qualified } = qualifyDockerfileImageReferences(text);
+		const { dockerfile, qualified } = qualifyDockerfileImageReferences(sourceFileToText(file));
 		if (qualified.length === 0) return file;
 		for (const { from, to } of qualified) {
 			log(`Using "${to}" for FROM "${from}" - a short image name means Docker Hub, as on the platform.\n`);
@@ -147,6 +147,19 @@ export async function startBuild(
 	return record;
 }
 
+/** Fails a build before any image exists, mirroring `services/runs.ts`'s `failBeforeContainer`: the
+ * reason reaches both the build log and the status message, which default to the same text. */
+async function failBuild(buildId: string, logMessage: string, statusMessage = logMessage): Promise<void> {
+	const { builds } = getRegistries();
+	appendRuntimeLog(buildId, logMessage);
+	await flushLog(buildId);
+	markLogTerminal(buildId);
+	await transitionJobStatus(builds, buildId, 'FAILED', {
+		finishedAt: new Date().toISOString(),
+		statusMessage,
+	});
+}
+
 /**
  * Exported only for direct testing of the guarded transitions/pre-start abort window (see
  * `test/integration/job-lifecycle.test.ts`) - not part of the service's public surface for callers
@@ -181,13 +194,7 @@ export async function runBuildInBackground(
 	}
 
 	if (!driver.available) {
-		appendRuntimeLog(record.id, `Docker is not available: ${driver.unavailableReason}`);
-		await flushLog(record.id);
-		markLogTerminal(record.id);
-		await transitionJobStatus(builds, record.id, 'FAILED', {
-			finishedAt: new Date().toISOString(),
-			statusMessage: driver.unavailableReason,
-		});
+		await failBuild(record.id, `Docker is not available: ${driver.unavailableReason}`, driver.unavailableReason);
 		return;
 	}
 
@@ -205,28 +212,16 @@ export async function runBuildInBackground(
 
 	const dockerfileResolution = resolveDockerfileLocation(version.sourceFiles);
 	if (dockerfileResolution.outcome === 'failure') {
-		appendRuntimeLog(record.id, dockerfileResolution.message);
-		await flushLog(record.id);
-		markLogTerminal(record.id);
-		await transitionJobStatus(builds, record.id, 'FAILED', {
-			finishedAt: new Date().toISOString(),
-			statusMessage: dockerfileResolution.message,
-		});
+		await failBuild(record.id, dockerfileResolution.message);
 		return;
 	}
 	for (const line of dockerfileResolution.logLines) appendRuntimeLog(record.id, line);
 
 	// Before the image is built, not after: an Actor whose declared input contract cannot be read fails
-	// the build with that reason, rather than producing an image whose every run skips validation.
+	// the build, rather than producing an image whose every run would skip validation.
 	const inputSchemaResolution = resolveInputSchemaLocation(version.sourceFiles);
 	if (inputSchemaResolution.outcome === 'failure') {
-		appendRuntimeLog(record.id, inputSchemaResolution.message);
-		await flushLog(record.id);
-		markLogTerminal(record.id);
-		await transitionJobStatus(builds, record.id, 'FAILED', {
-			finishedAt: new Date().toISOString(),
-			statusMessage: inputSchemaResolution.message,
-		});
+		await failBuild(record.id, inputSchemaResolution.message);
 		return;
 	}
 	for (const line of inputSchemaResolution.logLines) appendRuntimeLog(record.id, line);
@@ -287,8 +282,6 @@ export async function runBuildInBackground(
 			...(outcome.imageWorkingDirectory !== undefined
 				? { imageWorkingDirectory: outcome.imageWorkingDirectory }
 				: {}),
-			// Omitted rather than written as `undefined` for an Actor with no input schema, same reason
-			// as `imageWorkingDirectory` above.
 			...(inputSchema !== undefined ? { inputSchema } : {}),
 		});
 		if (succeeded?.status !== 'SUCCEEDED') {

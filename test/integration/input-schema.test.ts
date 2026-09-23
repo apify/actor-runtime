@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fixedBuildOutcomeDriver, startTestServer, type TestServerHandle } from './helpers/test-server.js';
 import { getRegistries } from '../../src/storage/registries.js';
+import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
-import { resetInputSchemaValidatorCacheForTests } from '../../src/services/input-schema.js';
 import { runBuildInBackground } from '../../src/services/builds.js';
 import type { InputSchema, SourceFile } from '../../src/storage/entities.js';
 
@@ -44,28 +44,33 @@ describe('input validation and defaults (via real apify-client)', () => {
 	});
 
 	afterEach(async () => {
-		resetInputSchemaValidatorCacheForTests();
 		await server.close();
 	});
 
 	/** Seeds a tagged, successful build - with or without an input schema - for `actorId`. */
-	async function seedBuild(actorId: string, userId: string, inputSchema?: InputSchema): Promise<void> {
+	async function seedBuild(
+		actorId: string,
+		userId: string,
+		inputSchema?: InputSchema,
+		tag = 'latest',
+	): Promise<void> {
 		const { builds } = getRegistries();
-		const buildId = `seeded${Math.random().toString(36).slice(2, 13)}`.slice(0, 17);
+		const buildId = generateId();
+		const buildNumber = '0.0.1';
 		await builds.set(buildId, {
 			id: buildId,
 			userId,
 			actorId,
 			versionNumber: '0.0',
-			buildNumber: '0.0.1',
-			tag: 'latest',
+			buildNumber,
+			tag,
 			status: 'SUCCEEDED',
 			startedAt: new Date().toISOString(),
 			finishedAt: new Date().toISOString(),
-			imageId: 'fake-image:latest',
+			imageId: `fake-image:${tag}`,
 			...(inputSchema ? { inputSchema } : {}),
 		});
-		await updateActor(actorId, (current) => recordTaggedBuild(current, 'latest', buildId, '0.0.1'));
+		await updateActor(actorId, (current) => recordTaggedBuild(current, tag, buildId, buildNumber));
 	}
 
 	async function storedInput(runId: string): Promise<unknown> {
@@ -109,24 +114,6 @@ describe('input validation and defaults (via real apify-client)', () => {
 		// Nothing was started: a rejected input never creates a run.
 		const runs = await server.client.actor(actor.id).runs().list();
 		expect(runs.items).toHaveLength(0);
-	});
-
-	it('rejects a missing required field that has no default', async () => {
-		const actor = await server.client.actors().create({ name: 'required-field-actor' });
-		await seedBuild(actor.id, actor.userId, {
-			...SAMPLE_SCHEMA,
-			properties: {
-				...SAMPLE_SCHEMA.properties,
-				token: { title: 'Token', type: 'string', editor: 'textfield', description: 'A token.' },
-			},
-			required: ['token'],
-		});
-
-		await expect(server.client.actor(actor.id).start({ maxPages: 1 })).rejects.toMatchObject({
-			statusCode: 400,
-			type: 'invalid-input',
-			message: 'Input is not valid: Field input.token is required',
-		});
 	});
 
 	it('rejects a non-object and a non-JSON body against a schema', async () => {
@@ -177,24 +164,10 @@ describe('input validation and defaults (via real apify-client)', () => {
 
 	it('validates against the schema of the build the run actually resolved, not the newest one', async () => {
 		const actor = await server.client.actors().create({ name: 'two-tag-actor' });
-		const { builds } = getRegistries();
 
-		// `latest` demands maxPages >= 1; `beta`, built afterwards, has no schema at all.
+		// `latest` demands maxPages >= 1; `beta` has no schema at all.
 		await seedBuild(actor.id, actor.userId, SAMPLE_SCHEMA);
-		const betaBuildId = 'betaBuildId12345b';
-		await builds.set(betaBuildId, {
-			id: betaBuildId,
-			userId: actor.userId,
-			actorId: actor.id,
-			versionNumber: '0.1',
-			buildNumber: '0.1.1',
-			tag: 'beta',
-			status: 'SUCCEEDED',
-			startedAt: new Date().toISOString(),
-			finishedAt: new Date().toISOString(),
-			imageId: 'fake-image:beta',
-		});
-		await updateActor(actor.id, (current) => recordTaggedBuild(current, 'beta', betaBuildId, '0.1.1'));
+		await seedBuild(actor.id, actor.userId, undefined, 'beta');
 
 		await expect(server.client.actor(actor.id).start({ maxPages: 0 })).rejects.toMatchObject({
 			statusCode: 400,

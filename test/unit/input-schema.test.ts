@@ -1,12 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import {
-	describeInputProcessingFailure,
-	describeInputSchemaDefect,
-	mergeDefaultsFromInputSchema,
-	processActorInput,
-	resetInputSchemaValidatorCacheForTests,
-} from '../../src/services/input-schema.js';
+import { assignDefaults, processActorInput } from '../../src/services/input-schema.js';
+import { describeInputSchemaDefect } from '../../src/services/input-schema-location.js';
 import type { InputSchema } from '../../src/storage/entities.js';
 
 const SAMPLE_SCHEMA: InputSchema = {
@@ -42,10 +37,6 @@ function effectiveInput(result: ReturnType<typeof processActorInput>): Record<st
 	expect(result.input.contentType).toBe('application/json');
 	return JSON.parse(result.input.body.toString('utf8')) as Record<string, unknown>;
 }
-
-afterEach(() => {
-	resetInputSchemaValidatorCacheForTests();
-});
 
 describe('processActorInput - defaults', () => {
 	it('fills every missing field from the schema and leaves provided ones alone', () => {
@@ -95,7 +86,7 @@ describe('processActorInput - defaults', () => {
 	});
 });
 
-describe('mergeDefaultsFromInputSchema', () => {
+describe('assignDefaults', () => {
 	const NESTED_SCHEMA: InputSchema = {
 		title: 'Nested',
 		type: 'object',
@@ -122,28 +113,28 @@ describe('mergeDefaultsFromInputSchema', () => {
 	};
 
 	it("builds a nested object out of its fields' defaults when the whole object is missing", () => {
-		expect(mergeDefaultsFromInputSchema({}, NESTED_SCHEMA)).toEqual({
+		expect(assignDefaults({}, NESTED_SCHEMA)).toEqual({
 			config: { retries: 3, verbose: false },
 		});
 	});
 
 	it('leaves a provided nested object exactly as it came, adding no keys to it', () => {
-		expect(mergeDefaultsFromInputSchema({ config: { retries: 9 } }, NESTED_SCHEMA)).toEqual({
+		expect(assignDefaults({ config: { retries: 9 } }, NESTED_SCHEMA)).toEqual({
 			config: { retries: 9 },
 		});
 	});
 
 	it('fills defaults into every item of a provided array, without overwriting what the item has', () => {
-		expect(mergeDefaultsFromInputSchema({ items: [{}, { keep: false }] }, NESTED_SCHEMA)).toEqual({
+		expect(assignDefaults({ items: [{}, { keep: false }] }, NESTED_SCHEMA)).toEqual({
 			config: { retries: 3, verbose: false },
 			items: [{ keep: true }, { keep: false }],
 		});
 	});
 
 	it('never hands out a reference into the schema, so a later edit of the input cannot corrupt it', () => {
-		const merged = mergeDefaultsFromInputSchema({}, NESTED_SCHEMA) as { config: Record<string, unknown> };
+		const merged = assignDefaults({}, NESTED_SCHEMA) as { config: Record<string, unknown> };
 		merged.config.retries = 999;
-		expect(mergeDefaultsFromInputSchema({}, NESTED_SCHEMA)).toEqual({ config: { retries: 3, verbose: false } });
+		expect(assignDefaults({}, NESTED_SCHEMA)).toEqual({ config: { retries: 3, verbose: false } });
 	});
 
 	it("applies the field's own default over the defaults of its nested fields", () => {
@@ -165,23 +156,19 @@ describe('mergeDefaultsFromInputSchema', () => {
 				},
 			},
 		};
-		expect(mergeDefaultsFromInputSchema({}, schema)).toEqual({ config: { retries: 10, verbose: false } });
+		expect(assignDefaults({}, schema)).toEqual({ config: { retries: 10, verbose: false } });
 	});
 });
 
 describe('processActorInput - validation', () => {
-	it("reports the platform's message for a value below a minimum", () => {
-		const result = processActorInput(jsonInput({ maxPages: 0 }), SAMPLE_SCHEMA);
-		expect(result).toEqual({ kind: 'invalid', message: 'Field input.maxPages must be >= 1' });
-		expect(describeInputProcessingFailure(result as never)).toBe(
-			'Input is not valid: Field input.maxPages must be >= 1',
-		);
-	});
-
-	it("reports the platform's message for a value of the wrong type", () => {
+	it("reports the platform's own message for a rejected value", () => {
+		expect(processActorInput(jsonInput({ maxPages: 0 }), SAMPLE_SCHEMA)).toEqual({
+			kind: 'invalid-input',
+			message: 'Input is not valid: Field input.maxPages must be >= 1',
+		});
 		expect(processActorInput(jsonInput({ label: 5 }), SAMPLE_SCHEMA)).toEqual({
-			kind: 'invalid',
-			message: 'Field input.label must be string',
+			kind: 'invalid-input',
+			message: 'Input is not valid: Field input.label must be string',
 		});
 	});
 
@@ -199,8 +186,8 @@ describe('processActorInput - validation', () => {
 			required: ['startUrl', 'label'],
 		};
 		expect(processActorInput(undefined, schema)).toEqual({
-			kind: 'invalid',
-			message: 'Field input.label is required',
+			kind: 'invalid-input',
+			message: 'Input is not valid: Field input.label is required',
 		});
 	});
 
@@ -222,8 +209,8 @@ describe('processActorInput - validation', () => {
 			},
 		};
 		const result = processActorInput(jsonInput({ a: 1, startUrls: [{ url: 'not a url' }] }), schema);
-		expect(result.kind).toBe('invalid');
-		if (result.kind !== 'invalid') return;
+		expect(result.kind).toBe('invalid-input');
+		if (result.kind !== 'invalid-input') return;
 		expect(result.message).toContain('Field input.a must be >= 10');
 		expect(result.message).toContain('input.startUrls');
 		expect(result.message).toContain(', ');
@@ -244,29 +231,10 @@ describe('processActorInput - validation', () => {
 			},
 			required: ['startUrls'],
 		};
-		expect(processActorInput(jsonInput({ startUrls: [] }), schema)).toMatchObject({ kind: 'invalid' });
+		expect(processActorInput(jsonInput({ startUrls: [] }), schema)).toMatchObject({ kind: 'invalid-input' });
 		expect(
 			effectiveInput(processActorInput(jsonInput({ startUrls: [{ url: 'https://crawlee.dev/' }] }), schema)),
 		).toEqual({ startUrls: [{ url: 'https://crawlee.dev/' }] });
-	});
-
-	it('runs the checks AJV alone cannot express, such as requestListSources entries', () => {
-		const schema: InputSchema = {
-			title: 'Sources',
-			type: 'object',
-			schemaVersion: 1,
-			properties: {
-				startUrls: {
-					title: 'Start URLs',
-					type: 'array',
-					editor: 'requestListSources',
-					description: 'Where to start.',
-				},
-			},
-		};
-		expect(processActorInput(jsonInput({ startUrls: [{ url: 'not a url' }] }), schema)).toMatchObject({
-			kind: 'invalid',
-		});
 	});
 
 	it('accepts any apifyProxyGroups selection, since proxy groups are not emulated locally', () => {
@@ -293,7 +261,7 @@ describe('processActorInput - validation', () => {
 				jsonInput({ proxyConfiguration: { useApifyProxy: false, proxyUrls: ['nonsense'] } }),
 				schema,
 			),
-		).toMatchObject({ kind: 'invalid' });
+		).toMatchObject({ kind: 'invalid-input' });
 	});
 
 	it('compiles a schema carrying the $schema field templates ship with', () => {
@@ -304,11 +272,9 @@ describe('processActorInput - validation', () => {
 
 describe('processActorInput - malformed requests', () => {
 	it('rejects a body that is not sent as JSON', () => {
-		const result = processActorInput({ body: Buffer.from('{}', 'utf8'), contentType: 'text/plain' }, SAMPLE_SCHEMA);
-		expect(result).toEqual({ kind: 'not-json' });
-		expect(describeInputProcessingFailure(result as never)).toBe(
-			'Actor input must have content type "application/json".',
-		);
+		expect(
+			processActorInput({ body: Buffer.from('{}', 'utf8'), contentType: 'text/plain' }, SAMPLE_SCHEMA),
+		).toEqual({ kind: 'invalid-input', message: 'Actor input must have content type "application/json".' });
 	});
 
 	it('rejects a body that is not parseable JSON', () => {
@@ -316,28 +282,28 @@ describe('processActorInput - malformed requests', () => {
 			{ body: Buffer.from('{oops', 'utf8'), contentType: 'application/json' },
 			SAMPLE_SCHEMA,
 		);
-		expect(result.kind).toBe('unparseable-json');
-		expect(describeInputProcessingFailure(result as never)).toContain('Cannot parse input JSON body:');
+		expect(result.kind).toBe('invalid-input');
+		if (result.kind === 'ok') return;
+		expect(result.message).toContain('Cannot parse input JSON body:');
 	});
 
 	it('rejects a JSON body that is not an object, naming what it got instead', () => {
-		const array = processActorInput(jsonInput([1, 2]), SAMPLE_SCHEMA);
-		expect(array).toEqual({ kind: 'not-object', actualType: 'array' });
-		expect(describeInputProcessingFailure(array as never)).toBe(
-			'The input JSON must be object, got "array" instead.',
-		);
-
+		expect(processActorInput(jsonInput([1, 2]), SAMPLE_SCHEMA)).toEqual({
+			kind: 'invalid-input',
+			message: 'The input JSON must be object, got "array" instead.',
+		});
 		expect(processActorInput(jsonInput('a string'), SAMPLE_SCHEMA)).toEqual({
-			kind: 'not-object',
-			actualType: 'string',
+			kind: 'invalid-input',
+			message: 'The input JSON must be object, got "string" instead.',
 		});
 	});
 
 	it('reports a schema that cannot be compiled at all, rather than throwing', () => {
 		const broken: InputSchema = { title: 'Broken', type: 'object', properties: { a: { type: 'not-a-type' } } };
 		const result = processActorInput(jsonInput({}), broken);
-		expect(result.kind).toBe('invalid-schema');
-		expect(describeInputProcessingFailure(result as never)).toContain('Input schema is not valid:');
+		expect(result.kind).toBe('invalid-input-schema');
+		if (result.kind === 'ok') return;
+		expect(result.message).toContain('Input schema is not valid:');
 	});
 });
 

@@ -30,6 +30,17 @@ export function endpointNotFound(message: string): ApiError {
 	return new ApiError(404, 'not-found', message);
 }
 
+/** Matches the real platform's rejection of an input its Actor's input schema does not accept
+ * (`@apify-packages/errors`'s `actor.inputNotValid` and its neighbours), message included. */
+export function invalidInput(message: string): ApiError {
+	return new ApiError(400, 'invalid-input', message);
+}
+
+/** Matches the real platform's `actor.invalidInputSchema`. */
+export function invalidInputSchema(message: string): ApiError {
+	return new ApiError(400, 'invalid-input-schema', message);
+}
+
 /**
  * Matches the real Apify platform exactly: `DELETE /v2/actor-runs/:runId` on a non-terminal run is
  * rejected rather than aborted-then-deleted (the public API answers 400 `cannot-remove-running-run`),

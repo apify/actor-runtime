@@ -7,94 +7,66 @@
  * would answer with rather than an approximation of it.
  */
 import ajvPackage from 'ajv';
-import ajv2019Package from 'ajv/dist/2019.js';
-import { validateInputSchema, validateInputUsingValidator } from '@apify/input_schema';
+import { validateInputUsingValidator } from '@apify/input_schema';
 
-import type { InputSchema } from '../storage/entities.js';
+import type { BuildRecord, InputSchema } from '../storage/entities.js';
 
 // AJV ships as CommonJS, so under this package's ESM resolution its class arrives as the module's
-// `default`. `2019` is the same library with draft-2019-09 support, which the Apify input-schema
-// meta-schema requires and the plain build lacks.
+// `default`.
 const Ajv = ajvPackage.default;
-const Ajv2019 = ajv2019Package.default;
 type InputValidator = ReturnType<InstanceType<typeof Ajv>['compile']>;
 
-/** The Actor input as it travels from the API route into the run: the exact bytes stored as the run's
- * `INPUT` record, with the content type they are stored under. */
+/** Stored verbatim as the run's `INPUT` record. */
 export interface ActorInput {
 	body: Buffer;
 	contentType: string;
 }
 
-/** Every way `processActorInput` can end, `ok` included - a discriminated union the API route maps to
- * its own `ApiError` types, the same split `services/dev-folder.ts` uses. */
+/** `kind` is the API error type the route answers with; `message` is the real Apify API's own wording
+ * for the same defect (`@apify-packages/errors`'s `actor.inputNotJson` and its neighbours). */
 export type InputProcessingResult =
 	| { kind: 'ok'; input: ActorInput }
-	| { kind: 'not-json' }
-	| { kind: 'unparseable-json'; parseError: string }
-	| { kind: 'not-object'; actualType: string }
-	| { kind: 'invalid'; message: string }
-	| { kind: 'invalid-schema'; message: string };
-
-/** The real Apify API's messages, word for word (`@apify-packages/errors`'s `actor.inputNotJson` and
- * its neighbours). */
-export function describeInputProcessingFailure(result: Exclude<InputProcessingResult, { kind: 'ok' }>): string {
-	switch (result.kind) {
-		case 'not-json':
-			return 'Actor input must have content type "application/json".';
-		case 'unparseable-json':
-			return `Cannot parse input JSON body: ${result.parseError}`;
-		case 'not-object':
-			return `The input JSON must be object, got "${result.actualType}" instead.`;
-		case 'invalid':
-			return `Input is not valid: ${result.message}`;
-		case 'invalid-schema':
-			return `Input schema is not valid: ${result.message}`;
-	}
-}
+	| { kind: 'invalid-input'; message: string }
+	| { kind: 'invalid-input-schema'; message: string };
 
 /**
- * `null` for a valid input schema, the defect otherwise. Runs at build time, so a broken schema is
- * reported where the developer is already looking rather than silently at every later run.
+ * The input a run against `build` should actually start with: the caller's bytes untouched when the
+ * build declares no input schema, and the validated input with that schema's defaults applied when it
+ * does.
  */
-export function describeInputSchemaDefect(schema: unknown): string | null {
-	if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
-		return 'Input schema must be an object.';
-	}
-	try {
-		// A fresh instance per call: AJV never evicts its internal compiled-schema map, and this runs
-		// once per build, not per request.
-		const ajv = new Ajv2019({ strict: false, unicodeRegExp: false });
-		// `validateInputSchema` normalizes in place, so it must not get the stored schema itself.
-		validateInputSchema(ajv, structuredClone(schema) as Record<string, unknown>);
-		return null;
-	} catch (error) {
-		return (error as Error).message;
-	}
+export function resolveBuildInput(build: BuildRecord, input: ActorInput | undefined): InputProcessingResult {
+	if (!build.inputSchema) return { kind: 'ok', input: input as ActorInput };
+	return processActorInput(input, build.inputSchema);
 }
 
 /**
- * The effective input a run should start with. Mirrors the platform's `processInputUsingSchema`: once
- * a schema exists, an absent input is an empty object the defaults are applied to, not "no input" - so
- * a call with no input still gets the defaults, and a required field with no default is still missing.
+ * Mirrors the platform's `processInputUsingSchema`: with a schema present, an absent input is an empty
+ * object the defaults are applied to, not "no input".
  */
 export function processActorInput(input: ActorInput | undefined, schema: InputSchema): InputProcessingResult {
-	let parsedInput: unknown = {};
+	let parsedInput: Record<string, unknown> = {};
 	if (input) {
-		if (!isJsonContentType(input.contentType)) return { kind: 'not-json' };
+		if (!isJsonContentType(input.contentType)) {
+			return { kind: 'invalid-input', message: 'Actor input must have content type "application/json".' };
+		}
+		let body: unknown;
 		try {
-			parsedInput = JSON.parse(input.body.toString('utf8')) as unknown;
+			body = JSON.parse(input.body.toString('utf8'));
 		} catch (error) {
-			return { kind: 'unparseable-json', parseError: (error as Error).message };
+			return { kind: 'invalid-input', message: `Cannot parse input JSON body: ${(error as Error).message}` };
 		}
 		// A literal `null` body is the platform's "no input" too, not a type error.
-		if (parsedInput === null || parsedInput === undefined) parsedInput = {};
-		if (!isPlainObject(parsedInput)) {
-			return { kind: 'not-object', actualType: Array.isArray(parsedInput) ? 'array' : typeof parsedInput };
+		if (body !== null) {
+			if (!isPlainObject(body)) {
+				const actualType = Array.isArray(body) ? 'array' : typeof body;
+				return {
+					kind: 'invalid-input',
+					message: `The input JSON must be object, got "${actualType}" instead.`,
+				};
+			}
+			parsedInput = body;
 		}
 	}
-
-	const withDefaults = mergeDefaultsFromInputSchema(parsedInput as Record<string, unknown>, schema);
 
 	let validator;
 	try {
@@ -102,16 +74,19 @@ export function processActorInput(input: ActorInput | undefined, schema: InputSc
 	} catch (error) {
 		// Reachable only for a schema recorded before builds validated them, or one that meta-validates
 		// yet still will not compile.
-		return { kind: 'invalid-schema', message: (error as Error).message };
+		return { kind: 'invalid-input-schema', message: `Input schema is not valid: ${(error as Error).message}` };
 	}
+
+	// `parsedInput` was parsed here and is referenced nowhere else, so the merge may own it.
+	const withDefaults = assignDefaults(parsedInput, schema);
 
 	// No `proxy` options: this runtime emulates no proxy groups (`unsupported.md`), so any
 	// `apifyProxyGroups` selection is accepted, while the rest of a proxy field is still checked.
 	const validationErrors = validateInputUsingValidator(validator, schema, withDefaults, {});
 	if (validationErrors.length > 0) {
-		// Joined, as the platform answers an API-origin run; it shortens this to the first message only
-		// for the web console, which has one notification line to show it in.
-		return { kind: 'invalid', message: validationErrors.map(({ message }) => message).join(', ') };
+		// Joined, as the platform answers an API-origin run.
+		const message = validationErrors.map(({ message: text }) => text).join(', ');
+		return { kind: 'invalid-input', message: `Input is not valid: ${message}` };
 	}
 
 	return {
@@ -122,8 +97,7 @@ export function processActorInput(input: ActorInput | undefined, schema: InputSc
 
 const DEFAULT_INPUT_CONTENT_TYPE = 'application/json';
 
-/** `application/json`, with any parameters (`; charset=utf-8`) ignored - the same single media type the
- * platform accepts for an Actor input validated against a schema. */
+/** Parameters such as `; charset=utf-8` are ignored. */
 function isJsonContentType(contentType: string): boolean {
 	return contentType.split(';')[0]?.trim().toLowerCase() === DEFAULT_INPUT_CONTENT_TYPE;
 }
@@ -133,29 +107,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * A port of the platform's `mergeDefaultsFromInputSchema`, recursion into nested objects and array
- * items included. Exported for direct testing; run-start callers go through `processActorInput`.
+ * A port of the platform's `mergeDefaultsFromInputSchema`. `values` is filled in place and returned:
+ * every caller parsed it itself, and cloning it doubles the peak heap of a large input.
  */
-export function mergeDefaultsFromInputSchema(
-	values: Record<string, unknown>,
-	schema: InputSchema,
-): Record<string, unknown> {
+export function assignDefaults(values: Record<string, unknown>, schema: InputSchema): Record<string, unknown> {
 	const properties = isPlainObject(schema.properties) ? schema.properties : {};
 	const defaults: Record<string, unknown> = {};
 	for (const [key, fieldSchema] of Object.entries(properties)) {
 		defaults[key] = extractDefaults(fieldSchema);
 	}
 
-	// Cloned so no reference into the stored schema is ever assigned into the returned input, where a
-	// later mutation of either would reach the other.
-	const clonedDefaults = structuredClone(defaults);
-	const target = structuredClone(values);
-	assignRecursively(target, clonedDefaults, schema);
-	return target;
+	// `extractDefaults` returns references into the stored schema, so the values assigned into the
+	// input must be copies - otherwise a later mutation of either would reach the other.
+	assignRecursively(values, structuredClone(defaults), schema);
+	return values;
 }
 
-/** The `default` of a field, plus - for an object field with `properties` - the defaults of its nested
- * fields, with the field's own `default` winning over them key by key. */
+/** A field's own `default` wins, key by key, over the defaults of its nested fields. */
 function extractDefaults(fieldSchema: unknown): unknown {
 	if (!isPlainObject(fieldSchema)) return undefined;
 
@@ -170,12 +138,6 @@ function extractDefaults(fieldSchema: unknown): unknown {
 		if (Object.values(nested).some((value) => value !== undefined)) return nested;
 	}
 	return rootValue;
-}
-
-/** The defaults for the items of an array field, from its `items` sub-schema. */
-function extractArrayItemDefaults(fieldSchema: unknown): unknown {
-	if (!isPlainObject(fieldSchema) || !('items' in fieldSchema)) return undefined;
-	return extractDefaults(fieldSchema.items);
 }
 
 /** `fillDefinedValues` is set for array items alone, where the platform fills an item's fields even
@@ -200,22 +162,21 @@ function assignRecursively(
 		}
 
 		if (isPlainObject(currentValue)) {
-			const nestedDefaults = isPlainObject(defaultValue)
-				? defaultValue
-				: ((extractDefaults(fieldSchema) as Record<string, unknown> | undefined) ?? {});
-			assignRecursively(
-				currentValue,
-				// A present nested object otherwise keeps exactly the keys it came with.
-				fillDefinedValues ? nestedDefaults : {},
-				fieldSchema as InputSchema | undefined,
-			);
+			// A present nested object keeps exactly the keys it came with, so outside an array item
+			// there is nothing to fill and no defaults to extract.
+			const nestedDefaults = fillDefinedValues
+				? isPlainObject(defaultValue)
+					? defaultValue
+					: ((extractDefaults(fieldSchema) as Record<string, unknown> | undefined) ?? {})
+				: {};
+			assignRecursively(currentValue, nestedDefaults, fieldSchema as InputSchema | undefined);
 			continue;
 		}
 
 		if (Array.isArray(currentValue)) {
-			const itemDefaults = extractArrayItemDefaults(fieldSchema);
-			if (!isPlainObject(itemDefaults)) continue;
 			const itemSchema = isPlainObject(fieldSchema) ? fieldSchema.items : undefined;
+			const itemDefaults = extractDefaults(itemSchema);
+			if (!isPlainObject(itemDefaults)) continue;
 			for (const item of currentValue) {
 				if (!isPlainObject(item)) continue;
 				assignRecursively(item, itemDefaults, itemSchema as InputSchema | undefined, true);
@@ -224,8 +185,7 @@ function assignRecursively(
 	}
 }
 
-/** The one `lodash.merge` behaviour `extractDefaults` needs, without the dependency: objects merge
- * key by key, arrays and scalars replace wholesale. */
+/** The one `lodash.merge` behaviour `extractDefaults` needs, without the dependency. */
 function deepMerge(base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
 	const merged: Record<string, unknown> = { ...base };
 	for (const [key, value] of Object.entries(overrides)) {
@@ -236,9 +196,9 @@ function deepMerge(base: Record<string, unknown>, overrides: Record<string, unkn
 }
 
 /**
- * Compiled validators, keyed by the schema's serialization: every run start would otherwise recompile
- * the same schema. Bounded and oldest-first evicted, so a long-lived runtime does not keep an entry
- * per schema it has ever seen.
+ * Compiled validators, keyed by the schema's serialization: a run start would otherwise spend ~6ms
+ * recompiling a schema it has already seen. Bounded and evicted first-inserted-first, so a long-lived
+ * runtime does not keep an entry per schema it has ever seen.
  */
 const validatorCache = new Map<string, InputValidator>();
 const VALIDATOR_CACHE_MAX_ENTRIES = 100;
@@ -259,10 +219,8 @@ function compileInputSchemaValidator(schema: InputSchema): InputValidator {
 }
 
 /**
- * The platform's `getAjvValidator` preparation, ported: a required field with a default is optional
- * (there is always a value for it by then), a required array must hold at least one item, and
- * `$schema` is dropped - AJV would otherwise try to fetch the Apify meta-schema it names and fail to
- * compile at all.
+ * Ported from the platform's `getAjvValidator`. `$schema` is dropped because AJV would otherwise try
+ * to fetch the Apify meta-schema it names and fail to compile the schema at all.
  */
 function prepareSchemaForValidation(schema: InputSchema): Record<string, unknown> {
 	const copy = structuredClone(schema) as Record<string, unknown>;
@@ -283,9 +241,4 @@ function prepareSchemaForValidation(schema: InputSchema): Record<string, unknown
 	copy.required = required;
 	delete copy.$schema;
 	return copy;
-}
-
-/** Test-only: a validator compiled against one test's schema must never be reused by the next. */
-export function resetInputSchemaValidatorCacheForTests(): void {
-	validatorCache.clear();
 }

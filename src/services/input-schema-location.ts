@@ -1,32 +1,44 @@
 /**
- * Which input schema a build carries, resolved from the version's `sourceFiles`
- * (`actor-driver.md`'s "Input schema, validation and defaults"). The run-time half - defaults and
- * validation - is `services/input-schema.ts`, which reads only the resolved schema, never the source
- * files again.
+ * Which input schema a build carries, resolved from the version's pushed `sourceFiles`
+ * (`actor-driver.md`'s "Input schema, validation and defaults").
  *
- * The candidate order is `apify-cli`'s own `readInputSchema`, so a developer's local `apify
- * validate-schema` and this build agree on which file is the Actor's schema. Case-insensitive matching
- * (as in `services/dockerfile-location.ts`) is why the CLI's four candidates collapse to two here.
- *
- * Schema files are parsed as JSON5, like `.actor/actor.json` already is: every valid JSON file is
- * valid JSON5, so this only ever accepts more than the platform, never less.
+ * The candidate order is `apify-cli`'s own `readInputSchema`, so a developer's local
+ * `apify validate-schema` and this build agree on which file is the Actor's schema. Case-insensitive
+ * matching is why the CLI's four candidates collapse to the two here.
  */
-import * as path from 'node:path';
 import JSON5 from 'json5';
+import ajv2019Package from 'ajv/dist/2019.js';
+import { validateInputSchema } from '@apify/input_schema';
 
-import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import type { InputSchema, SourceFile } from '../storage/entities.js';
-import { describeInputSchemaDefect } from './input-schema.js';
+import {
+	ACTOR_DIR,
+	escapesActorRootMessage,
+	fallbackWarningLine,
+	findCaseInsensitive,
+	indexSourceFiles,
+	parseActorJson,
+	resolveActorJsonPathField,
+	sourceFileToText,
+	type IndexedFile,
+} from './actor-source-files.js';
 
-const ACTOR_DIR = '.actor';
-const ACTOR_JSON_NAME = `${ACTOR_DIR}/actor.json`;
+// AJV ships as CommonJS, so under this package's ESM resolution its class arrives as the module's
+// `default`. `2019` is the build with draft-2019-09 support, which the Apify input-schema meta-schema
+// requires and the plain build lacks.
+const Ajv2019 = ajv2019Package.default;
+
 /** Checked case-insensitively, so the `INPUT_SCHEMA.json` spelling matches these too. */
 const DEFAULT_SCHEMA_CANDIDATES = [`${ACTOR_DIR}/input_schema.json`, 'input_schema.json'] as const;
 
 /** Why resolution failed. Each one fails the build: an Actor whose declared input contract cannot be
  * read must not be built with that contract silently dropped. */
 export type InputSchemaResolutionFailureReason =
-	'escapes-actor-root' | 'invalid-input-field' | 'unparseable-input-schema' | 'invalid-input-schema';
+	| 'escapes-actor-root'
+	| 'invalid-input-field'
+	| 'unparseable-actor-json'
+	| 'unparseable-input-schema'
+	| 'invalid-input-schema';
 
 /** `none` means the Actor declares no input schema, which is not an error. */
 export type InputSchemaResolution =
@@ -34,35 +46,24 @@ export type InputSchemaResolution =
 	| { outcome: 'none'; logLines: string[] }
 	| { outcome: 'failure'; reason: InputSchemaResolutionFailureReason; message: string };
 
-function sourceFileToText(file: SourceFile): string {
-	return file.format === 'BASE64' ? Buffer.from(file.content, 'base64').toString('utf8') : file.content;
-}
-
-/** Exact-case match wins; otherwise the first match in `sourceFiles` order - the same rule as the
- * Dockerfile lookup's. */
-function findCaseInsensitive(sourceFiles: SourceFile[], candidate: string): SourceFile | undefined {
-	const lowerCandidate = candidate.toLowerCase();
-	let firstMatch: SourceFile | undefined;
-	for (const file of sourceFiles) {
-		const normalizedName = normalizeEntryName(file.name);
-		if (normalizedName.toLowerCase() !== lowerCandidate) continue;
-		if (normalizedName === candidate) return file;
-		firstMatch ??= file;
+/**
+ * `null` for a valid input schema, the defect otherwise. Runs at build time, so a broken schema is
+ * reported where the developer is already looking rather than silently at every later run.
+ */
+export function describeInputSchemaDefect(schema: unknown): string | null {
+	if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+		return 'Input schema must be an object.';
 	}
-	return firstMatch;
-}
-
-/** `.actor/actor.json`'s own path is not case-folded, unlike the schema candidates. */
-function findExact(sourceFiles: SourceFile[], normalizedTarget: string): SourceFile | undefined {
-	return sourceFiles.find((file) => normalizeEntryName(file.name) === normalizedTarget);
-}
-
-function escapesActorRootFailure(rawField: string): InputSchemaResolution {
-	return {
-		outcome: 'failure',
-		reason: 'escapes-actor-root',
-		message: `Input schema path "${rawField}" in .actor/actor.json points outside the Actor root directory.`,
-	};
+	try {
+		// A fresh instance per call: AJV never evicts its internal compiled-schema map, and this runs
+		// once per build, not per request.
+		const ajv = new Ajv2019({ strict: false, unicodeRegExp: false });
+		// `validateInputSchema` normalizes in place, so it must not get the stored schema itself.
+		validateInputSchema(ajv, structuredClone(schema) as Record<string, unknown>);
+		return null;
+	} catch (error) {
+		return (error as Error).message;
+	}
 }
 
 /** One place, so an inline `input` object and a schema file are held to the same standard. */
@@ -83,26 +84,34 @@ function acceptSchema(schema: unknown, source: string, logLines: string[]): Inpu
 	};
 }
 
+function acceptSchemaFile(match: IndexedFile, source: string, logLines: string[]): InputSchemaResolution {
+	let parsed: unknown;
+	try {
+		parsed = JSON5.parse(sourceFileToText(match.file));
+	} catch (error) {
+		return {
+			outcome: 'failure',
+			reason: 'unparseable-input-schema',
+			message: `Could not parse the input schema "${match.normalizedName}": ${(error as Error).message}`,
+		};
+	}
+	return acceptSchema(parsed, source, logLines);
+}
+
 export function resolveInputSchemaLocation(sourceFiles: SourceFile[]): InputSchemaResolution {
+	const indexed = indexSourceFiles(sourceFiles);
 	const logLines: string[] = [];
 
-	const actorJsonFile = findExact(sourceFiles, ACTOR_JSON_NAME);
-	let actorSpecification: unknown;
-	if (actorJsonFile) {
-		try {
-			actorSpecification = JSON5.parse(sourceFileToText(actorJsonFile));
-		} catch {
-			// Deliberately not a failure of its own: `services/dockerfile-location.ts` runs first on the
-			// very same file and already fails the build with its own "Could not parse .actor/actor.json"
-			// message, so reporting it twice (in two different wordings) would only be noise.
-			actorSpecification = undefined;
-		}
+	const actorJson = parseActorJson(sourceFiles);
+	if (actorJson.outcome === 'unparseable') {
+		return { outcome: 'failure', reason: 'unparseable-actor-json', message: actorJson.message };
 	}
+	const specification = actorJson.outcome === 'parsed' ? actorJson.specification : undefined;
 
-	if (actorSpecification !== null && typeof actorSpecification === 'object' && 'input' in actorSpecification) {
-		const field: unknown = actorSpecification.input;
+	if (specification !== null && typeof specification === 'object' && 'input' in specification) {
+		const field: unknown = specification.input;
 
-		// An inline schema object, the other shape the Actor specification allows for this field.
+		// An inline schema, the other shape the Actor specification allows for this field.
 		if (field !== null && typeof field === 'object' && !Array.isArray(field)) {
 			return acceptSchema(field, 'the "input" field in .actor/actor.json', logLines);
 		}
@@ -115,59 +124,27 @@ export function resolveInputSchemaLocation(sourceFiles: SourceFile[]): InputSche
 			};
 		}
 
-		if (field === '') {
-			logLines.push(
-				'Warning: "" (from the "input" field in .actor/actor.json) is not in the pushed source; falling back to the default locations.\n',
-			);
-		} else if (field.startsWith('/')) {
-			return escapesActorRootFailure(field);
-		} else {
-			const joined = normalizeEntryName(path.posix.join(ACTOR_DIR, field));
-			if (joined === '..' || joined.startsWith('../')) {
-				return escapesActorRootFailure(field);
-			}
-
-			const match = findCaseInsensitive(sourceFiles, joined);
-			if (match) {
-				const parsed = parseSchemaFile(match);
-				if (parsed.outcome === 'failure') return parsed;
-				return acceptSchema(
-					parsed.schema,
-					`"${normalizeEntryName(match.name)}" (the "input" field in .actor/actor.json)`,
-					logLines,
-				);
-			}
-
-			// A value naming no pushed file falls through to the default locations instead of failing -
-			// the same tolerance `apify-cli` shows locally (it warns and keeps looking), and the same one
-			// the Dockerfile field already has here.
-			logLines.push(
-				`Warning: "${joined}" (from the "input" field in .actor/actor.json) is not in the pushed source; falling back to the default locations.\n`,
-			);
+		const resolved = resolveActorJsonPathField(indexed, field);
+		if (resolved.outcome === 'escapes-actor-root') {
+			return {
+				outcome: 'failure',
+				reason: 'escapes-actor-root',
+				message: escapesActorRootMessage(field, 'Input schema'),
+			};
 		}
+		if (resolved.outcome === 'match') {
+			const source = `"${resolved.file.normalizedName}" (the "input" field in .actor/actor.json)`;
+			return acceptSchemaFile(resolved.file, source, logLines);
+		}
+		// Falls through instead of failing - the tolerance `apify-cli` shows locally, and the one the
+		// Dockerfile field already has here.
+		logLines.push(fallbackWarningLine(resolved.shownPath, 'input'));
 	}
 
 	for (const candidate of DEFAULT_SCHEMA_CANDIDATES) {
-		const match = findCaseInsensitive(sourceFiles, normalizeEntryName(candidate));
-		if (!match) continue;
-		const parsed = parseSchemaFile(match);
-		if (parsed.outcome === 'failure') return parsed;
-		return acceptSchema(parsed.schema, `"${normalizeEntryName(match.name)}"`, logLines);
+		const match = findCaseInsensitive(indexed, candidate);
+		if (match) return acceptSchemaFile(match, `"${match.normalizedName}"`, logLines);
 	}
 
 	return { outcome: 'none', logLines };
-}
-
-type SchemaFileParse = { outcome: 'parsed'; schema: unknown } | Extract<InputSchemaResolution, { outcome: 'failure' }>;
-
-function parseSchemaFile(file: SourceFile): SchemaFileParse {
-	try {
-		return { outcome: 'parsed', schema: JSON5.parse(sourceFileToText(file)) as unknown };
-	} catch (error) {
-		return {
-			outcome: 'failure',
-			reason: 'unparseable-input-schema',
-			message: `Could not parse the input schema "${normalizeEntryName(file.name)}": ${(error as Error).message}`,
-		};
-	}
 }

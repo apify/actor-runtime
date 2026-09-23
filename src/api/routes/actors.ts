@@ -3,7 +3,14 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sendPaginated, sortByTimestamp } from '../envelope.js';
-import { ApiError, cannotSetPricingOnCreate, recordNotFound, invalidRequest } from '../errors.js';
+import {
+	ApiError,
+	cannotSetPricingOnCreate,
+	invalidInput,
+	invalidInputSchema,
+	invalidRequest,
+	recordNotFound,
+} from '../errors.js';
 import { h, jsonBody, paginationParams, queryBoolean, queryNumber, queryString, rawBody } from '../handler.js';
 import {
 	addOrReplaceVersion,
@@ -25,17 +32,12 @@ import {
 import { listOwnedRuns, startRun, waitForRunFinish } from '../../services/runs.js';
 import { getRegistries } from '../../storage/registries.js';
 import { actorDto, buildDto, runDto } from '../dto/actors.js';
-import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord, BuildRecord } from '../../storage/entities.js';
+import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord } from '../../storage/entities.js';
 import type { ApiServerDeps } from '../server.js';
 import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
 import { validatePricingInfosUpdate } from '../../services/pricing.js';
-import {
-	describeInputProcessingFailure,
-	processActorInput,
-	type ActorInput,
-	type InputProcessingResult,
-} from '../../services/input-schema.js';
+import { resolveBuildInput } from '../../services/input-schema.js';
 
 /**
  * `undefined` when the body does not mention the field; a body that does but is invalid throws, with the
@@ -255,23 +257,6 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		}),
 	);
 
-	/** Status and error `type` are the route's concern, the message text the service's - the split
-	 * `api/routes/dev-folder.ts` already uses. Both are the real platform's for the same input. */
-	function inputApiError(result: Exclude<InputProcessingResult, { kind: 'ok' }>): ApiError {
-		const message = describeInputProcessingFailure(result);
-		const type = result.kind === 'invalid-schema' ? 'invalid-input-schema' : 'invalid-input';
-		return new ApiError(400, type, message);
-	}
-
-	/** The caller's bytes as-is for a build with no input schema; otherwise the validated input with
-	 * the schema's defaults applied - which is why a request carrying no body can still yield one. */
-	function resolveRunInput(build: BuildRecord, raw: ActorInput | undefined): ActorInput | undefined {
-		if (!build.inputSchema) return raw;
-		const processed = processActorInput(raw, build.inputSchema);
-		if (processed.kind !== 'ok') throw inputApiError(processed);
-		return processed.input;
-	}
-
 	router.post(
 		'/actors/:actorId/runs',
 		h(async (req, res) => {
@@ -298,9 +283,15 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const build = lookup.build;
 
 			const body = rawBody(req);
-			const rawInput =
-				body.length > 0 ? { body, contentType: req.header('content-type') ?? 'application/json' } : undefined;
-			const input = resolveRunInput(build, rawInput);
+			const processed = resolveBuildInput(
+				build,
+				body.length > 0 ? { body, contentType: req.header('content-type') ?? 'application/json' } : undefined,
+			);
+			if (processed.kind !== 'ok') {
+				throw processed.kind === 'invalid-input-schema'
+					? invalidInputSchema(processed.message)
+					: invalidInput(processed.message);
+			}
 
 			// `resolveProxyPassword(requireUser(req))` is the *run owner's* proxy password, not just "the
 			// caller's": `actor` was resolved via `resolveActorParam(req)` above, so
@@ -308,7 +299,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			// their own Actor - which makes the two the same user record (`actor-driver.md`'s "one
 			// harvested-per-account password used specifically for each user").
 			const run = await startRun(deps.driver, actor, build, {
-				input,
+				input: processed.input,
 				memoryMbytes: queryNumber(req, 'memory'),
 				timeoutSecs: queryNumber(req, 'timeout'),
 				maxTotalChargeUsd,
