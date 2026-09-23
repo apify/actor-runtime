@@ -511,7 +511,8 @@ describe('run usage estimate', () => {
 		const usage = run.usage as Record<string, number>;
 		const usageUsd = run.usageUsd as Record<string, number>;
 		expect(usage.ACTOR_COMPUTE_UNITS).toBe(stats.computeUnits);
-		expect(usageUsd.ACTOR_COMPUTE_UNITS).toBeCloseTo(stats.computeUnits! * 0.2, 6);
+		// The runtime's own rounding rather than a tolerance - see the same assertion in the e2e test.
+		expect(usageUsd.ACTOR_COMPUTE_UNITS).toBe(Number((stats.computeUnits! * 0.2).toFixed(6)));
 		expect(run.usageTotalUsd).toBe(usageUsd.ACTOR_COMPUTE_UNITS);
 		expect(run).not.toHaveProperty('eventUsage');
 
