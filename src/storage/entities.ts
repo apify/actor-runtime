@@ -198,8 +198,18 @@ export interface BuildRecord {
 	 * schema of the build it resolved, never another tag's more recently pushed one. Absent when the
 	 * Actor declares none - such a run takes its input exactly as the caller sent it. */
 	inputSchema?: InputSchema;
+	/** The memory fields this build's `.actor/actor.json` declared, build-specific like `inputSchema`.
+	 * Absent when it declares none. */
+	memorySettings?: ActorMemorySettings;
 	exitCode?: number;
 	statusMessage?: string;
+}
+
+/** `.actor/actor.json`'s run-memory fields; `defaultMemoryMbytes` may be a memory expression. */
+export interface ActorMemorySettings {
+	defaultMemoryMbytes?: string | number;
+	minMemoryMbytes?: number;
+	maxMemoryMbytes?: number;
 }
 
 export interface RunRecord {

@@ -22,6 +22,7 @@ import { dedicatedCpusFor, platformIncompatibleMemoryWarning } from '../resource
 import { CONTAINER_EVENTS_WS_BASE_URL } from '../config.js';
 import { formatRuntimeLogLines } from '../runtime-log.js';
 import { getRunTelemetry } from './events-channel.js';
+import { resolveRunMemory } from './actor-memory.js';
 import { initialChargedEventCounts, resolveRunPricingInfo } from './pricing.js';
 import { consumeStandbyRunFinishing } from './standby-finish.js';
 import {
@@ -220,7 +221,19 @@ export async function startRun(
 		await store.setValue('INPUT', options.input.body, { contentType: options.input.contentType });
 	}
 
-	const memoryMbytes = options.memoryMbytes ?? DEFAULT_MEMORY_MBYTES;
+	const buildTag = options.build ?? DEFAULT_BUILD_TAG;
+	const timeoutSecs = options.timeoutSecs ?? DEFAULT_TIMEOUT_SECS;
+	const { memoryMbytes, logLines: memoryLogLines } = await resolveRunMemory(build.memorySettings, {
+		requestedMemoryMbytes: options.memoryMbytes,
+		fallbackMemoryMbytes: DEFAULT_MEMORY_MBYTES,
+		runOptions: {
+			build: buildTag,
+			timeoutSecs,
+			diskMbytes: DEFAULT_MEMORY_MBYTES * DISK_MBYTES_PER_MEMORY_MBYTE,
+			...(options.maxTotalChargeUsd !== undefined ? { maxTotalChargeUsd: options.maxTotalChargeUsd } : {}),
+		},
+		input: options.input,
+	});
 	// Resolved once: a later pricing change must not reprice a run that already exists.
 	const pricingInfo = resolveRunPricingInfo(actor.pricingInfos);
 	const chargedEventCounts = initialChargedEventCounts(pricingInfo, memoryMbytes);
@@ -236,9 +249,9 @@ export async function startRun(
 		defaultKeyValueStoreId: keyValueStore.id,
 		defaultRequestQueueId: requestQueue.id,
 		options: {
-			build: options.build ?? DEFAULT_BUILD_TAG,
+			build: buildTag,
 			memoryMbytes,
-			timeoutSecs: options.timeoutSecs ?? DEFAULT_TIMEOUT_SECS,
+			timeoutSecs,
 			diskMbytes: memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
 			...(options.maxTotalChargeUsd !== undefined ? { maxTotalChargeUsd: options.maxTotalChargeUsd } : {}),
 		},
@@ -261,7 +274,8 @@ export async function startRun(
 	await runs.set(record.id, record);
 	registerDefaultDatasetForCharging(record);
 
-	// Both lines are about what the caller asked for, so they are written before the run does anything.
+	// These lines are about what the caller asked for, so they are written before the run does anything.
+	for (const line of memoryLogLines) appendRuntimeLog(record.id, line);
 	const memoryWarning = platformIncompatibleMemoryWarning(memoryMbytes);
 	if (memoryWarning) appendRuntimeLog(record.id, memoryWarning);
 	const startCharge = actorStartChargeMessage(record);

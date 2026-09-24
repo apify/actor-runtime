@@ -10,6 +10,7 @@ import { sourceFileToText } from './actor-source-files.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
 import { resolveInputSchemaLocation } from './input-schema-location.js';
+import { resolveActorMemorySettings } from './actor-memory.js';
 import { appendLog, appendRuntimeLog, flushLog, markLogTerminal } from './logs.js';
 import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
 
@@ -227,6 +228,13 @@ export async function runBuildInBackground(
 	for (const line of inputSchemaResolution.logLines) appendRuntimeLog(record.id, line);
 	const inputSchema = inputSchemaResolution.outcome === 'resolved' ? inputSchemaResolution.schema : undefined;
 
+	const memoryResolution = resolveActorMemorySettings(version.sourceFiles);
+	if (memoryResolution.outcome === 'failure') {
+		await failBuild(record.id, memoryResolution.message);
+		return;
+	}
+	const memorySettings = memoryResolution.settings;
+
 	const sourceFiles: SourceFile[] = qualifyDockerfileImages(
 		dockerfileResolution.outcome === 'default'
 			? [...version.sourceFiles, dockerfileResolution.extraSourceFile]
@@ -283,6 +291,7 @@ export async function runBuildInBackground(
 				? { imageWorkingDirectory: outcome.imageWorkingDirectory }
 				: {}),
 			...(inputSchema !== undefined ? { inputSchema } : {}),
+			...(memorySettings !== undefined ? { memorySettings } : {}),
 		});
 		if (succeeded?.status !== 'SUCCEEDED') {
 			await updateActor(actor.id, (current) => {

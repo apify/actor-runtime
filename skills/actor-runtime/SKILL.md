@@ -75,6 +75,14 @@ valid: Field input.maxPages must be >= 1`); no run is created and no container s
 - Two local differences: Apify Proxy groups are not checked (any `apifyProxyGroups` selection is
   accepted), and encrypted secret input fields are not supported.
 
+## Run memory
+
+With no `-m`/`--memory`, a run gets `defaultMemoryMbytes` from `.actor/actor.json` - a number or a
+memory expression over the input, evaluated as the platform does - or 1024 MB. Any memory, explicit
+or not, is then clamped to the Actor's `minMemoryMbytes` / `maxMemoryMbytes`, and the run log says so.
+An expression that fails falls back to 1024 MB with a warning in the run log. The fields come from the
+build, so changing them needs an `apify push`.
+
 ## Iterate without rebuilding (dev folder)
 
 After that first `apify push`, the runtime registers the pushed directory as the Actor's **dev
