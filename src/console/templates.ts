@@ -377,3 +377,36 @@ export function definitionList(fields: Array<[string, unknown]>): string {
 	const rows = fields.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${renderValue(value)}</dd>`).join('');
 	return `<dl>${rows}</dl>`;
 }
+
+/**
+ * The standby URL with the owner's token in it, ready to open or copy. The token is masked on screen
+ * only, so it does not end up in a screenshot or a screen share; the link and the copied text carry it.
+ */
+export function standbyLink(standbyUrl: string, token: string): string {
+	const full = `${standbyUrl}/?token=${encodeURIComponent(token)}`;
+	return (
+		'<p class="standby-link">' +
+		`<a href="${escapeHtml(full)}" target="_blank" rel="noopener">${escapeHtml(standbyUrl)}/?token=••••••••</a> ` +
+		`<button type="button" data-copy="${escapeHtml(full)}">Copy link</button>` +
+		'</p>' +
+		`<script>
+for (const button of document.querySelectorAll('button[data-copy]')) {
+	button.addEventListener('click', async () => {
+		const text = button.dataset.copy;
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			// No clipboard API outside a secure context (the console opened by a non-localhost address).
+			const field = Object.assign(document.createElement('textarea'), { value: text });
+			document.body.append(field);
+			field.select();
+			document.execCommand('copy');
+			field.remove();
+		}
+		button.textContent = 'Copied';
+		setTimeout(() => (button.textContent = 'Copy link'), 1500);
+	});
+}
+</script>`
+	);
+}

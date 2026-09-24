@@ -61,6 +61,7 @@ import {
 	migrateRunForm,
 	pricingSection,
 	settingsForm,
+	standbyLink,
 	table,
 	usageSection,
 	type LinkedCell,
@@ -201,6 +202,10 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const pool = standbyPoolSnapshot(actor.id);
 		return (
 			'<h2>Actor Standby</h2>' +
+			(owner
+				? "<p>Open or copy the standby URL with the owner's token already in it:</p>" +
+					standbyLink(url, owner.token)
+				: '') +
 			definitionList([
 				['standbyUrl', url],
 				['build', config.build],
@@ -210,16 +215,19 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				['idleTimeoutSecs', config.idleTimeoutSecs],
 				['shouldPassActorInput', String(config.shouldPassActorInput)],
 			]) +
-			table(
-				['runId', 'open requests', 'ready'],
-				pool.map((entry) => [
-					entry.runId
-						? { text: entry.runId, href: `/runs/${encodeURIComponent(entry.runId)}` }
-						: '(starting)',
-					String(entry.openRequests),
-					entry.ready ? 'yes' : 'no',
-				]),
-			)
+			'<h3>Standby runs</h3>' +
+			(pool.length === 0
+				? '<p class="empty">(none running - the next request starts one)</p>'
+				: table(
+						['runId', 'open requests', 'ready'],
+						pool.map((entry) => [
+							entry.runId
+								? { text: entry.runId, href: `/runs/${encodeURIComponent(entry.runId)}` }
+								: '(starting)',
+							String(entry.openRequests),
+							entry.ready ? 'yes' : 'no',
+						]),
+					))
 		);
 	}
 

@@ -118,5 +118,7 @@
 ## Actor Standby (Actor detail view)
 
 - The Actor detail view shows whether Actor Standby is on and, when it is, the standby URL, the settings and
-  the Actor's live standby runs with their open requests. Read-only: the settings are changed through the
+  the Actor's live standby runs with their open requests.
+- It also offers the standby URL with the owner's token in it, as a link to open and a button that copies
+  it; the token is masked in the text shown on the page. Read-only: the settings are changed through the
   API (`api.md`). The run detail view shows each run's origin.
