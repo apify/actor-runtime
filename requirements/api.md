@@ -156,16 +156,13 @@
   `null` while Standby is off. `POST` and `PUT /v2/actors` accept `actorStandby`; a partial object is merged
   over the stored settings, over the defaults. An invalid one is `400` `invalid-request`, changing nothing;
   a `tenancy` other than `SINGLE_TENANT` is invalid.
-- The standby URL has the platform's host-based shape, `http://<username>--<actor-name>.localhost:3333`:
-  the Actor owns `/` of its own origin, as on `*.apify.actor`, so a web UI it serves can use root-relative
-  links. Several standby Actors are served side by side, one hostname each.
-- The same Actor is also served at `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`,
-  for clients that do not resolve `*.localhost`, and at
-  `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>` from Actor containers. The Actor
-  object read from an Actor container carries this container form as its `standbyUrl`.
-- The Actor id also works in place of `<username>--<actor-name>` in every form. Everything after the
-  standby URL - path, query, method, headers, body, websocket upgrades - reaches the Actor's server
-  unchanged, the token included.
+- The standby URL is `http://<username>--<actor-name>.localhost:3333`, the local `*.apify.actor`: each
+  Actor has its own origin and owns its whole path, so web UIs served by Actors work as on the platform.
+- Clients that do not resolve `*.localhost` use `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`;
+  other Actors use `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>`, which is the
+  `standbyUrl` they read through the API.
+- The Actor id can replace `<username>--<actor-name>`. Path, query, method, headers, body and websockets
+  reach the Actor's server unchanged.
 - Authenticated like the API (`Authorization: Bearer`, `?token=`), plus the platform's
   `x-apify-authorization` header; only the Actor's owner is served.
 - Errors, as `{ "error": { "type", "message" } }`: no token `401` `user-not-authenticated`; no such Actor of

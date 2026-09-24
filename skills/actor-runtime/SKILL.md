@@ -192,7 +192,7 @@ curl "http://<username>--<actor-name>.localhost:3333/some/path?token=<token>"
 curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/path?token=<token>"
 ```
 
-- The Actor's console page has the same URL with your token already in it (masked on screen), as a link
+- The Actor's console page has the `*.localhost` standby URL with your token already in it (masked on screen), as a link
   to click and a Copy link button - the quickest way to try it in a browser.
 - The first request starts a standby run (origin `STANDBY`, no timeout, the standby build and memory) and
   waits until its server answers on `ACTOR_STANDBY_PORT` (4321); later requests reuse it. More runs start

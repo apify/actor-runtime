@@ -473,10 +473,10 @@ describe('standby router', () => {
 			expect(html).toContain(`/runs/${served.runId}`);
 			// A ready-to-use link carries the owner's token, masked on screen.
 			const label = url.split('/').pop()!;
-			const withToken = `http://localhost:3333/actor-runtime/standby/${label}/?token=${server.token}`;
+			const withToken = `http://${label}.localhost:3333/?token=${server.token}`;
 			expect(html).toContain(`href="${withToken}"`);
 			expect(html).toContain(`data-copy="${withToken}"`);
-			expect(html).toContain(`/actor-runtime/standby/${label}/?token=••••••••</a>`);
+			expect(html).toContain(`http://${label}.localhost:3333/?token=••••••••</a>`);
 			expect(html).not.toMatch(new RegExp(`>[^<]*${server.token}[^<]*<`));
 			const runHtml = await (await fetch(`http://127.0.0.1:${port}/runs/${served.runId}`)).text();
 			expect(runHtml).toContain('STANDBY');
