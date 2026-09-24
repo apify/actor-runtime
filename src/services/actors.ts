@@ -1,5 +1,5 @@
 import { generateId } from '../storage/ids.js';
-import type { ActorRecord, ActorVersionRecord, UserRecord } from '../storage/entities.js';
+import type { ActorRecord, ActorStandbyRecord, ActorVersionRecord, UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { validatePricingInfosUpdate, type InvalidPricingInfos } from './pricing.js';
 import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
@@ -12,6 +12,7 @@ export interface CreateActorInput {
 	name: string;
 	title?: string;
 	versions?: ActorVersionRecord[];
+	actorStandby?: ActorStandbyRecord;
 }
 
 export async function createActor(userId: string, input: CreateActorInput): Promise<ActorRecord> {
@@ -25,6 +26,7 @@ export async function createActor(userId: string, input: CreateActorInput): Prom
 		modifiedAt: now,
 		versions: input.versions ?? [],
 		taggedBuilds: {},
+		...(input.actorStandby ? { actorStandby: input.actorStandby } : {}),
 	};
 	await getRegistries().actors.set(record.id, record);
 	return record;

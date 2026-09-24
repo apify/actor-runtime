@@ -24,7 +24,8 @@
   with a clear status message, while every other endpoint (storages, actor/build/run records,
   console) still works.
 - Both ports are fixed and not configurable.
-- Port 3333 also serves the per-run events websocket (`api.md`); no additional port is published for it.
+- Port 3333 also serves the per-run events websocket and standby Actors (`api.md`); no additional port is
+  published for either.
 - **Debug mode is the one exception to "no other Actor container port is ever published"**
   (`actor-driver.md`'s "Debug mode" section): when debug mode is on for an Actor, that Actor's runs get a
   port published on the host, bound to `127.0.0.1` (`5678` Python / `9229` Node by default, per-Actor

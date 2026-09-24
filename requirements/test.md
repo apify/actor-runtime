@@ -17,6 +17,7 @@
 - **A second narrow exception of the same kind**: the browser-view e2e test may open the console's viewer
   page and its websocket directly, to emulate a developer's browser opening the view. Everything else in it
   goes through `apify` commands.
+- **A third narrow exception**: the Standby e2e test calls standby URLs directly (HTTP, websocket).
 - For asserting the test results, the tests must inspect the return values of the Apify cli commands.
 - The e2e suite requires a reachable Docker daemon (it builds and runs real Actor containers) and
   detects its absence, failing in such case.
@@ -43,3 +44,8 @@ Test case must verify full Actor development flow:
 - For each Playwright sample Actor (`sample_actor_playwright`, `sample_actor_playwright_py`): push, turn browser view on, start a run
 - Assert the run log names the viewer URL, the view is reachable while the run is going, the run finishes `SUCCEEDED` with an input-dependent `itemCount`, and the view is gone once the run has ended
 - With the toggle cleared, a plain `apify call` of the same Actor runs with no browser-view line in its log
+
+## Actor Standby
+
+- Each standby sample, pushed: its requests share one `STANDBY` run, which ends `SUCCEEDED` once idle, and
+  the next request starts a new one; `sample_actor_standby_web` is also reachable from another Actor's run.

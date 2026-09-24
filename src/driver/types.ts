@@ -32,7 +32,10 @@ export interface RunContext {
 	imageId: string;
 	env: Record<string, string>;
 	memoryMbytes: number;
+	/** `0` means no timeout. */
 	timeoutSecs: number;
+	/** Set for a standby run: the port its HTTP server listens on, which the runtime must be able to reach. */
+	containerServerPort?: number;
 	devMount?: DevFolderMount;
 	debug?: DebugRunTarget;
 	/** Volume from `BrowserViewerHandle`, mounted over the Actor container's `/tmp/.X11-unix`. */
@@ -114,6 +117,12 @@ export interface RunOutcome {
 	 * this to the `TIMED-OUT` status instead of `FAILED`.
 	 */
 	timedOut: boolean;
+}
+
+/** Where this process reaches a run's HTTP server. */
+export interface ContainerServerAddress {
+	host: string;
+	port: number;
 }
 
 /**
@@ -207,4 +216,8 @@ export interface Driver {
 
 	/** Removes the run's sidecar and volume. Idempotent; never rejects. */
 	stopBrowserViewer(runId: string): Promise<void>;
+
+	/** Where the run's current container serves `RunContext.containerServerPort`, or `undefined` while
+	 * the run has no started container with one. Changes when a migration restarts the container. */
+	containerServerAddress(runId: string): Promise<ContainerServerAddress | undefined>;
 }

@@ -66,6 +66,9 @@ function devFolderDriver(
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -803,6 +806,9 @@ function devMountCapturingDriver(): {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},

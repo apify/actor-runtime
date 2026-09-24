@@ -241,6 +241,12 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   leaves it to be discovered on the bill.
 - The pricing can also be set from the console (`console.md`).
 
+# Actor Standby
+
+- Implemented as on the platform (settings, `usesStandbyMode`, scaling, readiness, idle shutdown, env vars).
+- Differences: single-tenant, owner-only; a new build of the standby tag replaces older standby runs; a
+  runtime restart aborts standby runs.
+
 # Users
 
 - Users are created adhoc by the runtime for each new token used in the API call (`cli.md`'s User bootstrap).
@@ -253,8 +259,7 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   default storage ids, or any other contract var the runtime itself sets.
 - `APIFY_IS_AT_HOME=1` (mirrors the real platform; an SDK/client instantiated
   in the container reports `isAtHome`/`is_at_home = true`).
-- `APIFY_META_ORIGIN` — `API` for ordinary runs (every local run arrives via
-  the API, apify-cli included)
+- `APIFY_META_ORIGIN` — `STANDBY` for a standby run, `API` for every other run
 - `APIFY_API_BASE_URL` — the runtime's own API, reachable by name from any
   Actor container on the shared Docker network (see "Networking" above).
 - `APIFY_TOKEN` — the run owner's token

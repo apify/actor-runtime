@@ -1,6 +1,6 @@
 ---
 name: apify-actor-runtime
-description: Drive the local Apify Actor runtime - a self-contained local Apify platform that emulates the Apify API and console so Actors can be developed, run and debugged without the cloud. Covers pointing the Apify CLI at it, the no-rebuild dev-folder loop, IDE debugging, watching a Playwright/Puppeteer browser, migration testing, pay-per-event pricing and run cost estimates, and relaying unimplemented calls to the real platform.
+description: Drive the local Apify Actor runtime - a self-contained local Apify platform that emulates the Apify API and console so Actors can be developed, run and debugged without the cloud. Covers pointing the Apify CLI at it, the no-rebuild dev-folder loop, IDE debugging, watching a Playwright/Puppeteer browser, Actor Standby servers, migration testing, pay-per-event pricing and run cost estimates, and relaying unimplemented calls to the real platform.
 ---
 
 # Local Apify Actor runtime
@@ -186,6 +186,46 @@ Read the outcome off the run object, `apify api GET actor-runs/<runId>`, or the 
   transfer and proxy are not metered. On the platform a user of a pay-per-event Actor pays only the
   events unless the pricing sets `isPPEPlatformUsagePaidByUser`.
 
+## Run an Actor server (Actor Standby)
+
+An Actor with Standby enabled is served over HTTP, as on the platform. `"usesStandbyMode": true` in
+`.actor/actor.json` makes `apify push` enable it; `apify api GET v2/actors/<actorId>` then shows the
+`actorStandby` settings and the Actor's `standbyUrl`:
+
+```sh
+apify push
+# The standby URL, as on the platform (<username>--<actor-name>.apify.actor); open it in a browser too:
+curl "http://<username>--<actor-name>.localhost:3333/some/path?token=<token>"
+# The same Actor, for clients that do not resolve *.localhost (older curl, many Node/Python clients):
+curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/path?token=<token>"
+```
+
+- The Actor's console page has the `*.localhost` standby URL with your token already in it (masked on screen), as a link
+  to click and a Copy link button - the quickest way to try it in a browser.
+- The first request starts a standby run (origin `STANDBY`, no timeout, the standby build and memory) and
+  waits until its server answers on `ACTOR_STANDBY_PORT` (4321); later requests reuse it. More runs start
+  once concurrent requests exceed `desiredRequestsPerActorRun` / `maxRequestsPerActorRun`.
+- Everything after the standby URL - path, query, headers, body, websockets - reaches the Actor unchanged.
+  The token (`?token=`, `Authorization: Bearer`) is required, and only the Actor's owner is served.
+  The Actor owns `/` of the `*.localhost` URL, as on the platform, so an Actor's web UI with root-relative
+  links (`fetch('/api/...')`) works; under the path form it would not. The Actor id can stand in for
+  `<username>--<actor-name>` in every form.
+- From another Actor's container use `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>`;
+  the Actor object read from inside a container already carries that as its `standbyUrl`.
+- A run idle for `idleTimeoutSecs` (300 by default) gets the `aborting` event, is stopped 15 s later and
+  ends `SUCCEEDED`. Shorten it while developing:
+  `apify api PUT v2/actors/<actorId> --body '{"actorStandby":{"idleTimeoutSecs":10}}'`.
+- After `apify push` the next request is served by a run of the new build; older runs finish once idle. A
+  dev-folder edit reaches only the next standby run - abort the current one (`apify runs abort <runId>`)
+  to pick it up sooner.
+- A request that cannot be served says why: `standby-not-enabled`, `standby-run-finished` (the run
+  crashed before its server came up - read its log), `standby-run-not-ready` (nothing listened on the port
+  within 180 s).
+- `apify call` still starts an ordinary `API` run of the same Actor. `sample_actor_standby_ts` and
+  `sample_actor_standby_py` are complete Actor servers (JSON, request body, Server-Sent Events, websocket,
+  graceful shutdown) to start from; `sample_actor_standby_web` serves a web page and, in an ordinary run,
+  calls a standby Actor from its container. Multi-tenant Standby and Standby for tasks are not emulated.
+
 ## Test how an Actor handles a platform migration
 
 While a run is `RUNNING`:
@@ -241,7 +281,7 @@ a later step misses. Only a call naming an Actor this runtime does not know is r
   `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
   failed runs. `client.actor(id).lastRun()` in the SDKs uses these.
 - The console at `http://localhost:3000` shows the same objects, plus the pricing and dev-folder forms,
-  each run's usage and cost, the Migrate button and the browser view.
+  each run's usage and cost, the Migrate button, the browser view and an Actor's standby runs.
 - The runtime's data directory holds every storage, build and run record on disk. Read it freely;
   write to it only through the API, never by editing the files.
 

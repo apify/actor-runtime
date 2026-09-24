@@ -21,7 +21,7 @@ import {
 	waitForHttpOk,
 } from './helpers/docker.js';
 import { CRAWL_START_URL } from './helpers/browser-view-suite.js';
-import { CONSOLE_URL, readMirrorGreeting } from './helpers/console-view.js';
+import { CONSOLE_URL, fetchConsole, readMirrorGreeting } from './helpers/console-view.js';
 import { withRunLogOnFailure } from './helpers/run-log.js';
 import { waitFor } from './helpers/wait.js';
 import {
@@ -311,7 +311,7 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			expect(finalLog).toContain(EDITED_MARKER);
 			expect(finalLog).not.toContain(ORIGINAL_MARKER);
 
-			const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+			const endedPage = await fetchConsole(`/runs/${run.id}/browser`);
 			expect(await endedPage.text()).toContain('This run has ended');
 			await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 		},

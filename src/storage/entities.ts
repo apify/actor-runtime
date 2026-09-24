@@ -125,6 +125,19 @@ export interface RunPricingInfoRecord {
 	};
 }
 
+/** The platform's `actorStandby` Actor field, single-tenant only (`services/standby-config.ts`). */
+export interface ActorStandbyRecord {
+	isEnabled: boolean;
+	disableStandbyFieldsOverride: boolean;
+	tenancy: 'SINGLE_TENANT';
+	desiredRequestsPerActorRun: number;
+	maxRequestsPerActorRun: number;
+	idleTimeoutSecs: number;
+	build: string;
+	memoryMbytes: number;
+	shouldPassActorInput: boolean;
+}
+
 export interface ActorRecord {
 	id: string;
 	userId: string;
@@ -136,6 +149,8 @@ export interface ActorRecord {
 	/** The Actor's pricing history (`actor-driver.md`). Unlike the `local*` fields below, it is exposed
 	 * on `/v2`. Absent or empty means the Actor is free. */
 	pricingInfos?: ActorPricingInfoRecord[];
+	/** Exposed on `/v2`; absent until the Actor is first given one. */
+	actorStandby?: ActorStandbyRecord;
 	/** tag -> latest successful build for that tag; `apify push` polls this after a build. */
 	taggedBuilds: Record<string, { buildId: string; buildNumber: string }>;
 	/** Host path bind-mounted over the image's working directory at run start (`actor-driver.md`). Set or
@@ -211,6 +226,7 @@ export interface RunRecord {
 	defaultRequestQueueId: string;
 	options: {
 		memoryMbytes: number;
+		/** `0` means no timeout - only a standby run has none. */
 		timeoutSecs: number;
 		/** Which build tag or build number this run used - the real platform's `options.build`
 		 * (the public API's `ActorRunOptions.build`). Optional here (unlike the always-populated real

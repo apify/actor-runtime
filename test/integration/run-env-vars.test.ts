@@ -37,6 +37,9 @@ function envCapturingDriver(): { driver: Driver; getCapturedEnv: () => Record<st
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
