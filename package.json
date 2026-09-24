@@ -26,6 +26,7 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
+		"@apify/actor-memory-expression": "^1.0.1",
 		"@apify/input_schema": "^3.29.2",
 		"@crawlee/core": "4.0.0-beta.145",
 		"@crawlee/fs-storage": "4.0.0-beta.145",

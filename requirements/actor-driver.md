@@ -183,6 +183,18 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Run details and the run log are kept in internal records that persist across runtime restarts
   (`storage.md`).
 
+## Run memory
+
+- A run's memory is, in order: the caller's `memory`; else `defaultMemoryMbytes` from the build's
+  `.actor/actor.json`; else 1024 MB.
+- `defaultMemoryMbytes` is a number or a platform memory expression over the run's input and options,
+  rounded to a power of two as on the platform. An expression that fails to evaluate falls back to
+  1024 MB, with a warning in the run log.
+- The result, including an explicit `memory`, is clamped to the build's `minMemoryMbytes` /
+  `maxMemoryMbytes`; an adjustment is noted in the run log.
+- A memory field outside `actor.json`'s schema fails the build.
+- The fields come from the build, so a change needs a rebuild.
+
 ## Resource limits
 
 - Every run's container has a hard memory limit and a hard CPU limit. Memory is the run's `memoryMbytes`;
