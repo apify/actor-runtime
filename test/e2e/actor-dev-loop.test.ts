@@ -151,14 +151,14 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 		});
 		expect(JSON.parse(storedInput) as Record<string, unknown>).toEqual({
 			startUrl: 'https://crawlee.dev/',
-			maxPages: 2,
+			maxPages: 10,
 		});
 
 		const infoOutput = apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], {
 			cwd: actorDir,
 			env,
 		});
-		expect((JSON.parse(infoOutput) as DatasetInfoResult).itemCount).toBe(2);
+		expect((JSON.parse(infoOutput) as DatasetInfoResult).itemCount).toBe(10);
 
 		// `maxPages` has `minimum: 1` - the run is refused before any container starts, and the CLI
 		// surfaces the runtime's validation message.

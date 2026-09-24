@@ -14,7 +14,7 @@
 			"title": "Max pages",
 			"type": "integer",
 			"description": "The maximum number of pages to crawl, following same-hostname links from the start URL.",
-			"default": 2,
+			"default": 10,
 			"minimum": 1
 		}
 	},
