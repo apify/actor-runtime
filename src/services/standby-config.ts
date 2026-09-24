@@ -3,7 +3,7 @@
  * defaults and validation rules (apify-core's `ActorStandbySchema`), single-tenant only.
  */
 import type { ActorRecord, ActorStandbyRecord, SourceFile } from '../storage/entities.js';
-import { API_PORT } from '../config.js';
+import { API_PORT, CONTAINER_API_ALIAS, CONTAINER_API_BASE_URL } from '../config.js';
 import { parseActorJson } from './actor-source-files.js';
 import { DEFAULT_BUILD_TAG } from './actors.js';
 
@@ -110,9 +110,23 @@ export function standbyLabel(actor: ActorRecord, username: string): string {
 	return `${dnsFriendly(username)}--${actor.name.toLowerCase()}`;
 }
 
-/** Host-facing: the runtime's own API port, which is what every client of the Actor reaches. */
-export function standbyUrl(actor: ActorRecord, username: string): string {
-	return `http://localhost:${API_PORT}${STANDBY_PATH_PREFIX}/${standbyLabel(actor, username)}`;
+/** Who a standby URL is for: a client on the host, or another Actor's container. */
+export type StandbyUrlAudience = 'host' | 'container';
+
+/**
+ * Host-facing, the platform's shape: the Actor owns `/` of its own origin, so a web UI served by the Actor
+ * can use root-relative links. Containers cannot resolve `*.localhost` to the runtime, so they get the
+ * path form on the API alias instead.
+ */
+export function standbyUrl(actor: ActorRecord, username: string, audience: StandbyUrlAudience = 'host'): string {
+	const label = standbyLabel(actor, username);
+	if (audience === 'container') return `${CONTAINER_API_BASE_URL}${STANDBY_PATH_PREFIX}/${label}`;
+	return `http://${label}.localhost:${API_PORT}`;
+}
+
+/** An API request addressed to the alias only Actor containers use comes from one of them. */
+export function standbyUrlAudienceOf(host: string | undefined): StandbyUrlAudience {
+	return host?.toLowerCase().split(':')[0] === CONTAINER_API_ALIAS ? 'container' : 'host';
 }
 
 /** The label, or `undefined` for a Host header not of the `<label>.localhost` form. */

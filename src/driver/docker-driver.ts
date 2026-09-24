@@ -466,10 +466,24 @@ async function allocateFreePort(): Promise<number> {
 			const address = server.address();
 			server.close(() => {
 				if (address && typeof address === 'object') resolve(address.port);
-				else reject(new Error('Could not allocate a free port for the browser-view sidecar'));
+				else reject(new Error('Could not allocate a free port'));
 			});
 		});
 	});
+}
+
+/**
+ * A standby container's env inside this process's network namespace: its server on `port`, and the API
+ * on loopback, since `apify-api` is not in the hosts file a joined namespace shares.
+ */
+export function sharedNetnsEnv(env: Record<string, string>, port: number): Record<string, string> {
+	const shared: Record<string, string> = {};
+	for (const [key, value] of Object.entries(env)) {
+		shared[key] = value.replace(`://${CONTAINER_API_ALIAS}:`, '://127.0.0.1:');
+	}
+	shared.ACTOR_STANDBY_PORT = String(port);
+	shared.ACTOR_WEB_SERVER_PORT = String(port);
+	return shared;
 }
 
 /**
@@ -1079,7 +1093,12 @@ export class DockerDriver implements Driver {
 			throw new Error(this.unavailableReason ?? 'Docker is not available');
 		}
 
-		const env = Object.entries(ctx.env).map(([key, value]) => `${key}=${value}`);
+		const serverRoute = ctx.containerServerPort ? this.containerServerRoute() : undefined;
+		// In this process's network namespace every server needs a port of its own, and the API is on loopback.
+		const netnsServerPort = serverRoute === 'netns' ? await allocateFreePort() : undefined;
+		const env = Object.entries(netnsServerPort ? sharedNetnsEnv(ctx.env, netnsServerPort) : ctx.env).map(
+			([key, value]) => `${key}=${value}`,
+		);
 
 		// Informational only - the requested limits are applied verbatim either way.
 		const overCapacityWarning = this.buildOverCapacityWarning(ctx);
@@ -1126,10 +1145,9 @@ export class DockerDriver implements Driver {
 				: []),
 		];
 
-		const serverRoute = ctx.containerServerPort ? this.containerServerRoute() : undefined;
 		// Only a server this process cannot reach on `apify-local` is published, on an engine-picked port.
 		const serverPublish =
-			ctx.containerServerPort && serverRoute !== 'network'
+			ctx.containerServerPort && (serverRoute === 'loopback' || serverRoute === 'host')
 				? {
 						port: `${ctx.containerServerPort}/tcp`,
 						// A process on the host reaches loopback; one in a container off the network reaches the host.
@@ -1159,9 +1177,11 @@ export class DockerDriver implements Driver {
 						...(preservedEntrypoint.cmd ? { Cmd: preservedEntrypoint.cmd } : {}),
 					}
 				: {}),
-			...(Object.keys(exposedPorts).length > 0 ? { ExposedPorts: exposedPorts } : {}),
+			...(Object.keys(exposedPorts).length > 0 && !netnsServerPort ? { ExposedPorts: exposedPorts } : {}),
 			HostConfig: {
-				...(await this.actorNetworkHostConfig()),
+				...(netnsServerPort
+					? { NetworkMode: `container:${process.env.HOSTNAME}` }
+					: await this.actorNetworkHostConfig()),
 				...(this.resourceLimits.memory ? { Memory: ctx.memoryMbytes * 1024 * 1024 } : {}),
 				// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 				// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
@@ -1171,7 +1191,7 @@ export class DockerDriver implements Driver {
 					: {}),
 				AutoRemove: false,
 				...(mounts.length > 0 ? { Mounts: mounts } : {}),
-				...(Object.keys(portBindings).length > 0 ? { PortBindings: portBindings } : {}),
+				...(Object.keys(portBindings).length > 0 && !netnsServerPort ? { PortBindings: portBindings } : {}),
 			},
 			Tty: false,
 		});
@@ -1207,7 +1227,9 @@ export class DockerDriver implements Driver {
 			// removes the container.
 			sampler = onSample ? startResourceSampler(container, ctx.memoryMbytes * 1024 * 1024, onSample) : undefined;
 
-			if (ctx.containerServerPort && serverRoute) {
+			if (netnsServerPort) {
+				this.containerServers.set(ctx.runId, { host: '127.0.0.1', port: netnsServerPort });
+			} else if (ctx.containerServerPort && serverRoute && serverRoute !== 'netns') {
 				const address = await this.resolveContainerServer(container, ctx.containerServerPort, serverRoute);
 				if (address) this.containerServers.set(ctx.runId, address);
 				else
@@ -1318,10 +1340,14 @@ export class DockerDriver implements Driver {
 	/**
 	 * How this process reaches a standby container's server: directly on `apify-local` when this process
 	 * sits there too; otherwise through a published port - on loopback for a process running on the host
-	 * itself, on the host's address for one in a container off the network (rootless Podman, Podman 3.x).
+	 * itself, on the host's address for one in a container off the network (rootless Podman). On Podman
+	 * 3.x the host's address from a container is the slirp4netns gateway, which reaches the host's
+	 * published ports only for containers started with `allow_host_loopback` - never this one - so the
+	 * standby container joins this container's network namespace instead, as a browser-view sidecar does.
 	 */
-	private containerServerRoute(): 'network' | 'loopback' | 'host' {
+	private containerServerRoute(): 'network' | 'loopback' | 'host' | 'netns' {
 		if (this.onActorNetwork && !this.actorsOnDefaultNetwork) return 'network';
+		if (this.actorsOnDefaultNetwork && process.env.HOSTNAME) return 'netns';
 		return process.env.HOSTNAME ? 'host' : 'loopback';
 	}
 

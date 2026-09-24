@@ -107,6 +107,50 @@ describe('DockerDriver.startRun - containerServerPort', () => {
 		await outcome;
 	});
 
+	it("on Podman 3.x, joins this container's network namespace on a port of its own, with the API on loopback", async () => {
+		process.env.HOSTNAME = 'self';
+		const stub = stubWithInspect({});
+		const driver = new DockerDriver(stub.docker);
+		driver.available = true;
+		(driver as unknown as { actorsOnDefaultNetwork: boolean }).actorsOnDefaultNetwork = true;
+
+		const outcome = driver.startRun(
+			{
+				runId: 'r5',
+				imageId: 'img',
+				env: {
+					APIFY_API_BASE_URL: 'http://apify-api:3333',
+					ACTOR_EVENTS_WEBSOCKET_URL: 'ws://apify-api:3333/actor-runtime/events/r5',
+					ACTOR_STANDBY_PORT: '4321',
+					ACTOR_WEB_SERVER_PORT: '4321',
+				},
+				memoryMbytes: 128,
+				timeoutSecs: 0,
+				containerServerPort: 4321,
+			},
+			() => {},
+		);
+		await vi.waitFor(() => expect(stub.createContainer).toHaveBeenCalled());
+		await settle();
+
+		const [options] = stub.createContainer.mock.calls[0]!;
+		expect(options.HostConfig?.NetworkMode).toBe('container:self');
+		expect(options.HostConfig?.ExtraHosts).toBeUndefined();
+		expect(options.HostConfig?.PortBindings).toBeUndefined();
+		expect(options.ExposedPorts).toBeUndefined();
+		const env = Object.fromEntries(options.Env!.map((entry: string) => entry.split(/=(.*)/s).slice(0, 2)));
+		expect(env.APIFY_API_BASE_URL).toBe('http://127.0.0.1:3333');
+		expect(env.ACTOR_EVENTS_WEBSOCKET_URL).toBe('ws://127.0.0.1:3333/actor-runtime/events/r5');
+		const port = Number(env.ACTOR_STANDBY_PORT);
+		expect(port).toBeGreaterThan(0);
+		expect(env.ACTOR_WEB_SERVER_PORT).toBe(String(port));
+		expect(await driver.containerServerAddress('r5')).toEqual({ host: '127.0.0.1', port });
+
+		stub.triggerContainerExit(0);
+		stub.endLogStream();
+		await outcome;
+	});
+
 	it('arms no timeout for a run with timeoutSecs 0', async () => {
 		vi.useFakeTimers({ toFake: ['setTimeout'] });
 		try {

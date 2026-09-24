@@ -151,7 +151,9 @@ export function mountRequestQueues(router: Router): void {
 	router.get(
 		'/request-queues',
 		h(async (req, res) => {
-			const records = await listOwnedStorages(requireUser(req).id, 'requestQueue');
+			const records = await listOwnedStorages(requireUser(req).id, 'requestQueue', {
+				includeUnnamed: queryBoolean(req, 'unnamed') ?? false,
+			});
 			const sorted = sortByTimestamp(records, (record) => record.createdAt);
 			const envelope = paginate(sorted, paginationParams(req));
 			const items = await Promise.all(

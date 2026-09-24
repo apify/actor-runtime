@@ -7,6 +7,8 @@ import {
 	labelFromHost,
 	mergeStandbyUpdate,
 	standbyLabel,
+	standbyUrl,
+	standbyUrlAudienceOf,
 } from '../../src/services/standby-config.js';
 import { standbyTargetOf } from '../../src/api/standby-proxy.js';
 import type { ActorRecord } from '../../src/storage/entities.js';
@@ -63,6 +65,17 @@ describe('standby addressing', () => {
 
 	it("builds the platform's <username>--<name> label, DNS-safe", () => {
 		expect(standbyLabel(actor, 'john.doe')).toBe('john-doe--my-actor');
+	});
+
+	it('builds the host-facing standbyUrl in the platform shape, and the container one on the API alias', () => {
+		const actor = { name: 'My-Actor' } as ActorRecord;
+		expect(standbyUrl(actor, 'John.Doe')).toBe('http://john-doe--my-actor.localhost:3333');
+		expect(standbyUrl(actor, 'John.Doe', 'container')).toBe(
+			'http://apify-api:3333/actor-runtime/standby/john-doe--my-actor',
+		);
+		expect(standbyUrlAudienceOf('apify-api:3333')).toBe('container');
+		expect(standbyUrlAudienceOf('localhost:3333')).toBe('host');
+		expect(standbyUrlAudienceOf(undefined)).toBe('host');
 	});
 
 	it('reads a label only from a <label>.localhost host', () => {

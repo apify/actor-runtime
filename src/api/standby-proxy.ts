@@ -1,9 +1,10 @@
 /**
  * The standby router (`api.md`'s "Actor Standby"): forwards a request addressed to a standby Actor to
  * one of its standby runs, starting runs as `services/standby.ts` decides. Two addressings, both on the
- * API port: `/actor-runtime/standby/<label>/<path>` (the Actor's `standbyUrl`, resolvable everywhere)
- * and `http://<label>.localhost:3333/<path>` (the platform's host-based shape, for browsers that
- * resolve `*.localhost`). `<label>` is the platform's `<username>--<actor-name>`, or the Actor id.
+ * API port: `http://<label>.localhost:3333/<path>` (the Actor's `standbyUrl`, the platform's host-based
+ * shape, where the Actor owns `/`) and `/actor-runtime/standby/<label>/<path>` (for Actor containers and
+ * clients that do not resolve `*.localhost`). `<label>` is the platform's `<username>--<actor-name>`, or
+ * the Actor id.
  *
  * Mounted ahead of the API's body parser, so a request body is streamed through untouched.
  */

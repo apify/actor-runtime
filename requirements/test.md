@@ -53,3 +53,5 @@ Test case must verify full Actor development flow:
 - Assert that plain, body-carrying, streamed and websocket requests to its standby URL are all answered by
   one `STANDBY` run, that the run ends `SUCCEEDED` once idle with one dataset item per greeting, and that
   the next request starts a new run
+- For `sample_actor_standby_web`: assert that an external client and another Actor's run can both call its
+  standby endpoint
