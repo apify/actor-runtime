@@ -54,6 +54,7 @@ describe('the Actor runtime OpenAPI document', () => {
 				'POST /actor-runtime/dev-folder/{actorId}',
 				'POST /actor-runtime/migrate/{runId}',
 				'GET /actor-runtime/events/{runId}',
+				'GET /actor-runtime/standby/{standbyLabel}',
 			].sort(),
 		);
 	});
@@ -100,6 +101,7 @@ describe('the Actor runtime OpenAPI document', () => {
 			'POST /v2/actors/{actorId}/runs',
 			'POST /v2/actor-runs/{runId}/abort',
 			'POST /v2/actor-runs/{runId}/reboot',
+			'GET /v2/actors/{actorId}',
 		]);
 		for (const note of notes) {
 			expect(note.summary).toBeTruthy();

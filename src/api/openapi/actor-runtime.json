@@ -463,6 +463,69 @@
 				}
 			}
 		},
+		"/actor-runtime/standby/{standbyLabel}": {
+			"get": {
+				"operationId": "proxyStandbyRequest",
+				"summary": "Reach an Actor's Standby server through the runtime",
+				"description": "Forwards the request to one of the Actor's Standby runs, starting runs as the standby pool requires, and streams the Actor's own response back. This is the path-based half of the runtime's two standby addressings; the other is the platform-shaped host form `http://<standbyLabel>.localhost:3333/`, where the Actor owns `/` of its own origin as it does on `*.apify.actor`. Both are served on the API port, and an Actor object's `standbyUrl` names the one that fits the caller (see this document's `x-actor-runtime-platform-notes`).\n\n**Every method and every sub-path reach the Actor**, not just the `GET` this entry declares: whatever follows the label is the path the Actor's server sees, the request body streams through untouched, and a websocket upgrade is proxied too. The operation is declared once because the runtime forwards the request rather than interpreting it - the request and response shapes are the Actor's own, not this API's.\n\n**Authentication is the API's** - `Authorization: Bearer`, `x-apify-authorization` or `?token=` - and the token is forwarded to the Actor unchanged, so an Actor may use its caller's token itself. Only the token owner's own Actors are served; this runtime has no cross-tenant standby.\n\n**Errors this layer produces**, all before the Actor is reached: `400` `standby-not-enabled` (the Actor has no `actorStandby.isEnabled`), `400` `invalid-input`/`invalid-input-schema` (a standby run that passes the Actor's input cannot build one), `401` `user-not-authenticated`, `404` `record-not-found` (no such Actor of the caller's, or no build tagged for standby), `502` `standby-bad-gateway`, `503` `standby-run-failed`, `503` `standby-run-finished`, `504` `standby-run-not-ready`. None of them is ever relayed upstream: this router answers ahead of the API's body parser and of the upstream fallback entirely (`setApiFallbackState`).\n\nStandby itself - the pool, the per-run request limits, the idle timeout, the configuration on the Actor - is the platform's own feature, implemented faithfully; only the two addresses above are local.",
+				"parameters": [
+					{
+						"$ref": "#/components/parameters/StandbyLabel"
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "The Actor's own response, relayed verbatim - status, headers and body are the Actor's. Any status the Actor returns reaches the caller unchanged; the codes below are this router's own."
+					},
+					"400": {
+						"description": "`standby-not-enabled`, or `invalid-input`/`invalid-input-schema` when the Actor's input cannot be built for the standby run.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"401": {
+						"$ref": "#/components/responses/Unauthenticated"
+					},
+					"404": {
+						"$ref": "#/components/responses/RecordNotFound"
+					},
+					"502": {
+						"description": "`standby-bad-gateway` - the standby run did not answer.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "`standby-run-failed` - a standby run could not be started; or `standby-run-finished` - the run serving the request ended first.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"504": {
+						"description": "`standby-run-not-ready` - the run did not start listening on `ACTOR_STANDBY_PORT` in time.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/actor-runtime/api-fallback": {
 			"get": {
 				"operationId": "getApiFallbackState",
@@ -480,7 +543,7 @@
 			"post": {
 				"operationId": "setApiFallbackState",
 				"summary": "Turn upstream API fallback on or off",
-				"description": "Two independent toggles gate whether a request this runtime cannot satisfy locally is relayed to the real Apify platform instead of failing. Both default to `false`, and a restart always brings both back to `false`, regardless of how they were last set. Either can be on without the other; all four combinations are valid. This `POST` is a partial update: a field the body doesn't mention keeps its current value. `upstreamBaseUrl` is reported on every response for visibility but is read-only - no request body can change it.\n\n**Which local outcome each toggle covers** (exhaustive - every other response is never eligible, under any toggle combination):\n- `fallbackUnimplementedEnabled` covers a request the runtime does not serve at all: a local `404` or `501`. From the caller's point of view both mean \"nothing local answers this\", so one toggle covers both.\n- `fallbackNotFoundEnabled` covers a request that reaches a route this runtime does serve, but whose specific record id doesn't exist locally (`record-not-found`).\n- Every other error type - `invalid-request`, `invalid-input`, `invalid-input-schema`, `user-not-authenticated`, `cannot-remove-running-run`, `deleting-unfinished-build`, any `dev-folder-*` type, `internal-error` - is never relayed, whatever either toggle is set to. Neither is anything under `/actor-runtime/*` itself, which has no counterpart upstream.\n\n**All HTTP methods are eligible for both toggles, writes included**: a `POST`/`PUT`/`DELETE` that would otherwise 404/501 locally is relayed exactly like a `GET` when its toggle is on - and, if the platform accepts it, becomes a real write against the caller's real account. This is a deliberate consequence of opting in, not an oversight. An eligible request reaches the platform at most once, so a relayed write is never duplicated.\n\n**A successful relay** returns the platform's response status and body to the caller unchanged, marked with two response headers: `x-actor-runtime-fallback: <upstreamBaseUrl>` naming which platform served it, and `x-actor-runtime-fallback-trigger: unimplemented` or `record-not-found` naming which toggle let it through. Only a final `2xx` status counts as successful.\n\n**Fail-closed guarantee**: anything else - a non-`2xx` response, a timeout, or the platform being unreachable - reproduces the exact response the caller would have gotten with both toggles off: the original local error, unchanged, with neither marker header present. The platform's own status or body is never surfaced to the caller.\n\n**Only the caller's own presented token is ever forwarded.** A relayed request's `Authorization` header is always the exact bearer token the caller themselves sent on that request - never a different or runtime-internal credential, and never sent at all for a request this runtime didn't authenticate. Enabling either toggle therefore means the caller's own Apify token reaches the configured `upstreamBaseUrl` on every eligible request; this is the risk being opted into.\n\n**Never splits one request between the two sources**: where one request resolves several records in turn - `GET /v2/actors/{actorId}/runs/last*` resolves the Actor, then its newest run, then that run's log or storage - the first record decides where all of them come from. An Actor that resolves locally is answered locally, every later miss included; only a request whose first record is unknown here is eligible, and then as the caller's original request, which the platform resolves end to end.\n\n**Never enriches a call that already succeeds locally**: a collection endpoint (e.g. `GET /v2/datasets`) that already returns `200` from local data never consults either toggle and never gains platform objects. Fallback only ever resolves an otherwise-failing request; it does not make a local listing \"complete\".",
+				"description": "Two independent toggles gate whether a request this runtime cannot satisfy locally is relayed to the real Apify platform instead of failing. Both default to `false`, and a restart always brings both back to `false`, regardless of how they were last set. Either can be on without the other; all four combinations are valid. This `POST` is a partial update: a field the body doesn't mention keeps its current value. `upstreamBaseUrl` is reported on every response for visibility but is read-only - no request body can change it.\n\n**Which local outcome each toggle covers** (exhaustive - every other response is never eligible, under any toggle combination):\n- `fallbackUnimplementedEnabled` covers a request the runtime does not serve at all: a local `404` or `501`. From the caller's point of view both mean \"nothing local answers this\", so one toggle covers both.\n- `fallbackNotFoundEnabled` covers a request that reaches a route this runtime does serve, but whose specific record id doesn't exist locally (`record-not-found`).\n- Every other error type - `invalid-request`, `invalid-input`, `invalid-input-schema`, `user-not-authenticated`, `cannot-remove-running-run`, `deleting-unfinished-build`, any `dev-folder-*` type, `internal-error` - is never relayed, whatever either toggle is set to. Neither is anything under `/actor-runtime/*` itself, which has no counterpart upstream, the standby addresses (`proxyStandbyRequest`) included - those are answered by a router that runs ahead of the fallback, so no `standby-*` error ever reaches it.\n\n**All HTTP methods are eligible for both toggles, writes included**: a `POST`/`PUT`/`DELETE` that would otherwise 404/501 locally is relayed exactly like a `GET` when its toggle is on - and, if the platform accepts it, becomes a real write against the caller's real account. This is a deliberate consequence of opting in, not an oversight. An eligible request reaches the platform at most once, so a relayed write is never duplicated.\n\n**A successful relay** returns the platform's response status and body to the caller unchanged, marked with two response headers: `x-actor-runtime-fallback: <upstreamBaseUrl>` naming which platform served it, and `x-actor-runtime-fallback-trigger: unimplemented` or `record-not-found` naming which toggle let it through. Only a final `2xx` status counts as successful.\n\n**Fail-closed guarantee**: anything else - a non-`2xx` response, a timeout, or the platform being unreachable - reproduces the exact response the caller would have gotten with both toggles off: the original local error, unchanged, with neither marker header present. The platform's own status or body is never surfaced to the caller.\n\n**Only the caller's own presented token is ever forwarded.** A relayed request's `Authorization` header is always the exact bearer token the caller themselves sent on that request - never a different or runtime-internal credential, and never sent at all for a request this runtime didn't authenticate. Enabling either toggle therefore means the caller's own Apify token reaches the configured `upstreamBaseUrl` on every eligible request; this is the risk being opted into.\n\n**Never splits one request between the two sources**: where one request resolves several records in turn - `GET /v2/actors/{actorId}/runs/last*` resolves the Actor, then its newest run, then that run's log or storage - the first record decides where all of them come from. An Actor that resolves locally is answered locally, every later miss included; only a request whose first record is unknown here is eligible, and then as the caller's original request, which the platform resolves end to end.\n\n**Never enriches a call that already succeeds locally**: a collection endpoint (e.g. `GET /v2/datasets`) that already returns `200` from local data never consults either toggle and never gains platform objects. Fallback only ever resolves an otherwise-failing request; it does not make a local listing \"complete\".",
 				"requestBody": {
 					"required": true,
 					"description": "A JSON object naming either toggle, or both.",
@@ -584,6 +647,15 @@
 				"in": "path",
 				"required": true,
 				"description": "The run's id.",
+				"schema": {
+					"type": "string"
+				}
+			},
+			"StandbyLabel": {
+				"name": "standbyLabel",
+				"in": "path",
+				"required": true,
+				"description": "The Actor's standby address: the platform's `<username>--<actor-name>` label, or the Actor's id. Matched case-insensitively against the caller's own Actors only; anything else is `404` `record-not-found`.",
 				"schema": {
 					"type": "string"
 				}
@@ -855,6 +927,12 @@
 			"path": "/v2/actor-runs/{runId}/reboot",
 			"summary": "Reboot, the endpoint the SDKs call from their own migrating handler",
 			"description": "The real platform endpoint the SDKs call from their default `migrating` handler, implemented here: it stops and restarts the run's container immediately (no warning frame), cancels an open migration window, and increments `stats.rebootCount`. A finished run is `403 job-finished`; a non-terminal run with no container (`READY`, `ABORTING`) gets the count bump but no restart. The run object's `stats` carries `migrationCount`, `rebootCount`, `restartCount` and `resurrectCount` (the latter two always `0` here), initialized to `0` at run creation like the platform."
+		},
+		{
+			"method": "GET",
+			"path": "/v2/actors/{actorId}",
+			"summary": "`standbyUrl` names a local standby address, chosen by the caller",
+			"description": "An Actor with Standby enabled reports a `standbyUrl` that exists only here: `http://<username>--<actor-name>.localhost:3333` for a client on the host, and `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>` for a request arriving from an Actor container, which is picked from the request's own `Host` - the platform's value does not vary by caller. Clients that cannot resolve `*.localhost` use the same path form on `localhost`. Both addresses are the `proxyStandbyRequest` operation of this namespace; everything else about Actor Standby is the platform's own behaviour, implemented faithfully, except that only the Actor's owner is served."
 		}
 	]
 }

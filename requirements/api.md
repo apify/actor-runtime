@@ -168,12 +168,12 @@
 
 - `/actor-runtime/*` is the local-runtime-only API: the developer conveniences the Apify platform has no
   counterpart for - live dev folder, debug mode, browser view, migration emulation, upstream API
-  fallback, and the per-run events channel.
+  fallback, the per-run events channel, and the path form of a standby address (above).
 - **`src/api/openapi/actor-runtime.json` is the specification for all of it**, and it is normative:
   every path, method, request body, response payload, error type and behaviour is stated there and
   deliberately not restated here. It also carries, under `x-actor-runtime-platform-notes`, what this
   runtime adds to a few otherwise faithful platform endpoints - `?devFolder=false` on run start,
-  `?gracefully=` on abort, and reboot.
+  `?gracefully=` on abort, reboot, and the Actor object's locally shaped `standbyUrl`.
 - The runtime serves that document at `GET /actor-runtime` (`{data}`-enveloped, so `apify api` reads it)
   and at `GET /actor-runtime/openapi.json` (bare, for OpenAPI tooling). Both are unauthenticated, so a
   client can enumerate a runtime before it holds a token (`cli.md`).
