@@ -43,7 +43,12 @@ import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
 import { validatePricingInfosUpdate } from '../../services/pricing.js';
 import { resolveBuildInput } from '../../services/input-schema.js';
-import { declaresStandbyMode, mergeStandbyUpdate, standbyUrl } from '../../services/standby-config.js';
+import {
+	declaresStandbyMode,
+	mergeStandbyUpdate,
+	standbyUrl,
+	standbyUrlAudienceOf,
+} from '../../services/standby-config.js';
 
 /** `undefined` when the body does not mention the field; an invalid one throws. */
 function actorStandbyFromBody(body: { actorStandby?: unknown }, actor?: ActorRecord): ActorStandbyRecord | undefined {
@@ -90,7 +95,9 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const envelope = paginate(sorted, paginationParams(req));
 			sendData(res, {
 				...envelope,
-				items: envelope.items.map((actor) => actorDto(actor, requireUser(req).username)),
+				items: envelope.items.map((actor) =>
+					actorDto(actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)),
+				),
 			});
 		}),
 	);
@@ -110,7 +117,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			// An explicit `actorStandby` wins over `usesStandbyMode`, even one that disables it.
 			const actorStandby = actorStandbyFromBody(body) ?? standbyEnabledByVersions(undefined, body.versions ?? []);
 			const actor = await createActor(requireUser(req).id, { ...body, actorStandby });
-			sendData(res, actorDto(actor, requireUser(req).username), 201);
+			sendData(res, actorDto(actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)), 201);
 		}),
 	);
 
@@ -119,7 +126,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
-			sendData(res, actorDto(actor, requireUser(req).username));
+			sendData(res, actorDto(actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)));
 		}),
 	);
 
@@ -140,7 +147,10 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				...(pricingInfos !== undefined ? { pricingInfos } : {}),
 				...(actorStandby !== undefined ? { actorStandby } : {}),
 			}));
-			sendData(res, actorDto(updated ?? actor, requireUser(req).username));
+			sendData(
+				res,
+				actorDto(updated ?? actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)),
+			);
 		}),
 	);
 

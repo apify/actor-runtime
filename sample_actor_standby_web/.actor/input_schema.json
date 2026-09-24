@@ -1,0 +1,20 @@
+{
+	"title": "Standby web sample input",
+	"type": "object",
+	"schemaVersion": 1,
+	"properties": {
+		"standbyActor": {
+			"title": "Standby Actor",
+			"type": "string",
+			"description": "The standby Actor an ordinary run calls, as an id or `username/name`. Empty means this Actor itself.",
+			"editor": "textfield"
+		},
+		"name": {
+			"title": "Name",
+			"type": "string",
+			"description": "Sent to the standby Actor's `/api/greeting` endpoint.",
+			"editor": "textfield",
+			"default": "Actor"
+		}
+	}
+}

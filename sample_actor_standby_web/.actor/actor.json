@@ -1,0 +1,12 @@
+{
+	"$schema": "https://apify.com/schemas/v1/actor.ide.json",
+	"actorSpecification": 1,
+	"name": "my-standby-web-actor",
+	"title": "Standby web page sample actor for actor-runtime",
+	"description": "In Standby mode, a web page and the JSON endpoint it calls with a root-relative URL. An ordinary run calls a standby Actor's endpoint from inside its container.",
+	"version": "0.0",
+	"buildTag": "latest",
+	"usesStandbyMode": true,
+	"input": "./input_schema.json",
+	"dockerfile": "../Dockerfile"
+}

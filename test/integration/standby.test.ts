@@ -178,8 +178,31 @@ describe('actorStandby on the Actor object', () => {
 		});
 		const me = await server.client.user('me').get();
 		expect((created as unknown as { standbyUrl: string }).standbyUrl).toBe(
-			`http://localhost:3333/actor-runtime/standby/${me!.username}--my-server`,
+			`http://${me!.username}--my-server.localhost:3333`,
 		);
+	});
+
+	it('gives an Actor container the path form on the API alias as the standbyUrl', async () => {
+		server = await startTestServer();
+		const created = await server.client.actors().create({ name: 'my-server', actorStandby: { isEnabled: true } });
+		const me = await server.client.user('me').get();
+		const fromContainer = await new Promise<string>((resolve, reject) => {
+			const port = new URL(server.baseUrl).port;
+			http.get(
+				{
+					host: '127.0.0.1',
+					port,
+					path: `/v2/actors/${created.id}?token=${server.token}`,
+					headers: { host: `apify-api:${port}` },
+				},
+				(res) => {
+					let body = '';
+					res.on('data', (chunk) => (body += chunk));
+					res.on('end', () => resolve(JSON.parse(body).data.standbyUrl));
+				},
+			).on('error', reject);
+		});
+		expect(fromContainer).toBe(`http://apify-api:3333/actor-runtime/standby/${me!.username}--my-server`);
 	});
 
 	it('merges a partial update over the stored settings, and rejects invalid ones unchanged', async () => {
@@ -244,13 +267,12 @@ describe('standby router', () => {
 			.create({ name: 'standby-actor', actorStandby: { isEnabled: true, ...standby } } as never);
 		const actor = (await getRegistries().actors.get(created.id))!;
 		await seedBuild(actor);
-		return {
-			actor,
-			url: (created as unknown as { standbyUrl: string }).standbyUrl.replace(
-				'http://localhost:3333',
-				server.baseUrl,
-			),
-		};
+		// The path form of the same address: this process cannot resolve the `*.localhost` standbyUrl.
+		const label = new URL((created as unknown as { standbyUrl: string }).standbyUrl).hostname.replace(
+			/\.localhost$/,
+			'',
+		);
+		return { actor, url: `${server.baseUrl}/actor-runtime/standby/${label}` };
 	}
 
 	it('starts a STANDBY run and forwards method, path, query, headers and body to its server', async () => {
@@ -287,7 +309,7 @@ describe('standby router', () => {
 			ACTOR_STANDBY_PORT: '4321',
 			ACTOR_WEB_SERVER_PORT: '4321',
 		});
-		expect(ctx.env.ACTOR_STANDBY_URL).toMatch(/\/actor-runtime\/standby\/.+--standby-actor$/);
+		expect(ctx.env.ACTOR_STANDBY_URL).toMatch(/^http:\/\/.+--standby-actor\.localhost:3333$/);
 		expect(driver.containers[0]!.probes).toBeGreaterThan(0);
 
 		// The next request lands on the same run, without starting another.
@@ -447,7 +469,7 @@ describe('standby router', () => {
 			const { port } = consoleServer.address() as AddressInfo;
 			const html = await (await fetch(`http://127.0.0.1:${port}/actors/${actor.id}`)).text();
 			expect(html).toContain('Actor Standby');
-			expect(html).toContain('/actor-runtime/standby/');
+			expect(html).toContain('--standby-actor.localhost:3333');
 			expect(html).toContain(`/runs/${served.runId}`);
 			const runHtml = await (await fetch(`http://127.0.0.1:${port}/runs/${served.runId}`)).text();
 			expect(runHtml).toContain('STANDBY');

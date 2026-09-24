@@ -80,11 +80,18 @@ through the API - is served over HTTP at its `standbyUrl`, on the API port:
 ```bash
 cd sample_actor_standby_ts     # or sample_actor_standby_py
 apify push
-curl "http://localhost:3333/actor-runtime/standby/<username>--my-standby-actor-ts/hello?name=Ada&token=<token>"
+curl "http://<username>--my-standby-actor-ts.localhost:3333/hello?name=Ada&token=<token>"
 ```
+
+The `standbyUrl` has the platform's shape, one `*.localhost` hostname per Actor, so a web UI served by the
+Actor works as on `*.apify.actor`. Clients that do not resolve `*.localhost` use
+`http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`, and other Actors
+`http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>`.
 
 The two samples are the same server in TypeScript and Python - JSON endpoints, a request body echo, a
 Server-Sent Events stream, a websocket and stats kept across runs; each README lists the calls.
+`sample_actor_standby_web` serves a web page with root-relative links, and in an ordinary run calls a
+standby Actor from inside its container.
 
 Requests are handed to standby runs the runtime starts, scales by `desiredRequestsPerActorRun` /
 `maxRequestsPerActorRun` and winds down after `idleTimeoutSecs` without a request, as on the platform.

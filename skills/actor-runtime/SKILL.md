@@ -186,6 +186,9 @@ An Actor with Standby enabled is served over HTTP, as on the platform. `"usesSta
 
 ```sh
 apify push
+# The standby URL, as on the platform (<username>--<actor-name>.apify.actor); open it in a browser too:
+curl "http://<username>--<actor-name>.localhost:3333/some/path?token=<token>"
+# The same Actor, for clients that do not resolve *.localhost (older curl, many Node/Python clients):
 curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/path?token=<token>"
 ```
 
@@ -194,8 +197,11 @@ curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/
   once concurrent requests exceed `desiredRequestsPerActorRun` / `maxRequestsPerActorRun`.
 - Everything after the standby URL - path, query, headers, body, websockets - reaches the Actor unchanged.
   The token (`?token=`, `Authorization: Bearer`) is required, and only the Actor's owner is served.
-  `http://<username>--<actor-name>.localhost:3333/` works too, where `*.localhost` resolves (browsers);
-  the Actor id can stand in for `<username>--<actor-name>` in either form.
+  The Actor owns `/` of the `*.localhost` URL, as on the platform, so an Actor's web UI with root-relative
+  links (`fetch('/api/...')`) works; under the path form it would not. The Actor id can stand in for
+  `<username>--<actor-name>` in every form.
+- From another Actor's container use `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>`;
+  the Actor object read from inside a container already carries that as its `standbyUrl`.
 - A run idle for `idleTimeoutSecs` (300 by default) gets the `aborting` event, is stopped 15 s later and
   ends `SUCCEEDED`. Shorten it while developing:
   `apify api PUT v2/actors/<actorId> --body '{"actorStandby":{"idleTimeoutSecs":10}}'`.
@@ -207,7 +213,8 @@ curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/
   within 180 s).
 - `apify call` still starts an ordinary `API` run of the same Actor. `sample_actor_standby_ts` and
   `sample_actor_standby_py` are complete Actor servers (JSON, request body, Server-Sent Events, websocket,
-  graceful shutdown) to start from. Multi-tenant Standby and Standby for tasks are not emulated.
+  graceful shutdown) to start from; `sample_actor_standby_web` serves a web page and, in an ordinary run,
+  calls a standby Actor from its container. Multi-tenant Standby and Standby for tasks are not emulated.
 
 ## Test how an Actor handles a platform migration
 

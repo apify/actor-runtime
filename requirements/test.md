@@ -53,3 +53,7 @@ Test case must verify full Actor development flow:
 - Assert that plain, body-carrying, streamed and websocket requests to its standby URL are all answered by
   one `STANDBY` run, that the run ends `SUCCEEDED` once idle with one dataset item per greeting, and that
   the next request starts a new run
+- For `sample_actor_standby_web`: push, then assert that an external client reaches its standby endpoint at
+  the `*.localhost` standby URL, where the Actor's page links to its API root-relative, and by the path
+  form; and that an ordinary run of an Actor calls the standby endpoint from inside its container, by the
+  `standbyUrl` it reads through the API
