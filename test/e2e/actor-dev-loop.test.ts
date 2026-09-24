@@ -158,7 +158,11 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 			cwd: actorDir,
 			env,
 		});
-		expect((JSON.parse(infoOutput) as DatasetInfoResult).itemCount).toBe(10);
+		// A 10-page crawl of crawlee.dev can drain its queue a page short of `maxPages` (seen: 9), so the
+		// count only has to rule out the old default of 2; the INPUT check above pins the defaults.
+		const { itemCount } = JSON.parse(infoOutput) as DatasetInfoResult;
+		expect(itemCount).toBeGreaterThan(2);
+		expect(itemCount).toBeLessThanOrEqual(10);
 
 		// `maxPages` has `minimum: 1` - the run is refused before any container starts, and the CLI
 		// surfaces the runtime's validation message.
