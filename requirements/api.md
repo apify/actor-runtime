@@ -152,26 +152,10 @@
 
 # Actor Standby
 
-- The Actor object carries the platform's `actorStandby` settings (`actor-driver.md`) and `standbyUrl`,
-  `null` while Standby is off. `POST` and `PUT /v2/actors` accept `actorStandby`; a partial object is merged
-  over the stored settings, over the defaults. An invalid one is `400` `invalid-request`, changing nothing;
-  a `tenancy` other than `SINGLE_TENANT` is invalid.
-- The standby URL is `http://<username>--<actor-name>.localhost:3333`, the local `*.apify.actor`: each
-  Actor has its own origin and owns its whole path, so web UIs served by Actors work as on the platform.
-- Clients that do not resolve `*.localhost` use `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`;
-  other Actors use `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>`, which is the
-  `standbyUrl` they read through the API.
-- The Actor id can replace `<username>--<actor-name>`. Path, query, method, headers, body and websockets
-  reach the Actor's server unchanged.
-- Authenticated like the API (`Authorization: Bearer`, `?token=`), plus the platform's
-  `x-apify-authorization` header; only the Actor's owner is served.
-- Errors, as `{ "error": { "type", "message" } }`: no token `401` `user-not-authenticated`; no such Actor of
-  the caller's `404` `record-not-found`; Standby off `400` `standby-not-enabled`; no build under the
-  standby build tag `404` `record-not-found`; a run that ended before its server was ready `503`
-  `standby-run-finished`; a server not ready within 180 seconds `504` `standby-run-not-ready`; a server
-  that drops the request `502` `standby-bad-gateway`. None is relayed by the upstream fallback.
-- A standby run's object has `meta.origin` `STANDBY`, `options.timeoutSecs` `0` and
-  `standby: { deployment: "SINGLE_TENANT" }`.
+- Implemented as on the platform. Differences: only the owner is served, and `standbyUrl` is
+  `http://<username>--<actor-name>.localhost:3333`, or `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`
+  for clients without `*.localhost` (`http://apify-api:3333/...` from Actors). Standby errors are never
+  relayed by the upstream fallback.
 
 # Actor runtime API
 

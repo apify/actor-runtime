@@ -17,8 +17,7 @@
 - **A second narrow exception of the same kind**: the browser-view e2e test may open the console's viewer
   page and its websocket directly, to emulate a developer's browser opening the view. Everything else in it
   goes through `apify` commands.
-- **A third narrow exception**: the Actor Standby e2e test sends plain HTTP requests and opens a websocket
-  to the Actor's standby URL, since no `apify` command can. Everything else in it goes through `apify` commands.
+- **A third narrow exception**: the Standby e2e test calls standby URLs directly (HTTP, websocket).
 - For asserting the test results, the tests must inspect the return values of the Apify cli commands.
 - The e2e suite requires a reachable Docker daemon (it builds and runs real Actor containers) and
   detects its absence, failing in such case.
@@ -48,10 +47,5 @@ Test case must verify full Actor development flow:
 
 ## Actor Standby
 
-- For each standby sample (`sample_actor_standby_ts`, `sample_actor_standby_py`), whose `.actor/actor.json`
-  enables Standby: push, and shorten its idle timeout
-- Assert that plain, body-carrying, streamed and websocket requests to its standby URL are all answered by
-  one `STANDBY` run, that the run ends `SUCCEEDED` once idle with one dataset item per greeting, and that
-  the next request starts a new run
-- For `sample_actor_standby_web`: assert that an external client and another Actor's run can both call its
-  standby endpoint
+- Each standby sample, pushed: its requests share one `STANDBY` run, which ends `SUCCEEDED` once idle, and
+  the next request starts a new one; `sample_actor_standby_web` is also reachable from another Actor's run.
