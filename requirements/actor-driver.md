@@ -191,7 +191,6 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
       noted in the run log.
     - `defaultMemoryMbytes` is not capped to a plan's maximum memory.
     - A memory field its schema forbids fails the build.
-    - `diskMbytes` is twice the final memory, including after the bounds are applied.
 
 ## Resource limits
 
@@ -201,7 +200,6 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Limits are applied exactly as requested, even when they exceed the host's own capacity. Such a run is
   warned about in its own log, naming the requested and the host figures; the limits still apply. When the
   host's capacity cannot be determined, no warning is produced.
-- Disk is not limited. `diskMbytes` is reported but never enforced.
 
 ## Run resource telemetry
 
