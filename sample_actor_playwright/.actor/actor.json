@@ -6,6 +6,7 @@
 	"description": "Crawls up to maxRequestsPerCrawl same-hostname pages from startUrls with a headful Chrome driven by Playwright, pushing one dataset item per page.",
 	"version": "0.0",
 	"buildTag": "latest",
+	"defaultMemoryMbytes": 4096,
 	"meta": {
 		"templateId": "ts-crawlee-playwright-chrome"
 	},

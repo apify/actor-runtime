@@ -183,6 +183,15 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Run details and the run log are kept in internal records that persist across runtime restarts
   (`storage.md`).
 
+## Run memory
+
+- Run memory follows the platform's `.actor/actor.json` rules (`defaultMemoryMbytes`, `minMemoryMbytes`,
+  `maxMemoryMbytes`). Differences:
+    - A `defaultMemoryMbytes` that fails to evaluate, and a memory changed by the min/max bounds, are
+      noted in the run log.
+    - `defaultMemoryMbytes` is not capped to a plan's maximum memory.
+    - A memory field its schema forbids fails the build.
+
 ## Resource limits
 
 - Every run's container has a hard memory limit and a hard CPU limit. Memory is the run's `memoryMbytes`;
@@ -191,7 +200,6 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Limits are applied exactly as requested, even when they exceed the host's own capacity. Such a run is
   warned about in its own log, naming the requested and the host figures; the limits still apply. When the
   host's capacity cannot be determined, no warning is produced.
-- Disk is not limited. `diskMbytes` is reported but never enforced.
 
 ## Run resource telemetry
 
