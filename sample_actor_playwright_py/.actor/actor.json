@@ -6,6 +6,7 @@
 	"description": "Crawls up to max_requests_per_crawl same-hostname pages from start_urls with a headful Chromium driven by Playwright (Crawlee for Python), pushing one dataset item per page.",
 	"version": "0.0",
 	"buildTag": "latest",
+	"defaultMemoryMbytes": 4096,
 	"meta": {
 		"templateId": "python-crawlee-playwright"
 	},
