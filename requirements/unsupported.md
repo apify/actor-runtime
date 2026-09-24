@@ -101,7 +101,6 @@ real account, not in the runtime.
 
 - Memory steps and bounds (128 MB - 32 GB, powers of two); a run asking for anything else is warned
   about in its log and started with it anyway
-- The plan's maximum memory per run, which caps `defaultMemoryMbytes` on the platform
 - Record, item and input size limits
 - Concurrent run, rate and per-account quotas
 - Process, file-descriptor and shared-memory limits

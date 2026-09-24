@@ -185,15 +185,13 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 
 ## Run memory
 
-- A run's memory is, in order: the caller's `memory`; else `defaultMemoryMbytes` from the build's
-  `.actor/actor.json`; else 1024 MB.
-- `defaultMemoryMbytes` is a number or a platform memory expression over the run's input and options,
-  rounded to a power of two as on the platform. An expression that fails to evaluate falls back to
-  1024 MB, with a warning in the run log.
-- The result, including an explicit `memory`, is clamped to the build's `minMemoryMbytes` /
-  `maxMemoryMbytes`; an adjustment is noted in the run log.
-- A memory field outside `actor.json`'s schema fails the build.
-- The fields come from the build, so a change needs a rebuild.
+- Run memory follows the platform's `.actor/actor.json` rules (`defaultMemoryMbytes`, `minMemoryMbytes`,
+  `maxMemoryMbytes`). Differences:
+    - A `defaultMemoryMbytes` that fails to evaluate, and a memory changed by the min/max bounds, are
+      noted in the run log.
+    - `defaultMemoryMbytes` is not capped to a plan's maximum memory.
+    - A memory field its schema forbids fails the build.
+    - `diskMbytes` is twice the final memory, including after the bounds are applied.
 
 ## Resource limits
 
