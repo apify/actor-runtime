@@ -62,9 +62,14 @@ export async function getOwnedStorage(userId: string, id: string, type: StorageT
 	return record;
 }
 
-export async function listOwnedStorages(userId: string, type: StorageType): Promise<StorageRecord[]> {
+/** Named storages only unless `includeUnnamed`, as the platform's list endpoints (`?unnamed=`) do. */
+export async function listOwnedStorages(
+	userId: string,
+	type: StorageType,
+	{ includeUnnamed }: { includeUnnamed: boolean },
+): Promise<StorageRecord[]> {
 	const all = await getRegistries().storages.list();
-	return all.filter((s) => s.userId === userId && s.type === type);
+	return all.filter((s) => s.userId === userId && s.type === type && (includeUnnamed || s.name !== undefined));
 }
 
 /** Cross-user listing, for the console only (see `services/actors.ts: listAllActors`'s doc comment). */
@@ -87,7 +92,7 @@ export async function findOwnedStorageByName(
 	name: string,
 ): Promise<StorageRecord | null> {
 	const wanted = normalizeName(name);
-	const owned = await listOwnedStorages(userId, type);
+	const owned = await listOwnedStorages(userId, type, { includeUnnamed: false });
 	return owned.find((s) => s.name !== undefined && normalizeName(s.name) === wanted) ?? null;
 }
 
