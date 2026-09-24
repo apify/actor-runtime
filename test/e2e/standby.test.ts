@@ -49,8 +49,21 @@ interface RunSummary {
 	options: { timeoutSecs: number };
 }
 
+/** Retried once on a keep-alive connection the other side already closed (`helpers/console-view.ts`). */
+async function fetchWithRetry(url: string, init?: RequestInit): Promise<Response> {
+	try {
+		return await fetch(url, init);
+	} catch (error) {
+		if ((error as { cause?: { code?: string } }).cause?.code !== 'UND_ERR_SOCKET') throw error;
+		return fetch(url, init);
+	}
+}
+
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(url, { ...init, headers: { authorization: `Bearer ${TOKEN}`, ...init?.headers } });
+	const res = await fetchWithRetry(url, {
+		...init,
+		headers: { authorization: `Bearer ${TOKEN}`, ...init?.headers },
+	});
 	expect(res.status, `${url} answered ${res.status}: ${await res.clone().text()}`).toBe(200);
 	return (await res.json()) as T;
 }
@@ -63,11 +76,15 @@ function getByHost(standbyUrl: string, path: string): Promise<{ status: number; 
 	const { hostname, host, port } = new URL(standbyUrl);
 	expect(hostname).toMatch(/\.localhost$/);
 	return new Promise((resolve, reject) => {
-		http.get({ host: '127.0.0.1', port, path, headers: { host, authorization: `Bearer ${TOKEN}` } }, (res) => {
-			let body = '';
-			res.on('data', (chunk) => (body += chunk));
-			res.on('end', () => resolve({ status: res.statusCode!, body }));
-		}).on('error', reject);
+		// `agent: false`: a fresh connection each time, so an idle one closed underneath is never reused.
+		http.get(
+			{ host: '127.0.0.1', port, path, agent: false, headers: { host, authorization: `Bearer ${TOKEN}` } },
+			(res) => {
+				let body = '';
+				res.on('data', (chunk) => (body += chunk));
+				res.on('end', () => resolve({ status: res.statusCode!, body }));
+			},
+		).on('error', reject);
 	});
 }
 
@@ -147,7 +164,7 @@ describe('Actor Standby via apify-cli (requires Docker)', () => {
 				});
 				expect(echo).toMatchObject({ query: { x: '1' }, body: { nested: { ok: true } } });
 
-				const stream = await fetch(`${url}/stream?count=3&token=${TOKEN}`);
+				const stream = await fetchWithRetry(`${url}/stream?count=3&token=${TOKEN}`);
 				expect(stream.headers.get('content-type')).toMatch(/^text\/event-stream/);
 				const events = (await stream.text()).match(/^event: \w+$/gm);
 				expect(events).toEqual(['event: tick', 'event: tick', 'event: tick', 'event: done']);
