@@ -19,7 +19,7 @@ import {
 	stopRuntimeContainer,
 	waitForHttpOk,
 } from './docker.js';
-import { CONSOLE_URL, readMirrorGreeting } from './console-view.js';
+import { CONSOLE_URL, fetchConsole, readMirrorGreeting } from './console-view.js';
 import { withRunLogOnFailure } from './run-log.js';
 import { waitFor } from './wait.js';
 import {
@@ -163,12 +163,12 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				expect(greeting.startsWith('RFB 003.')).toBe(true);
 
 				// The console's run page links to the viewer, and the viewer page embeds the noVNC client.
-				const runPage = await fetch(`${CONSOLE_URL}/runs/${run.id}`);
+				const runPage = await fetchConsole(`/runs/${run.id}`);
 				expect(await runPage.text()).toContain(`href="/runs/${run.id}/browser"`);
-				const viewerPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				const viewerPage = await fetchConsole(`/runs/${run.id}/browser`);
 				expect(viewerPage.status).toBe(200);
 				expect(await viewerPage.text()).toContain('/vendor/novnc/core/rfb.js');
-				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
+				const client = await fetchConsole(`/vendor/novnc/core/rfb.js`);
 				expect(client.status).toBe(200);
 
 				await withRunLogOnFailure(
@@ -200,7 +200,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				);
 
 				// Once the run is over its mirror is gone: the viewer page says so, and the websocket is refused.
-				const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				const endedPage = await fetchConsole(`/runs/${run.id}/browser`);
 				expect(await endedPage.text()).toContain('This run has ended');
 				await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 			},

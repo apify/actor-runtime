@@ -157,6 +157,13 @@
   miss; only a request naming an Actor unknown here is eligible for the upstream fallback, and then as
   the caller's original request, which the platform resolves end to end.
 
+# Actor Standby
+
+- Implemented as on the platform. Differences: only the owner is served, and `standbyUrl` is
+  `http://<username>--<actor-name>.localhost:3333`, or `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`
+  for clients without `*.localhost` (`http://apify-api:3333/...` from Actors). Standby errors are never
+  relayed by the upstream fallback.
+
 # Actor runtime API
 
 - `/actor-runtime/*` is the local-runtime-only API: the developer conveniences the Apify platform has no

@@ -114,7 +114,9 @@ export function mountDatasets(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/datasets',
 		h(async (req, res) => {
-			const records = await listOwnedStorages(requireUser(req).id, 'dataset');
+			const records = await listOwnedStorages(requireUser(req).id, 'dataset', {
+				includeUnnamed: queryBoolean(req, 'unnamed') ?? false,
+			});
 			const sorted = sortByTimestamp(records, (record) => record.createdAt);
 			const envelope = paginate(sorted, paginationParams(req));
 			const items = await Promise.all(

@@ -32,7 +32,7 @@ describe('createStorage getOrCreate-by-name concurrency', () => {
 
 		expect(a.id).toBe(b.id);
 
-		const all = await listOwnedStorages(userId, 'dataset');
+		const all = await listOwnedStorages(userId, 'dataset', { includeUnnamed: true });
 		expect(all.filter((s) => s.name === 'same-name-concurrent')).toHaveLength(1);
 	});
 

@@ -9,6 +9,7 @@ export default tseslint.config(
 			'dist/**',
 			'node_modules/**',
 			'sample_actor_ts/**',
+			'sample_actor_standby_ts/**',
 			'sample_actor_py/**',
 			'sample_actor_playwright/**',
 			'data/**',

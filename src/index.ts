@@ -4,6 +4,7 @@ import { reconcileOrphanedJobs } from './services/runs.js';
 import { createDriver } from './driver/index.js';
 import { createApiServer } from './api/server.js';
 import { attachEventsWebSocket } from './api/events-ws.js';
+import { closeStandbyUpgrades, handleStandbyUpgrade } from './api/standby-proxy.js';
 import { createConsoleServer } from './console/server.js';
 import { attachBrowserViewWebSocket } from './console/browser-view-ws.js';
 import { startLogFlusher } from './services/logs.js';
@@ -29,7 +30,9 @@ async function main(): Promise<void> {
 	// Upgrades on the same API server/port - no second port (`system.md`'s fixed-ports contract); see
 	// `api/events-ws.ts`'s own doc comment for why this attaches here rather than inside `createApiServer`
 	// (Express never sees an `upgrade` event, so this needs the actual `http.Server` `listen()` returned).
-	const eventsWebSocketServer = attachEventsWebSocket(apiServer);
+	const eventsWebSocketServer = attachEventsWebSocket(apiServer, (req, socket, head) =>
+		handleStandbyUpgrade(driver, req, socket, head),
+	);
 	const browserViewWebSocketServer = attachBrowserViewWebSocket(consoleServer);
 
 	console.log(`actor-runtime API listening on port ${API_PORT}`);
@@ -45,6 +48,7 @@ async function main(): Promise<void> {
 	}
 
 	const shutdown = async () => {
+		closeStandbyUpgrades();
 		await gracefulShutdown({ apiServer, consoleServer, eventsWebSocketServer, browserViewWebSocketServer });
 		process.exit(0);
 	};

@@ -114,3 +114,8 @@
   the other, and via the API's own `GET`, with no restart needed either way.
 - The console has no login, so anyone who can reach it can flip either toggle for every caller of the
   API.
+
+## Actor Standby (Actor detail view)
+
+- Shows the standby settings, live standby runs, and the standby URL with the owner's token, as a link and
+  a copy button (the token masked on screen). Read-only. The run detail view shows each run's origin.

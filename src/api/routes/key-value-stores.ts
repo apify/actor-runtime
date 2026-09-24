@@ -5,7 +5,15 @@ import { requireUser } from '../auth.js';
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
 import { recordNotFound } from '../errors.js';
 import { resolveStorageParam } from '../resolve-reference.js';
-import { h, optionalJsonBody, paginationParams, queryNumber, queryString, toNodeBuffer } from '../handler.js';
+import {
+	h,
+	optionalJsonBody,
+	paginationParams,
+	queryBoolean,
+	queryNumber,
+	queryString,
+	toNodeBuffer,
+} from '../handler.js';
 import { openKeyValueStore } from '../../storage/open.js';
 import { createStorage, listOwnedStorages, renameStorage, dropStorage, touchStorage } from '../../services/storages.js';
 import { keyValueStoreDto } from '../dto/storages.js';
@@ -116,7 +124,9 @@ export function mountKeyValueStores(router: Router): void {
 	router.get(
 		'/key-value-stores',
 		h(async (req, res) => {
-			const records = await listOwnedStorages(requireUser(req).id, 'keyValueStore');
+			const records = await listOwnedStorages(requireUser(req).id, 'keyValueStore', {
+				includeUnnamed: queryBoolean(req, 'unnamed') ?? false,
+			});
 			const sorted = sortByTimestamp(records, (record) => record.createdAt);
 			const envelope = paginate(sorted, paginationParams(req));
 			sendData(res, { ...envelope, items: envelope.items.map((record) => keyValueStoreDto(record)) });

@@ -1,6 +1,7 @@
 import type { ActorRecord, BuildRecord, RunRecord } from '../../storage/entities.js';
 import { getRunTelemetry } from '../../services/events-channel.js';
 import { computeRunUsage } from '../../services/run-usage.js';
+import { standbyUrl, type StandbyUrlAudience } from '../../services/standby-config.js';
 
 /** Matches `services/actors.ts`'s `DEFAULT_BUILD_TAG` - backfilled here only for run records that
  * predate `options.build` (directly-seeded test fixtures); every real run always has it set already. */
@@ -9,7 +10,7 @@ const DEFAULT_RUN_BUILD_TAG = 'latest';
  * that predate `options.diskMbytes`; every real run always has it set already. */
 const DISK_MBYTES_PER_MEMORY_MBYTE = 2;
 
-export function actorDto(actor: ActorRecord, username: string) {
+export function actorDto(actor: ActorRecord, username: string, audience: StandbyUrlAudience = 'host') {
 	return {
 		id: actor.id,
 		userId: actor.userId,
@@ -24,6 +25,8 @@ export function actorDto(actor: ActorRecord, username: string) {
 		defaultRunOptions: { build: 'latest', timeoutSecs: 300, memoryMbytes: 1024 },
 		deploymentKey: actor.id,
 		pricingInfos: actor.pricingInfos ?? [],
+		...(actor.actorStandby ? { actorStandby: actor.actorStandby } : {}),
+		standbyUrl: actor.actorStandby?.isEnabled ? standbyUrl(actor, username, audience) : null,
 		taggedBuilds: Object.fromEntries(
 			Object.entries(actor.taggedBuilds).map(([tag, info]) => [
 				tag,
@@ -87,6 +90,7 @@ export function runDto(run: RunRecord) {
 		},
 		generalAccess: run.generalAccess ?? 'FOLLOW_USER_SETTING',
 		meta: run.meta,
+		...(run.meta.origin === 'STANDBY' ? { standby: { deployment: 'SINGLE_TENANT' } } : {}),
 		stats: usage.stats,
 		usage: usage.usage,
 		usageUsd: usage.usageUsd,

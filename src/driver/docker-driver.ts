@@ -72,6 +72,7 @@ import {
 	type BrowserViewerTarget,
 	type BuildContext,
 	type BuildOutcome,
+	type ContainerServerAddress,
 	type DevFolderMount,
 	type DevFolderProbeFailureReason,
 	type DevFolderProbeOutcome,
@@ -465,10 +466,24 @@ async function allocateFreePort(): Promise<number> {
 			const address = server.address();
 			server.close(() => {
 				if (address && typeof address === 'object') resolve(address.port);
-				else reject(new Error('Could not allocate a free port for the browser-view sidecar'));
+				else reject(new Error('Could not allocate a free port'));
 			});
 		});
 	});
+}
+
+/**
+ * A standby container's env inside this process's network namespace: its server on `port`, and the API
+ * on loopback, since `apify-api` is not in the hosts file a joined namespace shares.
+ */
+export function sharedNetnsEnv(env: Record<string, string>, port: number): Record<string, string> {
+	const shared: Record<string, string> = {};
+	for (const [key, value] of Object.entries(env)) {
+		shared[key] = value.replace(`://${CONTAINER_API_ALIAS}:`, '://127.0.0.1:');
+	}
+	shared.ACTOR_STANDBY_PORT = String(port);
+	shared.ACTOR_WEB_SERVER_PORT = String(port);
+	return shared;
 }
 
 /**
@@ -698,6 +713,8 @@ export class DockerDriver implements Driver {
 	/** Shared by concurrent callers; cleared on failure so a later call retries (like `probeImageBuild`). */
 	private browserViewerImport: Promise<string> | undefined;
 	private readonly browserViewers = new Map<string, { container: Docker.Container; volumeName: string }>();
+	/** A started standby container's server address, keyed by run id; gone with the container. */
+	private readonly containerServers = new Map<string, ContainerServerAddress>();
 
 	available = false;
 	unavailableReason: string | undefined;
@@ -1076,7 +1093,12 @@ export class DockerDriver implements Driver {
 			throw new Error(this.unavailableReason ?? 'Docker is not available');
 		}
 
-		const env = Object.entries(ctx.env).map(([key, value]) => `${key}=${value}`);
+		const serverRoute = ctx.containerServerPort ? this.containerServerRoute() : undefined;
+		// In this process's network namespace every server needs a port of its own, and the API is on loopback.
+		const netnsServerPort = serverRoute === 'netns' ? await allocateFreePort() : undefined;
+		const env = Object.entries(netnsServerPort ? sharedNetnsEnv(ctx.env, netnsServerPort) : ctx.env).map(
+			([key, value]) => `${key}=${value}`,
+		);
 
 		// Informational only - the requested limits are applied verbatim either way.
 		const overCapacityWarning = this.buildOverCapacityWarning(ctx);
@@ -1123,6 +1145,28 @@ export class DockerDriver implements Driver {
 				: []),
 		];
 
+		// Only a server this process cannot reach on `apify-local` is published, on an engine-picked port.
+		const serverPublish =
+			ctx.containerServerPort && (serverRoute === 'loopback' || serverRoute === 'host')
+				? {
+						port: `${ctx.containerServerPort}/tcp`,
+						// A process on the host reaches loopback; one in a container off the network reaches the host.
+						binding: { HostIp: serverRoute === 'loopback' ? '127.0.0.1' : '', HostPort: '' },
+					}
+				: undefined;
+		const exposedPorts: Record<string, object> = {
+			...(ctx.debug ? { [`${ctx.debug.port}/tcp`]: {} } : {}),
+			...(serverPublish ? { [serverPublish.port]: {} } : {}),
+		};
+		const portBindings: Record<string, Array<{ HostIp: string; HostPort: string }>> = {
+			// Fixed 127.0.0.1-bound publish - lands on the developer's own host, not wherever the
+			// runtime process itself runs.
+			...(ctx.debug
+				? { [`${ctx.debug.port}/tcp`]: [{ HostIp: '127.0.0.1', HostPort: String(ctx.debug.port) }] }
+				: {}),
+			...(serverPublish ? { [serverPublish.port]: [serverPublish.binding] } : {}),
+		};
+
 		const container = await this.docker.createContainer({
 			Image: ctx.imageId,
 			Env: env,
@@ -1133,9 +1177,11 @@ export class DockerDriver implements Driver {
 						...(preservedEntrypoint.cmd ? { Cmd: preservedEntrypoint.cmd } : {}),
 					}
 				: {}),
-			...(ctx.debug ? { ExposedPorts: { [`${ctx.debug.port}/tcp`]: {} } } : {}),
+			...(Object.keys(exposedPorts).length > 0 && !netnsServerPort ? { ExposedPorts: exposedPorts } : {}),
 			HostConfig: {
-				...(await this.actorNetworkHostConfig()),
+				...(netnsServerPort
+					? { NetworkMode: `container:${process.env.HOSTNAME}` }
+					: await this.actorNetworkHostConfig()),
 				...(this.resourceLimits.memory ? { Memory: ctx.memoryMbytes * 1024 * 1024 } : {}),
 				// A CFS quota, never `NanoCpus`: the daemon hard-rejects a `NanoCpus` above the host's own
 				// CPU count, which would turn "warn, never clamp" into "cannot run at all". `CpuQuota` is
@@ -1145,15 +1191,7 @@ export class DockerDriver implements Driver {
 					: {}),
 				AutoRemove: false,
 				...(mounts.length > 0 ? { Mounts: mounts } : {}),
-				// Fixed 127.0.0.1-bound publish - lands on the developer's own host, not wherever the
-				// runtime process itself runs.
-				...(ctx.debug
-					? {
-							PortBindings: {
-								[`${ctx.debug.port}/tcp`]: [{ HostIp: '127.0.0.1', HostPort: String(ctx.debug.port) }],
-							},
-						}
-					: {}),
+				...(Object.keys(portBindings).length > 0 && !netnsServerPort ? { PortBindings: portBindings } : {}),
 			},
 			Tty: false,
 		});
@@ -1188,6 +1226,19 @@ export class DockerDriver implements Driver {
 			// Inside the `try` so a throw here still reaches the `finally` that stops the sampler and
 			// removes the container.
 			sampler = onSample ? startResourceSampler(container, ctx.memoryMbytes * 1024 * 1024, onSample) : undefined;
+
+			if (netnsServerPort) {
+				this.containerServers.set(ctx.runId, { host: '127.0.0.1', port: netnsServerPort });
+			} else if (ctx.containerServerPort && serverRoute && serverRoute !== 'netns') {
+				const address = await this.resolveContainerServer(container, ctx.containerServerPort, serverRoute);
+				if (address) this.containerServers.set(ctx.runId, address);
+				else
+					onLog(
+						formatRuntimeLog(
+							`Could not determine where the Actor's server on port ${ctx.containerServerPort} is reachable.`,
+						),
+					);
+			}
 
 			const logStream = (await container.logs({
 				follow: true,
@@ -1229,10 +1280,12 @@ export class DockerDriver implements Driver {
 				logStream.once('close', finish);
 			});
 
-			timeout = setTimeout(() => {
-				this.timedOutRuns.add(ctx.runId);
-				void container.stop().catch(() => undefined);
-			}, ctx.timeoutSecs * 1000);
+			if (ctx.timeoutSecs > 0) {
+				timeout = setTimeout(() => {
+					this.timedOutRuns.add(ctx.runId);
+					void container.stop().catch(() => undefined);
+				}, ctx.timeoutSecs * 1000);
+			}
 
 			const result = (await container.wait()) as { StatusCode: number };
 			// `container.wait()` resolves the same way whether the process exited on its own or was
@@ -1272,11 +1325,50 @@ export class DockerDriver implements Driver {
 			await sampler?.stop();
 			this.timedOutRuns.delete(ctx.runId);
 			this.runContainers.delete(ctx.runId);
+			this.containerServers.delete(ctx.runId);
 			// `{ v: true }` also removes any anonymous volumes; the named per-run `node_modules` volume of a
 			// `devMount` run (`buildDevMounts`) is not covered by it and goes separately, after the container.
 			await container.remove({ v: true }).catch(() => undefined);
 			if (ctx.devMount) await this.removeVolumeWithRetry(devNodeModulesVolumeName(ctx.runId));
 		}
+	}
+
+	async containerServerAddress(runId: string): Promise<ContainerServerAddress | undefined> {
+		return this.containerServers.get(runId);
+	}
+
+	/**
+	 * How this process reaches a standby container's server: directly on `apify-local` when this process
+	 * sits there too; otherwise through a published port - on loopback for a process running on the host
+	 * itself, on the host's address for one in a container off the network (rootless Podman). On Podman
+	 * 3.x the host's address from a container is the slirp4netns gateway, which reaches the host's
+	 * published ports only for containers started with `allow_host_loopback` - never this one - so the
+	 * standby container joins this container's network namespace instead, as a browser-view sidecar does.
+	 */
+	private containerServerRoute(): 'network' | 'loopback' | 'host' | 'netns' {
+		if (this.onActorNetwork && !this.actorsOnDefaultNetwork) return 'network';
+		if (this.actorsOnDefaultNetwork && process.env.HOSTNAME) return 'netns';
+		return process.env.HOSTNAME ? 'host' : 'loopback';
+	}
+
+	private async resolveContainerServer(
+		container: Docker.Container,
+		port: number,
+		route: 'network' | 'loopback' | 'host',
+	): Promise<ContainerServerAddress | undefined> {
+		const info = await container.inspect().catch(() => undefined);
+		if (!info) return undefined;
+		if (route === 'network') {
+			const host = containerAddress(info, NETWORK_NAME);
+			return host ? { host, port } : undefined;
+		}
+		const hostPort = Number(info.NetworkSettings?.Ports?.[`${port}/tcp`]?.[0]?.HostPort);
+		if (!Number.isInteger(hostPort) || hostPort <= 0) return undefined;
+		if (route === 'loopback') return { host: '127.0.0.1', port: hostPort };
+		const host =
+			(await engineHostEntry(this.hostsFile)) ??
+			defaultGatewayFromRouteTable(await readFile(this.routeFile, 'utf8').catch(() => ''));
+		return host ? { host, port: hostPort } : undefined;
 	}
 
 	/** `startRun`'s pre-container check that a registered dev folder is still a directory on the host -
@@ -1429,9 +1521,11 @@ export class DockerDriver implements Driver {
 			`Debug mode: this run is paused before its first line, waiting for a debugger. ${tool} is listening ` +
 			`inside the container on 0.0.0.0:${port}, published on the host at 127.0.0.1:${port} - ${attach}. Set ` +
 			`your breakpoints as part of that attach - the runtime does not stop synthetically beyond the initial ` +
-			`wait, so code runs to your first breakpoint once the IDE delivers it. The run's ${timeoutSecs}s timeout ` +
-			`is already running and is NOT extended for debugging; pass a larger \`apify call --timeout\` when you ` +
-			`expect a long session.\n`
+			`wait, so code runs to your first breakpoint once the IDE delivers it. ` +
+			(timeoutSecs > 0
+				? `The run's ${timeoutSecs}s timeout is already running and is NOT extended for debugging; pass a ` +
+					`larger \`apify call --timeout\` when you expect a long session.\n`
+				: `The run has no timeout.\n`)
 		);
 	}
 

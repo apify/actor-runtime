@@ -34,6 +34,9 @@ import { debugStatus, setDebugMode } from '../services/debug-mode.js';
 import { browserViewStatus, setBrowserView } from '../services/browser-view.js';
 import { getBuildById, listAllBuilds } from '../services/builds.js';
 import { getRunById, listAllRuns } from '../services/runs.js';
+import { standbyUrl } from '../services/standby-config.js';
+import { standbyPoolSnapshot } from '../services/standby.js';
+import { getUserById } from '../services/users.js';
 import { migrateRun } from '../services/migrations.js';
 import { isTerminalJobStatus } from '../services/job-status.js';
 import { isBrowserViewPending } from './browser-view-ws.js';
@@ -58,6 +61,7 @@ import {
 	migrateRunForm,
 	pricingSection,
 	settingsForm,
+	standbyLink,
 	table,
 	usageSection,
 	type LinkedCell,
@@ -187,6 +191,46 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		);
 	});
 
+	/** Read-only: the settings are changed through the API, as on the platform. */
+	async function standbySection(actor: ActorRecord): Promise<string> {
+		const config = actor.actorStandby;
+		if (!config?.isEnabled) {
+			return '<h2>Actor Standby</h2><p class="empty">(Actor Standby is off)</p>';
+		}
+		const owner = await getUserById(actor.userId);
+		const url = owner ? standbyUrl(actor, owner.username) : '';
+		const pool = standbyPoolSnapshot(actor.id);
+		return (
+			'<h2>Actor Standby</h2>' +
+			(owner
+				? "<p>Open or copy the standby URL with the owner's token already in it:</p>" +
+					standbyLink(url, owner.token)
+				: '') +
+			definitionList([
+				['standbyUrl', url],
+				['build', config.build],
+				['memoryMbytes', config.memoryMbytes],
+				['desiredRequestsPerActorRun', config.desiredRequestsPerActorRun],
+				['maxRequestsPerActorRun', config.maxRequestsPerActorRun],
+				['idleTimeoutSecs', config.idleTimeoutSecs],
+				['shouldPassActorInput', String(config.shouldPassActorInput)],
+			]) +
+			'<h3>Standby runs</h3>' +
+			(pool.length === 0
+				? '<p class="empty">(none running - the next request starts one)</p>'
+				: table(
+						['runId', 'open requests', 'ready'],
+						pool.map((entry) => [
+							entry.runId
+								? { text: entry.runId, href: `/runs/${encodeURIComponent(entry.runId)}` }
+								: '(starting)',
+							String(entry.openRequests),
+							entry.ready ? 'yes' : 'no',
+						]),
+					))
+		);
+	}
+
 	app.get('/actors/:id', async (req, res) => {
 		const actor = await getActorById(req.params.id);
 		if (!actor) {
@@ -222,7 +266,8 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			pricingSection(actor.id, actor.pricingInfos, pricingError) +
 			devFolderSection(actor.id, devFolderStatus(actor), devFolderError) +
 			debugModeSection(actor.id, actor.localDebug, debugModeError) +
-			browserViewSection(actor.id, actor.localBrowserView, browserViewError);
+			browserViewSection(actor.id, actor.localBrowserView, browserViewError) +
+			(await standbySection(actor));
 		res.send(layout(`Actor ${actor.name}`, body));
 	});
 
@@ -471,6 +516,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			['startedAt', run.startedAt],
 			['finishedAt', run.finishedAt ?? ''],
 			['statusMessage', run.statusMessage ?? ''],
+			['origin', run.meta.origin],
 			['migrationCount', run.stats?.migrationCount ?? 0],
 			['rebootCount', run.stats?.rebootCount ?? 0],
 			['defaultDatasetId', storageLink('/datasets', run.defaultDatasetId)],

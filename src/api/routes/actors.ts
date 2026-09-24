@@ -32,12 +32,43 @@ import {
 import { listOwnedRuns, startRun, waitForRunFinish } from '../../services/runs.js';
 import { getRegistries } from '../../storage/registries.js';
 import { actorDto, buildDto, runDto } from '../dto/actors.js';
-import type { ActorPricingInfoRecord, ActorRecord, ActorVersionRecord } from '../../storage/entities.js';
+import type {
+	ActorPricingInfoRecord,
+	ActorRecord,
+	ActorStandbyRecord,
+	ActorVersionRecord,
+} from '../../storage/entities.js';
 import type { ApiServerDeps } from '../server.js';
 import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { resolveProxyPassword } from '../../services/users.js';
 import { validatePricingInfosUpdate } from '../../services/pricing.js';
 import { resolveBuildInput } from '../../services/input-schema.js';
+import {
+	declaresStandbyMode,
+	mergeStandbyUpdate,
+	standbyUrl,
+	standbyUrlAudienceOf,
+} from '../../services/standby-config.js';
+
+/** `undefined` when the body does not mention the field; an invalid one throws. */
+function actorStandbyFromBody(body: { actorStandby?: unknown }, actor?: ActorRecord): ActorStandbyRecord | undefined {
+	if (body.actorStandby === undefined || body.actorStandby === null) return undefined;
+	const result = mergeStandbyUpdate(body.actorStandby, actor?.actorStandby);
+	if (result.kind === 'invalid') throw invalidRequest(result.message);
+	return result.actorStandby;
+}
+
+/** The platform enables standby, never disables it, for a version whose `.actor/actor.json` asks for it;
+ * `undefined` when that changes nothing. */
+function standbyEnabledByVersions(
+	current: ActorStandbyRecord | undefined,
+	versions: ActorVersionRecord[],
+): ActorStandbyRecord | undefined {
+	if (current?.isEnabled) return undefined;
+	if (!versions.some((version) => declaresStandbyMode(version.sourceFiles ?? []))) return undefined;
+	const result = mergeStandbyUpdate({ isEnabled: true }, current);
+	return result.kind === 'ok' ? result.actorStandby : undefined;
+}
 
 /**
  * `undefined` when the body does not mention the field; a body that does but is invalid throws, with the
@@ -64,7 +95,9 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 			const envelope = paginate(sorted, paginationParams(req));
 			sendData(res, {
 				...envelope,
-				items: envelope.items.map((actor) => actorDto(actor, requireUser(req).username)),
+				items: envelope.items.map((actor) =>
+					actorDto(actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)),
+				),
 			});
 		}),
 	);
@@ -77,11 +110,14 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				title?: string;
 				versions?: ActorVersionRecord[];
 				pricingInfos?: unknown;
+				actorStandby?: unknown;
 			}>(req);
 			if (!body.name) throw invalidRequest('Actor "name" is required');
 			if (body.pricingInfos !== undefined) throw cannotSetPricingOnCreate();
-			const actor = await createActor(requireUser(req).id, body);
-			sendData(res, actorDto(actor, requireUser(req).username), 201);
+			// An explicit `actorStandby` wins over `usesStandbyMode`, even one that disables it.
+			const actorStandby = actorStandbyFromBody(body) ?? standbyEnabledByVersions(undefined, body.versions ?? []);
+			const actor = await createActor(requireUser(req).id, { ...body, actorStandby });
+			sendData(res, actorDto(actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)), 201);
 		}),
 	);
 
@@ -90,7 +126,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
-			sendData(res, actorDto(actor, requireUser(req).username));
+			sendData(res, actorDto(actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)));
 		}),
 	);
 
@@ -99,15 +135,22 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const actor = await resolveActorParam(req);
 			if (!actor) throw recordNotFound();
-			const body = jsonBody<{ name?: string; title?: string; pricingInfos?: unknown }>(req);
+			const body = jsonBody<{ name?: string; title?: string; pricingInfos?: unknown; actorStandby?: unknown }>(
+				req,
+			);
 			const pricingInfos = pricingInfosFromBody(body, actor);
+			const actorStandby = actorStandbyFromBody(body, actor);
 			const updated = await updateActor(actor.id, (current) => ({
 				...current,
 				name: body.name ?? current.name,
 				title: body.title ?? current.title,
 				...(pricingInfos !== undefined ? { pricingInfos } : {}),
+				...(actorStandby !== undefined ? { actorStandby } : {}),
 			}));
-			sendData(res, actorDto(updated ?? actor, requireUser(req).username));
+			sendData(
+				res,
+				actorDto(updated ?? actor, requireUser(req).username, standbyUrlAudienceOf(req.headers.host)),
+			);
 		}),
 	);
 
@@ -146,7 +189,10 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				sourceFiles: body.sourceFiles ?? [],
 				envVars: body.envVars,
 			};
-			await updateActor(actor.id, (current) => addOrReplaceVersion(current, version));
+			await updateActor(actor.id, (current) => {
+				const actorStandby = standbyEnabledByVersions(current.actorStandby, [version]);
+				return { ...addOrReplaceVersion(current, version), ...(actorStandby ? { actorStandby } : {}) };
+			});
 			sendData(res, version, 201);
 		}),
 	);
@@ -306,6 +352,7 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 				build: tag,
 				// Runtime-only extension (`api.md`): `?devFolder=false` skips the dev-folder mount for this run.
 				devFolder: queryBoolean(req, 'devFolder'),
+				standbyUrl: standbyUrl(actor, requireUser(req).username),
 				proxyPassword: resolveProxyPassword(requireUser(req)),
 				apiBaseUrl: CONTAINER_API_BASE_URL,
 				token: requireUser(req).token,
