@@ -276,8 +276,9 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   in the container reports `isAtHome`/`is_at_home = true`).
 - `APIFY_META_ORIGIN` — the run's origin: `STANDBY` for a standby run, `API` for every other run (every
   local run arrives via the API, apify-cli included)
-- `ACTOR_STANDBY_PORT` — the port an Actor server listens on: a version-level `ACTOR_WEB_SERVER_PORT` or
-  `ACTOR_STANDBY_PORT`, else `4321`, as on the platform.
+- `ACTOR_STANDBY_PORT` / `ACTOR_WEB_SERVER_PORT` — the port an Actor server listens on, both set to the same
+  value (the JavaScript SDK reads the first, the Python SDK the second): a version-level
+  `ACTOR_WEB_SERVER_PORT` or `ACTOR_STANDBY_PORT`, else `4321`, as on the platform.
 - `ACTOR_STANDBY_URL` — the Actor's standby URL (`api.md`).
 - `APIFY_API_BASE_URL` — the runtime's own API, reachable by name from any
   Actor container on the shared Docker network (see "Networking" above).

@@ -92,7 +92,7 @@ real account, not in the runtime.
 ## Inside the Actor container
 
 - Run metadata env vars (input key, build, task, user, timestamps)
-- Web server and proxy env vars
+- Web server URL (`ACTOR_WEB_SERVER_URL`) and proxy env vars
 - Input secrets private key
 - Log rate limiting, line truncation and size cap
 - Secret redaction in logs

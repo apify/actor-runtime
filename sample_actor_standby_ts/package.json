@@ -1,0 +1,24 @@
+{
+	"name": "my-standby-actor-ts",
+	"version": "0.0.1",
+	"type": "module",
+	"description": "A TypeScript Actor Standby server for actor-runtime.",
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"dependencies": {
+		"apify": "^3.7.0",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@apify/tsconfig": "^0.2.0",
+		"@types/node": "^24.0.0",
+		"@types/ws": "^8.18.1",
+		"typescript": "^6.0.0"
+	},
+	"scripts": {
+		"start": "node dist/main.js",
+		"build": "tsc"
+	},
+	"license": "ISC"
+}

@@ -154,6 +154,7 @@ function buildEnv(
 	// diverge would size the run differently depending on which SDK happens to read it.
 	const eventsWebSocketUrl = `${CONTAINER_EVENTS_WS_BASE_URL}/actor-runtime/events/${run.id}`;
 	const memoryMbytes = String(run.options.memoryMbytes);
+	const containerServerPort = String(containerServerPortFor(version));
 
 	// Prepend, never clobber, a version-level envVars entry of the same name.
 	const debugEnv: Record<string, string> = {};
@@ -185,7 +186,9 @@ function buildEnv(
 		APIFY_MEMORY_MBYTES: memoryMbytes,
 		// No `ACTOR_`-prefixed counterpart exists; only the Python SDK reads this.
 		APIFY_DEDICATED_CPUS: String(dedicatedCpusFor(run.options.memoryMbytes)),
-		ACTOR_STANDBY_PORT: String(containerServerPortFor(version)),
+		// Both, as on the platform: the JavaScript SDK reads the first, the Python SDK the second.
+		ACTOR_STANDBY_PORT: containerServerPort,
+		ACTOR_WEB_SERVER_PORT: containerServerPort,
 	};
 	if (options.standbyUrl) env.ACTOR_STANDBY_URL = options.standbyUrl;
 	if (options.proxyPassword) env.APIFY_PROXY_PASSWORD = options.proxyPassword;

@@ -1,12 +1,14 @@
 /**
- * Actor Standby end to end (`test.md`'s "Actor Standby"): `apify push` of `sample_actor_standby` enables
- * Standby from its `.actor/actor.json`, requests to the Actor's standby URL are served by a standby run,
- * and an idle run is wound down. The requests themselves are plain HTTP - the narrow exception `test.md`
+ * Actor Standby end to end (`test.md`'s "Actor Standby"), for both standby samples: `apify push` enables
+ * Standby from `.actor/actor.json`, requests to the Actor's standby URL are served by one standby run,
+ * an idle run is wound down, and the next request starts a fresh one that sees the previous run's
+ * totals. The requests themselves are plain HTTP and a websocket - the narrow exception `test.md`
  * allows, since no `apify` command sends one; every other assertion reads `apify` output.
  */
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
 
 import {
 	buildRuntimeImage,
@@ -30,7 +32,6 @@ import { waitFor } from './helpers/wait.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
-const ACTOR_DIR = join(REPO_ROOT, 'sample_actor_standby');
 const CONTAINER_NAME = 'actor-runtime-e2e-standby';
 const IMAGE_TAG = 'actor-runtime:e2e';
 /** `helpers/apify-cli.ts`' login token. */
@@ -42,6 +43,26 @@ interface RunSummary {
 	meta: { origin: string };
 	defaultDatasetId: string;
 	options: { timeoutSecs: number };
+}
+
+async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(url, { ...init, headers: { authorization: `Bearer ${TOKEN}`, ...init?.headers } });
+	expect(res.status, `${url} answered ${res.status}: ${await res.clone().text()}`).toBe(200);
+	return (await res.json()) as T;
+}
+
+function websocketRoundTrip(url: string): Promise<string[]> {
+	return new Promise((resolve, reject) => {
+		const frames: string[] = [];
+		const socket = new WebSocket(url);
+		socket.on('message', (data) => {
+			frames.push(String(data));
+			if (frames.length === 1) socket.send('ping');
+			else socket.close();
+		});
+		socket.on('close', () => resolve(frames));
+		socket.on('error', reject);
+	});
 }
 
 describe('Actor Standby via apify-cli (requires Docker)', () => {
@@ -69,78 +90,85 @@ describe('Actor Standby via apify-cli (requires Docker)', () => {
 		if (isolatedApifyHome) removeIsolatedApifyHome(isolatedApifyHome);
 	});
 
-	it(
-		'push enables Standby; requests share one STANDBY run, which is wound down SUCCEEDED once idle',
-		async () => {
-			const env = apifyEnv(isolatedApifyHome);
-			const push = JSON.parse(apify(['push', '--json'], { cwd: ACTOR_DIR, env })) as PushResult;
-			expect(push.build.status).toBe('SUCCEEDED');
+	for (const sample of ['sample_actor_standby_ts', 'sample_actor_standby_py']) {
+		it(
+			`${sample}: push enables Standby; one STANDBY run serves every endpoint and is wound down once idle`,
+			async () => {
+				const actorDir = join(REPO_ROOT, sample);
+				const env = apifyEnv(isolatedApifyHome);
+				const push = JSON.parse(apify(['push', '--json'], { cwd: actorDir, env })) as PushResult;
+				expect(push.build.status).toBe('SUCCEEDED');
 
-			const actorId = push.actor.id;
-			apify(
-				[
-					'api',
-					'PUT',
-					`actors/${actorId}`,
-					'--body',
-					JSON.stringify({ actorStandby: { idleTimeoutSecs: 10 } }),
-				],
-				{
-					cwd: ACTOR_DIR,
-					env,
-				},
-			);
-			const actor = JSON.parse(
-				apify(['api', 'GET', `actors/${actorId}`], { cwd: ACTOR_DIR, env }),
-			) as ApiEnvelope<{
-				actorStandby: { isEnabled: boolean; idleTimeoutSecs: number };
-				standbyUrl: string;
-			}>;
-			expect(actor.data.actorStandby).toMatchObject({ isEnabled: true, idleTimeoutSecs: 10 });
+				const actorId = push.actor.id;
+				const body = JSON.stringify({ actorStandby: { idleTimeoutSecs: 10 } });
+				apify(['api', 'PUT', `actors/${actorId}`, '--body', body], { cwd: actorDir, env });
+				const actor = JSON.parse(
+					apify(['api', 'GET', `actors/${actorId}`], { cwd: actorDir, env }),
+				) as ApiEnvelope<{ actorStandby: { isEnabled: boolean; idleTimeoutSecs: number }; standbyUrl: string }>;
+				expect(actor.data.actorStandby).toMatchObject({ isEnabled: true, idleTimeoutSecs: 10 });
+				const url = actor.data.standbyUrl;
 
-			const greetings: Array<{ greeting: string; runId: string }> = [];
-			for (const name of ['Ada', 'Grace', 'Linus']) {
-				const res = await fetch(`${actor.data.standbyUrl}/hello?name=${name}`, {
-					headers: { authorization: `Bearer ${TOKEN}` },
+				const index = await getJson<{ runId: string; endpoints: string[] }>(`${url}/`);
+				expect(index.endpoints).toContain('GET /hello?name=');
+				const runId = index.runId;
+
+				for (const name of ['Ada', 'Grace', 'Linus']) {
+					const hello = await getJson<{ greeting: string; runId: string }>(`${url}/hello?name=${name}`);
+					expect(hello).toMatchObject({ greeting: `Hello, ${name}!`, runId });
+				}
+
+				const echo = await getJson<{ query: Record<string, string>; body: unknown }>(`${url}/echo?x=1`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ nested: { ok: true } }),
 				});
-				expect(res.status).toBe(200);
-				greetings.push((await res.json()) as { greeting: string; runId: string });
-			}
-			expect(greetings.map((g) => g.greeting)).toEqual(['Hello, Ada!', 'Hello, Grace!', 'Hello, Linus!']);
-			expect(new Set(greetings.map((g) => g.runId)).size).toBe(1);
-			const runId = greetings[0]!.runId;
+				expect(echo).toMatchObject({ query: { x: '1' }, body: { nested: { ok: true } } });
 
-			const runOf = () =>
-				(
-					JSON.parse(
-						apify(['api', 'GET', `actor-runs/${runId}`], { cwd: ACTOR_DIR, env }),
-					) as ApiEnvelope<RunSummary>
-				).data;
-			expect(runOf()).toMatchObject({
-				status: 'RUNNING',
-				meta: { origin: 'STANDBY' },
-				options: { timeoutSecs: 0 },
-			});
+				const stream = await fetch(`${url}/stream?count=3&token=${TOKEN}`);
+				expect(stream.headers.get('content-type')).toMatch(/^text\/event-stream/);
+				const events = (await stream.text()).match(/^event: \w+$/gm);
+				expect(events).toEqual(['event: tick', 'event: tick', 'event: tick', 'event: done']);
 
-			const finished = await waitFor(
-				() => {
-					const run = runOf();
-					return run.status === 'SUCCEEDED' ? run : undefined;
-				},
-				90_000,
-				'the idle standby run to finish',
-			);
-			const info = JSON.parse(
-				apify(['datasets', 'info', finished.defaultDatasetId, '--json'], { cwd: ACTOR_DIR, env }),
-			) as DatasetInfoResult;
-			expect(info.itemCount).toBe(3);
-			const log = apify(['api', 'GET', `logs/${runId}`], { cwd: ACTOR_DIR, env });
-			expect(log).toContain('Actor Standby server was idle for too long, finishing run.');
+				const frames = await websocketRoundTrip(`${url.replace(/^http/, 'ws')}/ws?token=${TOKEN}`);
+				expect(JSON.parse(frames[0]!)).toMatchObject({ runId });
+				expect(JSON.parse(frames[1]!)).toEqual({ echo: 'ping' });
 
-			// The next request starts a fresh run.
-			const next = (await (await fetch(`${actor.data.standbyUrl}/?token=${TOKEN}`)).json()) as { runId: string };
-			expect(next.runId).not.toBe(runId);
-		},
-		5 * 60 * 1000,
-	);
+				const runOf = () =>
+					(
+						JSON.parse(
+							apify(['api', 'GET', `actor-runs/${runId}`], { cwd: actorDir, env }),
+						) as ApiEnvelope<RunSummary>
+					).data;
+				expect(runOf()).toMatchObject({
+					status: 'RUNNING',
+					meta: { origin: 'STANDBY' },
+					options: { timeoutSecs: 0 },
+				});
+
+				const finished = await waitFor(
+					() => {
+						const run = runOf();
+						return run.status === 'SUCCEEDED' ? run : undefined;
+					},
+					120_000,
+					'the idle standby run to finish',
+				);
+				const info = JSON.parse(
+					apify(['datasets', 'info', finished.defaultDatasetId, '--json'], { cwd: actorDir, env }),
+				) as DatasetInfoResult;
+				expect(info.itemCount).toBe(3);
+				const log = apify(['api', 'GET', `logs/${runId}`], { cwd: actorDir, env });
+				expect(log).toContain('Actor Standby server was idle for too long, finishing run.');
+
+				// A fresh run, which reads the totals the finished one saved: 3 greetings, an echo, a stream,
+				// a websocket, and now this request.
+				const stats = await getJson<{ runId: string; allRuns: { served: number; runs: number } }>(
+					`${url}/stats`,
+				);
+				expect(stats.runId).not.toBe(runId);
+				expect(stats.allRuns).toEqual({ served: 7, runs: 2 });
+			},
+			8 * 60 * 1000,
+		);
+	}
 });

@@ -205,8 +205,9 @@ curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/
 - A request that cannot be served says why: `standby-not-enabled`, `standby-run-finished` (the run
   crashed before its server came up - read its log), `standby-run-not-ready` (nothing listened on the port
   within 180 s).
-- `apify call` still starts an ordinary `API` run of the same Actor. `sample_actor_standby` is a minimal
-  Actor server to start from. Multi-tenant Standby and Standby for tasks are not emulated.
+- `apify call` still starts an ordinary `API` run of the same Actor. `sample_actor_standby_ts` and
+  `sample_actor_standby_py` are complete Actor servers (JSON, request body, Server-Sent Events, websocket,
+  graceful shutdown) to start from. Multi-tenant Standby and Standby for tasks are not emulated.
 
 ## Test how an Actor handles a platform migration
 

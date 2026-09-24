@@ -78,10 +78,13 @@ An Actor with Standby enabled - `"usesStandbyMode": true` in `.actor/actor.json`
 through the API - is served over HTTP at its `standbyUrl`, on the API port:
 
 ```bash
-cd sample_actor_standby
+cd sample_actor_standby_ts     # or sample_actor_standby_py
 apify push
-curl "http://localhost:3333/actor-runtime/standby/<username>--my-standby-actor/hello?name=Ada&token=<token>"
+curl "http://localhost:3333/actor-runtime/standby/<username>--my-standby-actor-ts/hello?name=Ada&token=<token>"
 ```
+
+The two samples are the same server in TypeScript and Python - JSON endpoints, a request body echo, a
+Server-Sent Events stream, a websocket and stats kept across runs; each README lists the calls.
 
 Requests are handed to standby runs the runtime starts, scales by `desiredRequestsPerActorRun` /
 `maxRequestsPerActorRun` and winds down after `idleTimeoutSecs` without a request, as on the platform.

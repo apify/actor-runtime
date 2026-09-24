@@ -282,7 +282,11 @@ describe('standby router', () => {
 		const ctx = driver.containers[0]!.ctx;
 		expect(ctx.containerServerPort).toBe(4321);
 		expect(ctx.timeoutSecs).toBe(0);
-		expect(ctx.env).toMatchObject({ APIFY_META_ORIGIN: 'STANDBY', ACTOR_STANDBY_PORT: '4321' });
+		expect(ctx.env).toMatchObject({
+			APIFY_META_ORIGIN: 'STANDBY',
+			ACTOR_STANDBY_PORT: '4321',
+			ACTOR_WEB_SERVER_PORT: '4321',
+		});
 		expect(ctx.env.ACTOR_STANDBY_URL).toMatch(/\/actor-runtime\/standby\/.+--standby-actor$/);
 		expect(driver.containers[0]!.probes).toBeGreaterThan(0);
 
