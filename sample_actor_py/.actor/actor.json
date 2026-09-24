@@ -5,7 +5,7 @@
 	"description": "Crawls up to maxPages same-domain pages starting from startUrl, over a request queue, pushing one dataset item per page.",
 	"version": "0.0",
 	"buildTag": "latest",
-	"defaultMemoryMbytes": 512,
+	"defaultMemoryMbytes": "get(input, 'maxPages', 1) * 128",
 	"meta": {
 		"templateId": "python-empty"
 	},

@@ -155,7 +155,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			expect(call.run.status).toBe('SUCCEEDED');
 			const run = getRun(call.run.id, env);
 			expect(run.pricingInfo?.pricingModel).toBe('PAY_PER_EVENT');
-			// 512 MB (the sample's defaultMemoryMbytes) -> the start event once; the SDK charged the page and crawl events over the endpoint.
+			// 3 pages -> 512 MB from the sample's defaultMemoryMbytes -> the start event once; the SDK charged the page and crawl events over the endpoint.
 			expect(run.chargedEventCounts).toEqual({
 				[PAGE_EVENT]: 3,
 				[FINISHED_EVENT]: 1,
