@@ -77,8 +77,6 @@
 - **The mount is applied only when both a registered dev folder and a known working directory exist**
   for the run's resolved build; either missing means the run starts exactly as if the feature did not
   exist.
-- A successful build of an Actor with a registered dev folder says so in its log, naming the folder and
-  the working directory runs will mount it over.
 - **A single run can opt out** of the mount (`?devFolder=false` on run start, `api.md`) without touching
   the registration. When a mount is skipped this way, the run's log says so.
 - The registration status the console and API report is the registered folder alone - never that a
