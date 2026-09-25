@@ -91,6 +91,9 @@ function timedDriver(resolveAfterMs: number): Driver {
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -248,6 +251,9 @@ describe('CLI log-stream race: apify-cli outputJobLog must always settle (regres
 					async startBrowserViewer() {
 						throw new Error('not used by this stub');
 					},
+					async devFolderHasEntry() {
+						throw new Error('not used by this stub');
+					},
 					async stopBrowserViewer() {},
 					async containerServerAddress() {
 						return undefined;
@@ -385,6 +391,9 @@ describe('CLI log-stream race: apify-cli outputJobLog must always settle (regres
 						throw new Error('not used by this stub');
 					},
 					async startBrowserViewer() {
+						throw new Error('not used by this stub');
+					},
+					async devFolderHasEntry() {
 						throw new Error('not used by this stub');
 					},
 					async stopBrowserViewer() {},

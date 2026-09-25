@@ -132,6 +132,9 @@ function neverStartDriver(): Driver & { abortRunCalls: string[]; abortBuildCalls
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -815,6 +818,9 @@ describe('reconcileOrphanedJobs (startup reconciliation)', () => {
 				throw new Error('not used by this stub');
 			},
 			async startBrowserViewer() {
+				throw new Error('not used by this stub');
+			},
+			async devFolderHasEntry() {
 				throw new Error('not used by this stub');
 			},
 			async stopBrowserViewer() {},

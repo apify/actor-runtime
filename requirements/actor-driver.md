@@ -79,6 +79,11 @@
   exist.
 - **A single run can opt out** of the mount (`?devFolder=false` on run start, `api.md`) without touching
   the registration. When a mount is skipped this way, the run's log says so.
+- When a run under the mount fails because a module could not be found, and the registered folder is a
+  TypeScript project that has not been compiled (a `tsconfig.json` with no `dist`), the run log ends
+  with a red runtime explanation: the mount hid the image's compiled output, so the folder must be
+  compiled locally or the run started without the dev folder. A folder that is compiled, or is not a
+  TypeScript project, gets no such line - the failure is then the Actor's own.
 - The registration status the console and API report is the registered folder alone - never that a
   mount "will apply", since that depends on which build a given run resolves.
 - If the registered folder has since been deleted, moved, or made unreadable, the run must **fail

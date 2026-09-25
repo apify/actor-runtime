@@ -199,6 +199,12 @@ export interface Driver {
 	 * with a permanently-dead, permanently-untested fallback for "not implemented". */
 	probeDevFolder(candidatePath: string, imageId: string): Promise<DevFolderProbeOutcome>;
 
+	/** Whether `relativePath` exists inside a registered dev folder on the host, through the same probe
+	 * `probeDevFolder` uses. Answers `services/dev-folder.ts`'s after-the-fact question of why a run
+	 * under the mount failed (an uncompiled TypeScript folder), so it is required on every `Driver` for
+	 * the same reason `probeDevFolder` is. */
+	devFolderHasEntry(localDevFolder: string, relativePath: string): Promise<boolean>;
+
 	/** Builds (on first call) and returns the id of the runtime's own minimal image used only to give
 	 * `probeDevFolder` above something host-present to create its throwaway container against - nothing
 	 * about the image's contents matters, only that Docker will accept it. Idempotent: a later call

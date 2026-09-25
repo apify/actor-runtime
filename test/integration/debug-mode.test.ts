@@ -61,6 +61,9 @@ function debugCapturingDriver(
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -748,6 +751,9 @@ describe('run-start debug-plan resolution (services/runs.ts, through the real st
 				throw new Error('not used by this stub');
 			},
 			async startBrowserViewer() {
+				throw new Error('not used by this stub');
+			},
+			async devFolderHasEntry() {
 				throw new Error('not used by this stub');
 			},
 			async stopBrowserViewer() {},

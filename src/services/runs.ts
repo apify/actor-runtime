@@ -1,5 +1,10 @@
 import { generateId } from '../storage/ids.js';
-import { liveDevFolderWarningLines, unknownWorkingDirectoryLine } from './dev-folder.js';
+import {
+	diagnoseUncompiledDevFolder,
+	liveDevFolderWarningLines,
+	mentionsMissingModule,
+	unknownWorkingDirectoryLine,
+} from './dev-folder.js';
 import type { ActorRecord, ActorVersionRecord, BuildRecord, JobStatus, RunRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
@@ -412,6 +417,8 @@ export async function runInBackground(
 	}
 	const runtimeSection = devMount ? liveDevFolderWarningLines(devMount) : [];
 	if (runtimeSection.length > 0) appendLog(record.id, formatRuntimeLogLines(runtimeSection));
+	// Only what a mounted run prints is watched: elsewhere a missing module is the Actor's own problem.
+	let missingModuleUnderMount = false;
 
 	// The sidecar comes up before the Actor's container. Started before the pre-start abort re-check below,
 	// so an abort landing during this (possibly slow) step is still caught by it.
@@ -467,7 +474,10 @@ export async function runInBackground(
 					// The sidecar outlives a migration/reboot restart; the new container mounts the same volume.
 					x11SocketVolume: browserViewer?.x11SocketVolume,
 				},
-				(chunk) => appendLog(record.id, chunk),
+				(chunk) => {
+					if (devMount && !missingModuleUnderMount) missingModuleUnderMount = mentionsMissingModule(chunk);
+					appendLog(record.id, chunk);
+				},
 				(sample) => publishSystemInfo(record.id, sample, record.options),
 			);
 
@@ -494,6 +504,12 @@ export async function runInBackground(
 					: outcome.exitCode === 0
 						? 'SUCCEEDED'
 						: 'FAILED';
+			// After the Actor's last line and before the status turns terminal, so a client that reads the
+			// log on seeing FAILED finds the explanation right under the stack trace.
+			if (status === 'FAILED' && devMount && missingModuleUnderMount) {
+				const diagnosis = await diagnoseUncompiledDevFolder(driver, devMount);
+				if (diagnosis) appendLog(record.id, formatRuntimeLogLines(diagnosis));
+			}
 			// Flush before writing the terminal status, not after: `driver.startRun` resolving is the signal
 			// that every `onLog` call for this run has already happened (the Docker driver waits for its log
 			// capture stream to fully drain before resolving - see `docker-driver.ts`'s doc comment on

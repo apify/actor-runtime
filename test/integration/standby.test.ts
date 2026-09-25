@@ -115,6 +115,9 @@ function serverDriver(): ServerDriver {
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');

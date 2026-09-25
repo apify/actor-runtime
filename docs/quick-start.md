@@ -94,7 +94,7 @@ No Actor yet? Create one with [`apify create`](https://docs.apify.com/cli/docs/q
     npm install && npm run build
     ```
 
-    Skip this only for Python and plain JavaScript. Your push registered this directory as the Actor's [dev folder](#5-edit-your-actors-code-without-rebuilding), and runs mount it over the built image, hiding the `dist/` the build produced. Without a local `dist/`, the first run fails with `Cannot find module '/usr/src/app/dist/main.js'`.
+    Skip this only for Python and plain JavaScript. Your push registered this directory as the Actor's [dev folder](#5-edit-your-actors-code-without-rebuilding), and runs mount it over the built image, hiding the `dist/` the build produced. Without a local `dist/`, the first run fails with `Cannot find module '/usr/src/app/dist/main.js'`, and the run log ends with a red `[actor-runtime]` line telling you so.
 
 4. Run the Actor:
 

@@ -8,6 +8,9 @@ const BOLD_BLUE = `${ESC}[1;34m`;
 const BOLD = `${ESC}[1m`;
 const RESET = `${ESC}[0m`;
 
+const RED = `${ESC}[31m`;
+const BOLD_RED = `${ESC}[1;31m`;
+
 const MARKER = `${BLUE}${RUNTIME_LOG_PREFIX}${RESET}`;
 const BOLD_MARKER = `${BOLD_BLUE}${RUNTIME_LOG_PREFIX}${RESET}`;
 
@@ -27,6 +30,21 @@ describe('formatRuntimeLog', () => {
 	it('renders an emphasized line with a bold blue prefix and a bold message', () => {
 		expect(formatRuntimeLog('!! Running in `Live dev folder mode`', { emphasis: true })).toBe(
 			`${BOLD_MARKER} ${BOLD}!! Running in \`Live dev folder mode\`${RESET}\n`,
+		);
+	});
+
+	it("renders an error-toned line's message in red while the marker keeps its blue", () => {
+		expect(formatRuntimeLog('!! The run failed because a module was not found', { tone: 'error' })).toBe(
+			`${MARKER} ${RED}!! The run failed because a module was not found${RESET}\n`,
+		);
+		expect(formatRuntimeLog('!! Compile it locally', { emphasis: true, tone: 'error' })).toBe(
+			`${BOLD_MARKER} ${BOLD_RED}!! Compile it locally${RESET}\n`,
+		);
+	});
+
+	it('keeps a link blue inside an error-toned line, resuming red after it', () => {
+		expect(formatRuntimeLog('see http://localhost:3000/x now', { tone: 'error' })).toBe(
+			`${MARKER} ${RED}see ${RESET}${BLUE}http://localhost:3000/x${RESET}${RED} now${RESET}\n`,
 		);
 	});
 
@@ -87,6 +105,15 @@ describe('formatRuntimeLogLines', () => {
 });
 
 describe('runtime lines in the console log views', () => {
+	it("render an error-toned line in the console palette's red, bold when emphasized", () => {
+		const html = ansiToHtml(formatRuntimeLog('!! Compile it locally', { emphasis: true, tone: 'error' }));
+
+		expect(html).toBe(
+			`<span style="color:#1565c0;font-weight:bold">${RUNTIME_LOG_PREFIX}</span> ` +
+				'<span style="color:#c62828;font-weight:bold">!! Compile it locally</span>\n',
+		);
+	});
+
 	it("render the marker and links in the console palette's dark blue, the message as plain text", () => {
 		const html = ansiToHtml(`${formatRuntimeLog('see http://localhost:3000/runs/r1/browser now')}actor output\n`);
 

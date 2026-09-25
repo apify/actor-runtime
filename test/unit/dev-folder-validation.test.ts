@@ -7,7 +7,14 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { unknownWorkingDirectoryLine, validateDevFolderPathShape } from '../../src/services/dev-folder.js';
+import {
+	diagnoseUncompiledDevFolder,
+	mentionsMissingModule,
+	uncompiledDevFolderWarningLines,
+	unknownWorkingDirectoryLine,
+	validateDevFolderPathShape,
+} from '../../src/services/dev-folder.js';
+import type { Driver } from '../../src/driver/types.js';
 
 describe('validateDevFolderPathShape', () => {
 	it('accepts a plain absolute POSIX path', () => {
@@ -59,5 +66,78 @@ describe('unknownWorkingDirectoryLine', () => {
 		// Both remedies: give the image a WORKDIR, or clear the registration.
 		expect(line).toMatch(/rebuild/i);
 		expect(line).toMatch(/clear the registration/i);
+	});
+});
+
+describe('mentionsMissingModule', () => {
+	it("matches Node's CommonJS and ESM wording for a module it could not load", () => {
+		expect(mentionsMissingModule("Error: Cannot find module '/usr/src/app/dist/main.js'\n")).toBe(true);
+		expect(mentionsMissingModule("  code: 'MODULE_NOT_FOUND',\n")).toBe(true);
+		expect(
+			mentionsMissingModule(
+				"Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/usr/src/app/dist/main.js' imported from /usr/src/app/dist/index.js",
+			),
+		).toBe(true);
+	});
+
+	it('ignores ordinary output, including other errors', () => {
+		expect(mentionsMissingModule('INFO  Starting the crawl\n')).toBe(false);
+		expect(mentionsMissingModule('TypeError: Cannot read properties of undefined\n')).toBe(false);
+	});
+});
+
+describe('uncompiledDevFolderWarningLines', () => {
+	it('is red throughout, names the folder, the compile step, and the opt-out flag', () => {
+		const lines = uncompiledDevFolderWarningLines('/home/dev/my-actor');
+		expect(lines.length).toBeGreaterThan(0);
+		for (const line of lines) {
+			expect(line.tone).toBe('error');
+			expect(line.text.startsWith('!! ')).toBe(true);
+		}
+		const text = lines.map((line) => line.text).join('\n');
+		expect(text).toContain('/home/dev/my-actor');
+		expect(text).toContain('tsconfig.json');
+		expect(text).toContain('`dist`');
+		expect(text).toContain('npm run build');
+		expect(text).toContain('apify call --no-dev-folder');
+	});
+});
+
+describe('diagnoseUncompiledDevFolder', () => {
+	const mount = { localDevFolder: '/home/dev/my-actor', imageWorkingDirectory: '/usr/src/app' };
+
+	/** Only `devFolderHasEntry` is ever called; `entries` is what the folder "contains". */
+	function driverWith(entries: string[] | Error): Driver & { asked: string[] } {
+		const asked: string[] = [];
+		return {
+			asked,
+			async devFolderHasEntry(localDevFolder, relativePath) {
+				expect(localDevFolder).toBe(mount.localDevFolder);
+				asked.push(relativePath);
+				if (entries instanceof Error) throw entries;
+				return entries.includes(relativePath);
+			},
+		} as unknown as Driver & { asked: string[] };
+	}
+
+	it('a tsconfig.json without a dist directory is an uncompiled TypeScript folder', async () => {
+		const driver = driverWith(['tsconfig.json', 'src']);
+		const lines = await diagnoseUncompiledDevFolder(driver, mount);
+		expect(lines).toEqual(uncompiledDevFolderWarningLines(mount.localDevFolder));
+		expect(driver.asked).toEqual(['tsconfig.json', 'dist']);
+	});
+
+	it('a compiled TypeScript folder (dist present) gets no diagnosis - the missing module is something else', async () => {
+		expect(await diagnoseUncompiledDevFolder(driverWith(['tsconfig.json', 'dist']), mount)).toBeUndefined();
+	});
+
+	it('a folder with no tsconfig.json is not a TypeScript project, and dist is not even asked about', async () => {
+		const driver = driverWith(['src', 'package.json']);
+		expect(await diagnoseUncompiledDevFolder(driver, mount)).toBeUndefined();
+		expect(driver.asked).toEqual(['tsconfig.json']);
+	});
+
+	it('a folder that cannot be inspected yields no diagnosis rather than a probe error of its own', async () => {
+		expect(await diagnoseUncompiledDevFolder(driverWith(new Error('docker unreachable')), mount)).toBeUndefined();
 	});
 });

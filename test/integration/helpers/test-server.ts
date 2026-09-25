@@ -53,6 +53,9 @@ export function unavailableDriver(): Driver {
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -88,6 +91,9 @@ export function fixedRunOutcomeDriver(outcome: RunOutcome): Driver {
 			throw new Error('not used by this stub');
 		},
 		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async devFolderHasEntry() {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
@@ -129,6 +135,9 @@ export function fixedBuildOutcomeDriver(
 			throw new Error('not used by this stub');
 		},
 		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async devFolderHasEntry() {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
@@ -201,6 +210,9 @@ export function deferredRunDriver(): DeferredRunDriver {
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -262,6 +274,9 @@ export function deferredBuildDriver(): DeferredBuildDriver {
 			throw new Error('not used by this stub');
 		},
 		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async devFolderHasEntry() {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
@@ -354,6 +369,9 @@ export function multiRunDriver(): MultiRunDriver {
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -428,6 +446,9 @@ export function restartTrackingDriver(): RestartTrackingDriver {
 			throw new Error('not used by this stub');
 		},
 		async ensureProbeImage() {
+			throw new Error('not used by this stub');
+		},
+		async devFolderHasEntry() {
 			throw new Error('not used by this stub');
 		},
 		async waitForStartCalls(count) {

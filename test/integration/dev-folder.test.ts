@@ -65,6 +65,9 @@ function devFolderDriver(
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -805,6 +808,9 @@ function devMountCapturingDriver(): {
 		async startBrowserViewer() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async stopBrowserViewer() {},
 		async containerServerAddress() {
 			return undefined;
@@ -961,6 +967,148 @@ describe('run-start devMount derivation (actor fields -> RunContext.devMount, se
 			localDevFolder: '/abs/dev/src',
 			imageWorkingDirectory: '/app',
 		});
+	});
+});
+
+/**
+ * A driver whose run prints `output` and exits with `exitCode`, over a dev folder that "contains" exactly
+ * `entries` (what `devFolderHasEntry` answers from). For the after-the-fact diagnosis of a run that failed
+ * under the mount (`services/dev-folder.ts: diagnoseUncompiledDevFolder`), on the real run-start path.
+ */
+function failingRunDriver(output: string, exitCode: number, entries: string[]): Driver & { probed: string[] } {
+	const probed: string[] = [];
+	return {
+		probed,
+		available: true,
+		async init() {},
+		async startBuild() {
+			throw new Error('not used by this stub');
+		},
+		async abortBuild() {},
+		async startRun(_ctx, onLog) {
+			onLog(output);
+			return { exitCode, timedOut: false };
+		},
+		async abortRun() {},
+		async reconcileOrphans() {},
+		async ensureProbeImage() {
+			throw new Error('not used by this stub');
+		},
+		async startBrowserViewer() {
+			throw new Error('not used by this stub');
+		},
+		async devFolderHasEntry(_localDevFolder, relativePath) {
+			probed.push(relativePath);
+			return entries.includes(relativePath);
+		},
+		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
+		async inspectDebugTarget() {
+			throw new Error('not used by this stub');
+		},
+		async probeDevFolder() {
+			throw new Error('not used by this stub');
+		},
+	};
+}
+
+/** What Node prints when the mount hid the image's compiled `dist/`, as in apify/apify-cli#1461. */
+const MODULE_NOT_FOUND_OUTPUT =
+	"node:internal/modules/cjs/loader:1568\n  throw err;\n  ^\n\nError: Cannot find module '/usr/src/app/dist/main.js'\n" +
+	'    at Module._resolveFilename (node:internal/modules/cjs/loader:1564:15)\n' +
+	"    at Module._load (node:internal/modules/cjs/loader:1341:5) {\n  code: 'MODULE_NOT_FOUND',\n  requireStack: []\n}\n\nNode.js v24.21.0\n";
+
+describe('a run under the mount that fails with a missing module (services/runs.ts -> diagnoseUncompiledDevFolder)', () => {
+	let server: TestServerHandle;
+
+	afterEach(async () => {
+		await server.close();
+	});
+
+	async function runOnce(driver: Driver, options: { register?: boolean; devFolder?: boolean } = {}) {
+		server = await startTestServer(driver);
+		const actor = await server.client.actors().create({ name: 'devmount-missing-module-actor' });
+		await seedSucceededBuild((await getRegistries().actors.get(actor.id))!, 'latest', '/usr/src/app');
+		if (options.register !== false) {
+			await updateActor(actor.id, (current) => ({ ...current, localDevFolder: '/abs/dev/src' }));
+		}
+		const run =
+			options.devFolder === false
+				? await startRunRaw(server, actor.id, 'devFolder=false')
+				: await server.client.actor(actor.id).start({}, { waitForFinish: 5 });
+		return { run, log: (await server.client.log(run.id).get())! };
+	}
+
+	it('an uncompiled TypeScript folder (tsconfig.json, no dist): the run log ends with the red explanation, after the stack trace, naming the folder and both ways out', async () => {
+		const driver = failingRunDriver(MODULE_NOT_FOUND_OUTPUT, 1, ['tsconfig.json', 'src']);
+		const { run, log } = await runOnce(driver);
+
+		expect(run.status).toBe('FAILED');
+		expect(driver.probed).toEqual(['tsconfig.json', 'dist']);
+		expect(log).toContain('The run failed because a module was not found');
+		expect(log).toContain('live dev folder /abs/dev/src is a TypeScript project without a `dist` directory');
+		expect(log).toContain('npm run build');
+		expect(log).toContain('apify call --no-dev-folder');
+		expect(log.indexOf('Node.js v24.21.0')).toBeLessThan(
+			log.indexOf('The run failed because a module was not found'),
+		);
+
+		// Every line of it is the runtime's, in red, so it reads as an explanation rather than more trace.
+		const explanation = log
+			.split('\n')
+			.filter((line) => line.includes('!! ') && !line.includes('Live dev folder mode'));
+		expect(explanation.length).toBeGreaterThanOrEqual(3);
+		for (const line of explanation.filter((line) => line.includes('module was not found'))) {
+			expect(line).toContain(RUNTIME_LOG_PREFIX);
+			expect(line).toContain('\x1b[1;31m');
+		}
+	});
+
+	it("a compiled folder (dist present) fails with the same output and gets no explanation - the missing module is not the mount's doing", async () => {
+		const driver = failingRunDriver(MODULE_NOT_FOUND_OUTPUT, 1, ['tsconfig.json', 'dist']);
+		const { run, log } = await runOnce(driver);
+
+		expect(run.status).toBe('FAILED');
+		expect(driver.probed).toEqual(['tsconfig.json', 'dist']);
+		expect(log).not.toContain('The run failed because a module was not found');
+	});
+
+	it('a folder that is not a TypeScript project gets no explanation either', async () => {
+		const driver = failingRunDriver(MODULE_NOT_FOUND_OUTPUT, 1, ['src', 'package.json']);
+		const { log } = await runOnce(driver);
+
+		expect(log).not.toContain('The run failed because a module was not found');
+	});
+
+	it('a failure that is not about a missing module never probes the folder at all', async () => {
+		const driver = failingRunDriver('TypeError: Cannot read properties of undefined\n', 1, ['tsconfig.json']);
+		const { run, log } = await runOnce(driver);
+
+		expect(run.status).toBe('FAILED');
+		expect(driver.probed).toEqual([]);
+		expect(log).not.toContain('The run failed because a module was not found');
+	});
+
+	it('a run that mentions a missing module but still exits 0 is not diagnosed', async () => {
+		const driver = failingRunDriver("WARN Cannot find module 'optional-peer', continuing\n", 0, ['tsconfig.json']);
+		const { run, log } = await runOnce(driver);
+
+		expect(run.status).toBe('SUCCEEDED');
+		expect(driver.probed).toEqual([]);
+		expect(log).not.toContain('The run failed because a module was not found');
+	});
+
+	it('without the mount (no registration, or devFolder=false) the same failure is left to the Actor to explain', async () => {
+		const unregistered = failingRunDriver(MODULE_NOT_FOUND_OUTPUT, 1, ['tsconfig.json']);
+		expect((await runOnce(unregistered, { register: false })).log).not.toContain('module was not found');
+		expect(unregistered.probed).toEqual([]);
+		await server.close();
+
+		const optedOut = failingRunDriver(MODULE_NOT_FOUND_OUTPUT, 1, ['tsconfig.json']);
+		expect((await runOnce(optedOut, { devFolder: false })).log).not.toContain('module was not found');
+		expect(optedOut.probed).toEqual([]);
 	});
 });
 

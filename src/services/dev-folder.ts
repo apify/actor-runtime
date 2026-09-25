@@ -14,6 +14,16 @@ import { getRegistries } from '../storage/registries.js';
 import type { DevFolderMount, Driver } from '../driver/types.js';
 import type { RuntimeLogLine } from '../runtime-log.js';
 
+/** Node's own wording, CommonJS (`Error: Cannot find module '...'`, `code: 'MODULE_NOT_FOUND'`) and ESM
+ * (`Error [ERR_MODULE_NOT_FOUND]: Cannot find module '...'`) alike. Matched on any chunk of a run's
+ * output, never on the runtime's own lines. */
+const MISSING_MODULE_PATTERN = /Cannot find module|MODULE_NOT_FOUND/;
+
+/** Whether one chunk of an Actor's output reports a module Node could not load. */
+export function mentionsMissingModule(chunk: string): boolean {
+	return MISSING_MODULE_PATTERN.test(chunk);
+}
+
 /** Upper bound on a candidate path's length - generous enough that no genuine host path would ever hit
  * it, just a guard against pathological input. */
 const MAX_DEV_FOLDER_PATH_LENGTH = 4096;
@@ -171,5 +181,60 @@ export function liveDevFolderWarningLines({ localDevFolder, imageWorkingDirector
 			emphasis: true,
 		},
 		{ text: '!! To run purely from the built Docker image, use `apify call --no-dev-folder`.', emphasis: true },
+	];
+}
+
+/** What identifies an uncompiled TypeScript folder: the project file is there, the compiled output is
+ * not. `dist` is where every Apify TypeScript template compiles to; a project with another `outDir`
+ * simply gets no diagnosis. */
+const TYPESCRIPT_PROJECT_FILE = 'tsconfig.json';
+const COMPILED_OUTPUT_DIR = 'dist';
+
+/**
+ * Why a run under the mount just failed with a missing module, when the registered folder is a
+ * TypeScript project without its `dist`: the mount hid the image's compiled output, and the folder has
+ * none of its own. `undefined` when the folder does not look like that - the failure is then the Actor's
+ * own to explain - or when the folder cannot be inspected at all, so a diagnosis never masks the real
+ * failure with a probe error of its own. Run only after the container has exited, so the probes never
+ * delay the Actor's own output.
+ */
+export async function diagnoseUncompiledDevFolder(
+	driver: Driver,
+	{ localDevFolder }: DevFolderMount,
+): Promise<RuntimeLogLine[] | undefined> {
+	try {
+		if (!(await driver.devFolderHasEntry(localDevFolder, TYPESCRIPT_PROJECT_FILE))) return undefined;
+		if (await driver.devFolderHasEntry(localDevFolder, COMPILED_OUTPUT_DIR)) return undefined;
+	} catch {
+		return undefined;
+	}
+	return uncompiledDevFolderWarningLines(localDevFolder);
+}
+
+/** Red (`runtime-log.ts`): it follows a stack trace and has to be read as the runtime's explanation of
+ * it, not as more of the same. Names the folder and both ways out. */
+export function uncompiledDevFolderWarningLines(localDevFolder: string): RuntimeLogLine[] {
+	return [
+		{
+			text:
+				`!! The run failed because a module was not found, and the live dev folder ${localDevFolder} is a ` +
+				`TypeScript project without a \`${COMPILED_OUTPUT_DIR}\` directory (it has a \`${TYPESCRIPT_PROJECT_FILE}\`).`,
+			emphasis: true,
+			tone: 'error',
+		},
+		{
+			text:
+				'!! In `Live dev folder mode` the run uses your local files instead of the compiled output the ' +
+				'Docker image built, so the Actor must be compiled locally first.',
+			emphasis: true,
+			tone: 'error',
+		},
+		{
+			text:
+				'!! Compile it locally (e.g. `npm run build`) and call again, or run from the built image alone ' +
+				'with `apify call --no-dev-folder`.',
+			emphasis: true,
+			tone: 'error',
+		},
 	];
 }

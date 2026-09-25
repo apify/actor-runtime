@@ -52,6 +52,9 @@ function viewerCapturingDriver(
 		async probeDevFolder() {
 			throw new Error('not used by this stub');
 		},
+		async devFolderHasEntry() {
+			throw new Error('not used by this stub');
+		},
 		async ensureProbeImage() {
 			throw new Error('not used by this stub');
 		},

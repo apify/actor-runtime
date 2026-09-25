@@ -97,6 +97,10 @@ apify call --input '{"maxPages":3}'   # picks up the new dist/
 ```
 
 - A local recompile is picked up by the **next** run's container start, not by a run already going.
+- A TypeScript Actor called before its first local `npm run build` fails with
+  `Cannot find module '/usr/src/app/dist/main.js'`: the mount hides the `dist/` the image built. The
+  run log then ends with a red `[actor-runtime]` explanation naming the two ways out - compile
+  locally, or `apify call --no-dev-folder`.
 - `node_modules` still comes from the built image, so a new dependency in `package.json` does need a
   real `apify push`. Only source edits skip the rebuild.
 - `apify call --no-dev-folder` runs once from the built image alone, leaving the registration alone.
