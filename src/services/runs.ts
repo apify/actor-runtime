@@ -248,12 +248,17 @@ function buildEnv(
 		// Below every platform-owned var so a debug run can never shadow one.
 		...debugEnv,
 		APIFY_IS_AT_HOME: '1',
+		// Deprecated, but always `1` on the platform: browsers in the container run headless.
+		APIFY_HEADLESS: '1',
 		APIFY_META_ORIGIN: run.meta.origin,
 		APIFY_API_BASE_URL: options.apiBaseUrl,
 		APIFY_TOKEN: options.token,
 		...(actor.secretKeys ? inputSecretsEnv(actor.secretKeys) : {}),
+		ACTOR_DEFAULT_KEY_VALUE_STORE_ID: run.defaultKeyValueStoreId,
 		APIFY_DEFAULT_KEY_VALUE_STORE_ID: run.defaultKeyValueStoreId,
+		ACTOR_DEFAULT_DATASET_ID: run.defaultDatasetId,
 		APIFY_DEFAULT_DATASET_ID: run.defaultDatasetId,
+		ACTOR_DEFAULT_REQUEST_QUEUE_ID: run.defaultRequestQueueId,
 		APIFY_DEFAULT_REQUEST_QUEUE_ID: run.defaultRequestQueueId,
 		// How the SDKs find a storage by alias, e.g. `Actor.openDataset({ alias })`.
 		ACTOR_STORAGES_JSON: JSON.stringify(runStorageIds(run)),
@@ -261,6 +266,9 @@ function buildEnv(
 		ACTOR_ID: actor.id,
 		APIFY_ACTOR_RUN_ID: run.id,
 		ACTOR_RUN_ID: run.id,
+		// The deprecated pre-`ACTOR_` spellings the platform still sets.
+		APIFY_ACT_ID: actor.id,
+		APIFY_ACT_RUN_ID: run.id,
 		// Empty for a run outside any task, as the platform's worker sets it.
 		APIFY_ACTOR_TASK_ID: run.actorTaskId ?? '',
 		ACTOR_TASK_ID: run.actorTaskId ?? '',

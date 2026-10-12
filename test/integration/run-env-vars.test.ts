@@ -286,6 +286,12 @@ describe('run metadata env vars (input key, build, user, timestamps), as on the 
 		expect(run.status).toBe('SUCCEEDED');
 
 		const env = getCapturedEnv()!;
+		expect(env.ACTOR_DEFAULT_DATASET_ID).toBe(run.defaultDatasetId);
+		expect(env.ACTOR_DEFAULT_KEY_VALUE_STORE_ID).toBe(run.defaultKeyValueStoreId);
+		expect(env.ACTOR_DEFAULT_REQUEST_QUEUE_ID).toBe(run.defaultRequestQueueId);
+		expect(env.APIFY_ACT_ID).toBe(actor.id);
+		expect(env.APIFY_ACT_RUN_ID).toBe(run.id);
+		expect(env.APIFY_HEADLESS).toBe('1');
 		expect(env.ACTOR_INPUT_KEY).toBe('INPUT');
 		expect(env.APIFY_INPUT_KEY).toBe('INPUT');
 		expect(env.ACTOR_BUILD_ID).toBe(run.buildId);

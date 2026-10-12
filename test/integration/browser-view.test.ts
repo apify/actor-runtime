@@ -317,7 +317,11 @@ describe('run lifecycle with browser view (services/runs.ts, through the real st
 		const ctx = capturing.startRunContexts[0]!;
 		expect(ctx.x11SocketVolume).toBe('vol-x');
 		// The container's environment is exactly an ordinary run's - nothing browser-view-specific leaks in.
-		expect(Object.keys(ctx.env).some((key) => /BROWSER|VIEW|DISPLAY|HEADLESS/i.test(key))).toBe(false);
+		// `APIFY_HEADLESS` is the platform's own, always `1`: the viewer mirrors the display, it does not
+		// turn headless mode off.
+		const envKeys = Object.keys(ctx.env).filter((key) => key !== 'APIFY_HEADLESS');
+		expect(envKeys.some((key) => /BROWSER|VIEW|DISPLAY|HEADLESS/i.test(key))).toBe(false);
+		expect(ctx.env.APIFY_HEADLESS).toBe('1');
 
 		const stored = await getRegistries().runs.get(run.id);
 		expect(stored?.localBrowserView).toEqual({ interactive: true, vncHost: '172.18.0.5', vncPort: 5900 });

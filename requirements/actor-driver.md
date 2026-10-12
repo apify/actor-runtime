@@ -278,44 +278,40 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 
 # Environment variables in every Actor container
 
-- The Actor version's own `envVars` (accepted and stored on `POST`/`PUT
-.../actors/:actorId/versions`) are applied to the run's container environment, but every
-  platform-owned var listed below takes precedence: a version cannot override `APIFY_TOKEN`, the
-  default storage ids, or any other contract var the runtime itself sets.
-- Secret env vars, build-time env vars and masking secrets in run logs work as on the platform.
-- Difference: secrets are protected only against being read by accident, since the key that decrypts
-  them is kept in the runtime's data directory too.
-- `APIFY_IS_AT_HOME=1` (mirrors the real platform; an SDK/client instantiated
-  in the container reports `isAtHome`/`is_at_home = true`).
-- `APIFY_META_ORIGIN` — `STANDBY` for a standby run, `API` for every other run
-- `APIFY_API_BASE_URL` — the runtime's own API, reachable by name from any
-  Actor container on the shared Docker network (see "Networking" above).
-- `APIFY_TOKEN` — the run owner's token
-- `APIFY_DEFAULT_KEY_VALUE_STORE_ID` / `APIFY_DEFAULT_DATASET_ID` /
-  `APIFY_DEFAULT_REQUEST_QUEUE_ID` — the run's real storage ids (as returned by
-  the API)
-- `APIFY_ACTOR_ID` / `ACTOR_ID` and `APIFY_ACTOR_RUN_ID` / `ACTOR_RUN_ID` —
-  both the legacy `APIFY_`-prefixed and the modern unprefixed spellings, equal
-  in value. `APIFY_ACTOR_TASK_ID` / `ACTOR_TASK_ID` — as on the platform.
-- Run metadata — `ACTOR_FULL_NAME`, `APIFY_USER_ID`, `ACTOR_BUILD_ID`, `ACTOR_BUILD_NUMBER`,
-  `ACTOR_BUILD_TAGS`, `ACTOR_INPUT_KEY`, `ACTOR_STARTED_AT`, `ACTOR_TIMEOUT_AT` and
-  `ACTOR_RESTART_ON_ERROR`, with their `APIFY_` spellings — as on the platform.
-- `APIFY_PROXY_PASSWORD` — set when a value is known, from either of two sources in precedence order:
-  (1) `APIFY_PROXY_PASSWORD` set in the runtime's own environment (README.md's "Apify Proxy" section) —
-  always wins when set; otherwise (2) the proxy password obtained for the run owner's own account during
-  User bootstrap (`cli.md`). If neither source has a value, the key is absent entirely — never a
-  placeholder. With the console's "Use Apify Proxy" setting off (`console.md`), it is set to an empty
-  string. A run given a password has one warning line in its log saying the Actor can use the real
-  Apify Proxy, billed to the Apify account, and that the Settings page can disable it.
-- `ACTOR_EVENTS_WEBSOCKET_URL` / `APIFY_ACTOR_EVENTS_WS_URL` — the run's own events channel
-  (`api.md`), carrying no credential.
-- `ACTOR_WEB_SERVER_PORT` / `APIFY_CONTAINER_PORT`, `ACTOR_WEB_SERVER_URL` / `APIFY_CONTAINER_URL`,
-  `ACTOR_STANDBY_PORT` and `ACTOR_STANDBY_URL` — as on the platform, with the local URLs (`api.md`).
-- `ACTOR_MEMORY_MBYTES` / `APIFY_MEMORY_MBYTES` — the run's requested `memoryMbytes`.
-- `APIFY_DEDICATED_CPUS` — the run's granted CPU cores. No `ACTOR_`-prefixed counterpart; only the
-  Python SDK reads it.
-- `APIFY_INPUT_SECRETS_PRIVATE_KEY_FILE` / `APIFY_INPUT_SECRETS_PRIVATE_KEY_PASSPHRASE` — as on the
-  platform.
-- `ACTOR_MAX_TOTAL_CHARGE_USD` — as on the platform.
-- Every `ACTOR_*`/`APIFY_*` pair above is set to an identical value (the two SDKs disagree on which name
-  wins).
+- The Actor version's own `envVars` (plain, secret and build-time ones) are applied as on the platform,
+  and secrets are masked in run logs as on the platform.
+- Set as on the platform, with the same values (empty ones included), each `ACTOR_*`/`APIFY_*` pair equal
+  in value:
+    - Identity: `ACTOR_ID`, `ACTOR_RUN_ID`, `ACTOR_TASK_ID`, `ACTOR_FULL_NAME`, `APIFY_USER_ID`, and the
+      legacy `APIFY_ACTOR_ID`, `APIFY_ACTOR_RUN_ID`, `APIFY_ACTOR_TASK_ID`, `APIFY_ACT_ID`,
+      `APIFY_ACT_RUN_ID`.
+    - Build: `ACTOR_BUILD_ID`, `ACTOR_BUILD_NUMBER`, `ACTOR_BUILD_TAGS`, and the legacy
+      `APIFY_ACTOR_BUILD_ID`, `APIFY_ACTOR_BUILD_NUMBER`.
+    - Storages and input: `ACTOR_DEFAULT_DATASET_ID`, `ACTOR_DEFAULT_KEY_VALUE_STORE_ID`,
+      `ACTOR_DEFAULT_REQUEST_QUEUE_ID`, `ACTOR_STORAGES_JSON`, `ACTOR_INPUT_KEY`, and the legacy
+      `APIFY_DEFAULT_DATASET_ID`, `APIFY_DEFAULT_KEY_VALUE_STORE_ID`, `APIFY_DEFAULT_REQUEST_QUEUE_ID`,
+      `APIFY_INPUT_KEY`.
+    - Timing and resources: `ACTOR_STARTED_AT`, `ACTOR_TIMEOUT_AT`, `ACTOR_MEMORY_MBYTES`,
+      `APIFY_DEDICATED_CPUS`, and the legacy `APIFY_STARTED_AT`, `APIFY_TIMEOUT_AT`, `APIFY_MEMORY_MBYTES`.
+    - Run options: `ACTOR_MAX_TOTAL_CHARGE_USD`, `ACTOR_RESTART_ON_ERROR`, `APIFY_META_ORIGIN`.
+    - Ports: `ACTOR_WEB_SERVER_PORT`, `ACTOR_STANDBY_PORT`, and the legacy `APIFY_CONTAINER_PORT`.
+    - Platform: `APIFY_TOKEN`, `APIFY_IS_AT_HOME`, `APIFY_HEADLESS`, `APIFY_INPUT_SECRETS_PRIVATE_KEY_FILE`,
+      `APIFY_INPUT_SECRETS_PRIVATE_KEY_PASSPHRASE`.
+- Differences:
+    - `APIFY_API_BASE_URL`, `ACTOR_EVENTS_WEBSOCKET_URL` / `APIFY_ACTOR_EVENTS_WS_URL`,
+      `ACTOR_WEB_SERVER_URL` / `APIFY_CONTAINER_URL` and `ACTOR_STANDBY_URL` point at the runtime's own
+      local addresses ("Networking" above, `api.md`).
+    - `APIFY_PROXY_PASSWORD` is a real Apify Proxy password when one is known - the runtime's own
+      (README.md's "Apify Proxy" section), else the run owner's account's (`cli.md`) - and absent
+      otherwise; with the console's "Use Apify Proxy" setting off (`console.md`) it is empty. A run given
+      a password has one warning line in its log saying the Actor can use the real Apify Proxy, billed to
+      the Apify account, and that the Settings page can disable it.
+    - The variables above always win over a version's own `envVars` of the same name.
+    - Secret env vars are protected only against being read by accident, since the key that decrypts
+      them is kept in the runtime's data directory too.
+    - `APIFY_ACTOR_PRICING_INFO` and `APIFY_CHARGED_ACTOR_EVENT_COUNTS` are not set, so the SDKs read the
+      run's charging state from the API, current after a migration restart too.
+    - Not set: `APIFY_USER_IS_PAYING`, `APIFY_USER_PRICING_TIER`, `ACTOR_PERMISSION_LEVEL`,
+      `APIFY_WORKFLOW_KEY`, `ACTOR_MCP_CONNECTOR_BASE_URL` / `APIFY_MCP_PROXY_URL`,
+      `APIFY_API_PUBLIC_BASE_URL`, `ACTOR_MAX_PAID_DATASET_ITEMS`, `APIFY_PROXY_HOSTNAME`,
+      `APIFY_PROXY_PORT`, `APIFY_PROXY_STATUS_URL` and `APIFY_FACT` (`unsupported.md`).
