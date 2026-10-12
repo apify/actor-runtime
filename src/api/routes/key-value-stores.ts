@@ -93,18 +93,18 @@ export function mountKeyValueStoreOperations(router: Router, basePath: string, r
 		}),
 	);
 
-	router.put(
-		`${basePath}/records/:recordKey`,
-		h(async (req, res) => {
-			const record = await requireStore(req);
-			const store = await openKeyValueStore(record.id);
-			const contentType = req.header('content-type') ?? 'application/octet-stream';
-			const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-			await store.setValue(req.params.recordKey as string, body, { contentType });
-			await touchStorage(record.id);
-			res.status(201).end();
-		}),
-	);
+	const setRecord = h(async (req, res) => {
+		const record = await requireStore(req);
+		const store = await openKeyValueStore(record.id);
+		const contentType = req.header('content-type') ?? 'application/octet-stream';
+		const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+		await store.setValue(req.params.recordKey as string, body, { contentType });
+		await touchStorage(record.id);
+		res.status(201).end();
+	});
+	router.put(`${basePath}/records/:recordKey`, setRecord);
+	// The spec's "Store record (POST)": an alias of the PUT, for clients that cannot send PUT.
+	router.post(`${basePath}/records/:recordKey`, setRecord);
 
 	router.delete(
 		`${basePath}/records/:recordKey`,

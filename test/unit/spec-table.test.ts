@@ -41,6 +41,14 @@ describe('matchSpecPath', () => {
 		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/metamorph')?.implemented).toBe(false);
 	});
 
+	it('serves the POST aliases the spec defines for three PUT endpoints', () => {
+		expect(matchSpecPath('POST', 'v2/key-value-stores/abc/records/OUTPUT')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actor-runs/abc/key-value-store/records/OUTPUT')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/key-value-store/records/OUTPUT')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/versions/0.0')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/versions/0.0/env-vars/MY_VAR')?.implemented).toBe(true);
+	});
+
 	it('serves the run-sync endpoints of Actors and tasks', () => {
 		for (const method of ['GET', 'POST']) {
 			expect(matchSpecPath(method, 'v2/actors/abc/run-sync')?.implemented).toBe(true);

@@ -54,6 +54,38 @@ describe('key-value-stores API (via real apify-client)', () => {
 		expect(record?.value).toBe('plain text');
 	});
 
+	it('POST on a record is an alias of PUT (the spec\'s "Store record (POST)"), and keeps the sent content type', async () => {
+		const { id } = await server.client.keyValueStores().getOrCreate();
+		const store = server.client.keyValueStore(id);
+
+		const posted = await fetch(`${server.baseUrl}/v2/key-value-stores/${id}/records/OUTPUT`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ via: 'post' }),
+		});
+		expect(posted.status).toBe(201);
+		expect((await store.getRecord('OUTPUT'))?.value).toEqual({ via: 'post' });
+
+		// Overwrites like PUT does, keeping the content type it was sent with.
+		const overwritten = await fetch(`${server.baseUrl}/v2/key-value-stores/${id}/records/OUTPUT`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${server.token}`, 'Content-Type': 'text/plain' },
+			body: 'plain',
+		});
+		expect(overwritten.status).toBe(201);
+		const record = await store.getRecord('OUTPUT');
+		expect(record?.value).toBe('plain');
+		expect(record?.contentType).toMatch(/^text\/plain/);
+
+		const unknownStore = await fetch(`${server.baseUrl}/v2/key-value-stores/nonexistent1234567/records/OUTPUT`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${server.token}`, 'Content-Type': 'text/plain' },
+			body: 'x',
+		});
+		expect(unknownStore.status).toBe(404);
+		expect(((await unknownStore.json()) as { error: { type: string } }).error.type).toBe('record-not-found');
+	});
+
 	it('reports record existence and 404s for missing records', async () => {
 		const { id } = await server.client.keyValueStores().getOrCreate();
 		const store = server.client.keyValueStore(id);
