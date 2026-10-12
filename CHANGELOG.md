@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+<!-- git-cliff-unreleased-start -->
+## 0.1.3 - **not yet released**
+
+### 🐛 Bug Fixes
+
+- Serve the POST aliases of the record, version and env-var PUT endpoints ([#104](https://github.com/apify/actor-runtime/pull/104)) ([06a5382](https://github.com/apify/actor-runtime/commit/06a5382c8aca584b72d9c7904ee849031a5b0951)) by [@Pijukatel](https://github.com/Pijukatel)
+
+
+<!-- git-cliff-unreleased-end -->
 ## [0.1.2](https://github.com/apify/actor-runtime/releases/tag/v0.1.2) (2026-10-12)
 
 ### 🚀 Features
