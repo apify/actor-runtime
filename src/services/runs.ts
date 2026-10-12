@@ -10,6 +10,7 @@ import type {
 } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { createStorage } from './storages.js';
+import { DEFAULT_RUN_ORIGIN, type MetaOrigin } from './run-origin.js';
 import { openKeyValueStore } from '../storage/open.js';
 import { DebugPortInUseError, type BrowserViewerHandle, type Driver } from '../driver/types.js';
 import { REAL_APIFY_PROXY_WARNING } from './apify-proxy.js';
@@ -172,8 +173,9 @@ export interface StartRunOptions {
 	restartOnError?: boolean;
 	/** The task the run is started from, if any. */
 	actorTaskId?: string;
-	/** `STANDBY` for a run the standby router starts, `SCHEDULER` for a schedule's; `API` otherwise. */
-	origin?: 'API' | 'STANDBY' | 'SCHEDULER';
+	/** `STANDBY` for a run the standby router starts, `SCHEDULER` for a schedule's, the caller's
+	 * `X-Apify-Request-Origin` for one started over the API (`services/run-origin.ts`); `API` otherwise. */
+	origin?: MetaOrigin;
 	/** A scheduled run's schedule, action and run time (`services/scheduler.ts`). */
 	scheduleMeta?: Omit<RunMeta, 'origin'>;
 	/** The Actor's standby URL, given to every run as `ACTOR_STANDBY_URL`, as on the platform. */
@@ -333,13 +335,18 @@ export async function startRun(
 ): Promise<RunRecord> {
 	const { runs } = getRegistries();
 
+	const runId = generateId();
 	const extraDatasetAliases = build.extraDatasetAliases ?? [];
 	const schemaOf = (alias: string) => build.datasetSchemas?.[alias];
+	// Every default storage names the run and Actor it was created for, as on the platform.
+	const owner = { actId: actor.id, actRunId: runId };
 	const [dataset, keyValueStore, requestQueue, ...extraDatasets] = await Promise.all([
-		createStorage(actor.userId, 'dataset', undefined, schemaOf(DEFAULT_STORAGE_ALIAS)),
-		createStorage(actor.userId, 'keyValueStore'),
-		createStorage(actor.userId, 'requestQueue'),
-		...extraDatasetAliases.map((alias) => createStorage(actor.userId, 'dataset', undefined, schemaOf(alias))),
+		createStorage(actor.userId, 'dataset', undefined, schemaOf(DEFAULT_STORAGE_ALIAS), owner),
+		createStorage(actor.userId, 'keyValueStore', undefined, undefined, owner),
+		createStorage(actor.userId, 'requestQueue', undefined, undefined, owner),
+		...extraDatasetAliases.map((alias) =>
+			createStorage(actor.userId, 'dataset', undefined, schemaOf(alias), owner),
+		),
 	]);
 
 	const input = await sealInputSecrets(actor, build.inputSchema, options.input);
@@ -370,7 +377,7 @@ export async function startRun(
 	const pricingInfo = resolveRunPricingInfo(actor.pricingInfos);
 	const chargedEventCounts = initialChargedEventCounts(pricingInfo, memoryMbytes);
 	const record: RunRecord = {
-		id: generateId(),
+		id: runId,
 		userId: actor.userId,
 		actorId: actor.id,
 		...(options.actorTaskId ? { actorTaskId: options.actorTaskId } : {}),
@@ -397,7 +404,7 @@ export async function startRun(
 			...(maxTotalChargeUsd !== undefined ? { maxTotalChargeUsd } : {}),
 			...(restartOnError !== undefined ? { restartOnError } : {}),
 		},
-		meta: { origin: options.origin ?? 'API', ...options.scheduleMeta },
+		meta: { origin: options.origin ?? DEFAULT_RUN_ORIGIN, ...options.scheduleMeta },
 		// Same zeros the platform writes at run creation (see `RunRecord.stats`).
 		stats: {
 			migrationCount: 0,

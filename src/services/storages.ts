@@ -25,18 +25,25 @@ const createByNameMutex = new KeyedMutex();
  * unchanged, matched case-insensitively and keeping its original casing - its `schema` too, as on the
  * platform.
  */
+/** The run a default storage was created for (`storage.md`); absent for a storage a user created. */
+export interface StorageOwner {
+	actId: string;
+	actRunId: string;
+}
+
 export async function createStorage(
 	userId: string,
 	type: StorageType,
 	name?: string,
 	schema?: DatasetSchema,
+	owner?: StorageOwner,
 ): Promise<StorageRecord> {
 	if (name) {
 		return createByNameMutex.run(`${userId}:${type}:${normalizeName(name)}`, () =>
-			createStorageRecord(userId, type, name, schema),
+			createStorageRecord(userId, type, name, schema, owner),
 		);
 	}
-	return createStorageRecord(userId, type, undefined, schema);
+	return createStorageRecord(userId, type, undefined, schema, owner);
 }
 
 async function createStorageRecord(
@@ -44,6 +51,7 @@ async function createStorageRecord(
 	type: StorageType,
 	name: string | undefined,
 	schema: DatasetSchema | undefined,
+	owner: StorageOwner | undefined,
 ): Promise<StorageRecord> {
 	if (name) {
 		const existing = await findOwnedStorageByName(userId, type, name);
@@ -67,6 +75,7 @@ async function createStorageRecord(
 		modifiedAt: now,
 		accessedAt: now,
 		...(type === 'dataset' && schema ? { schema } : {}),
+		...(owner ?? {}),
 	};
 	await getRegistries().storages.set(id, record);
 	return record;

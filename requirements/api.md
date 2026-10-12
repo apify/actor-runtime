@@ -39,6 +39,10 @@
   timestamp per line regardless of how the output was chunked when produced. Apify clients' log
   redirection (e.g. `Actor.call` in the SDKs) relies on this prefix to recognize log messages.
 
+# Actor run origin
+
+- A run's `meta.origin` is set as on the platform, from the caller's `X-Apify-Request-Origin`.
+
 # Resource id encoding
 
 - `:actorId`, `:actorTaskId`, `:datasetId`, `:storeId` and `:queueId` accept `~name` (the caller's own),

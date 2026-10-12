@@ -14,6 +14,10 @@ export interface StorageRecord {
 	/** The dataset schema (`.actor/actor.json`'s `storages.dataset`) its items are validated against;
 	 * datasets only, absent when it has none. Set at creation, never changed after. */
 	schema?: DatasetSchema;
+	/** The Actor and run a run's default storage was created for, as on the platform; both absent for a
+	 * storage created by a user. Set at creation, never changed after. */
+	actId?: string;
+	actRunId?: string;
 }
 
 /** A dataset schema, exactly as it was pushed or posted; only its `fields` is ever read. */
@@ -448,6 +452,7 @@ export interface ActorMemorySettings {
 /** The platform's run `meta`: how the run was started, and for a scheduled run, by which schedule action
  * and for which of its run times (the platform's own field names, `scheduledAct2Id` included). */
 export interface RunMeta {
+	/** One of the platform's `META_ORIGINS` (`services/run-origin.ts`). */
 	origin: string;
 	scheduleId?: string;
 	scheduledAct2Id?: string;

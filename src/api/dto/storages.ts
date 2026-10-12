@@ -6,6 +6,12 @@ export function zeroedStats(): Record<string, number> {
 	return { readCount: 0, writeCount: 0, deleteCount: 0 };
 }
 
+/** `actId`/`actRunId` as the platform reports them: the run's default storages name their run, every
+ * other storage carries `null`. */
+function ownerFields(record: StorageRecord) {
+	return { actId: record.actId ?? null, actRunId: record.actRunId ?? null };
+}
+
 export function datasetDto(
 	record: StorageRecord,
 	info: { createdAt: Date; modifiedAt: Date; accessedAt: Date; itemCount: number },
@@ -14,6 +20,7 @@ export function datasetDto(
 		id: record.id,
 		name: record.name,
 		userId: record.userId,
+		...ownerFields(record),
 		createdAt: info.createdAt.toISOString(),
 		modifiedAt: info.modifiedAt.toISOString(),
 		accessedAt: info.accessedAt.toISOString(),
@@ -35,6 +42,7 @@ export function keyValueStoreDto(record: StorageRecord) {
 		id: record.id,
 		name: record.name,
 		userId: record.userId,
+		...ownerFields(record),
 		createdAt: record.createdAt,
 		modifiedAt: record.modifiedAt,
 		accessedAt: record.accessedAt,
@@ -62,6 +70,7 @@ export function requestQueueDto(
 		id: record.id,
 		name: record.name,
 		userId: record.userId,
+		...ownerFields(record),
 		createdAt: info.createdAt.toISOString(),
 		modifiedAt: info.modifiedAt.toISOString(),
 		accessedAt: info.accessedAt.toISOString(),

@@ -18,6 +18,7 @@ import { resolveActorParam, resolveTaskParam } from '../resolve-reference.js';
 import { pinRequestToLocal } from '../../services/api-fallback.js';
 import { findLastOwnedRun, type RunScope } from '../../services/runs.js';
 import type { RunRecord } from '../../storage/entities.js';
+import { META_ORIGINS as RUN_ORIGINS } from '../../services/run-origin.js';
 
 /** `@apify/consts`'s `ACTOR_JOB_STATUSES`, wider than this runtime's own `JobStatus`: the platform
  * validates the value, not whether such a run could exist. */
@@ -32,21 +33,7 @@ const ACTOR_JOB_STATUSES: ReadonlySet<string> = new Set([
 	'ABORTED',
 ]);
 
-/** `@apify/consts`'s `META_ORIGINS`; every run this runtime starts is `API`. */
-const META_ORIGINS: ReadonlySet<string> = new Set([
-	'DEVELOPMENT',
-	'WEB',
-	'API',
-	'SCHEDULER',
-	'TEST',
-	'WEBHOOK',
-	'ACTOR',
-	'CLI',
-	'STANDBY',
-	'CI',
-	'MCP',
-	'APIFY_AI',
-]);
+const META_ORIGINS: ReadonlySet<string> = new Set(RUN_ORIGINS);
 
 /** Messages are apify-core's `invalidStatusParameter`/`invalidOriginParameter`. A repeated parameter
  * arrives as an array, which is invalid there too. */
