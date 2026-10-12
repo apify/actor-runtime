@@ -21,6 +21,10 @@ All notable changes to this project will be documented in this file.
 - Set run metadata env vars in Actor containers, as on the platform ([#101](https://github.com/apify/actor-runtime/pull/101)) ([bbdbaa1](https://github.com/apify/actor-runtime/commit/bbdbaa12afcb2484ef78b81f7c410b55971c515a)) by [@Pijukatel](https://github.com/Pijukatel)
 - Support schedules ([#102](https://github.com/apify/actor-runtime/pull/102)) ([89a2ede](https://github.com/apify/actor-runtime/commit/89a2ede03b1399a27d79f78b8cd3b5aee8914e65)) by [@Pijukatel](https://github.com/Pijukatel)
 
+### 🐛 Bug Fixes
+
+- Take a run&#x27;s origin from X-Apify-Request-Origin and name the run on its default storages ([#103](https://github.com/apify/actor-runtime/pull/103)) ([c2a2fed](https://github.com/apify/actor-runtime/commit/c2a2fed450affdf685d7279a1ec2a4d12afdec84)) by [@Pijukatel](https://github.com/Pijukatel)
+
 
 <!-- git-cliff-unreleased-end -->
 ## [0.1.1](https://github.com/apify/actor-runtime/releases/tag/v0.1.1) (2026-09-30)
