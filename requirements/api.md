@@ -217,24 +217,11 @@
 
 # Schedules
 
-- Implemented as on the platform, for the caller's own Actors and tasks: a schedule saves a cron
-  expression, a timezone and up to 10 Actor actions (an input and run options) and 10 task actions (an
-  input merged over the task's), and starts their runs at every time the expression names (`meta.origin`
-  `SCHEDULER`, with the schedule, action and run time in `meta`).
-    - A schedule created without a `name` is named `my-schedule` (`-1`, `-2`, ... when taken); names are
-      unique per user (`409` `schedule-name-not-unique`). It is disabled until `isEnabled` is set;
-      `nextRunAt` is `null` while disabled.
-    - `@hourly`, `@daily`, `@weekly`, `@monthly` and `@yearly` run at a random offset inside their period,
-      fixed per schedule; runs are never closer than 10 seconds. An invalid expression is `400`
-      `cron-expression-invalid`.
-    - With `isExclusive` (the default), an action is skipped while its previous run is still going, with a
-      warning in the schedule's log.
-    - `POST .../invoke` starts the actions now, without touching the schedule's run times.
-    - The schedule's log (`GET .../log`, the newest 250 entries) records every invocation, skipped action
-      and run that could not start.
-    - Deleting an Actor or a task drops the actions that would run it.
-- Differences: a run time that passed while the runtime was not running is made up once at the next start;
-  `notifications.email` is saved but no email is sent (`unsupported.md`).
+- Implemented as on the platform, for the caller's own Actors and tasks.
+- Differences:
+    - Schedules run only while the runtime is running; a run time missed while it was not is made up
+      once at the next start.
+    - `notifications.email` is saved but no email is sent (`unsupported.md`).
 
 # Actor Standby
 
