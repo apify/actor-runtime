@@ -2,8 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-<!-- git-cliff-unreleased-start -->
-## 0.1.2 - **not yet released**
+## [0.1.2](https://github.com/apify/actor-runtime/releases/tag/v0.1.2) (2026-10-12)
 
 ### 🚀 Features
 
@@ -26,7 +25,6 @@ All notable changes to this project will be documented in this file.
 - Take a run&#x27;s origin from X-Apify-Request-Origin and name the run on its default storages ([#103](https://github.com/apify/actor-runtime/pull/103)) ([c2a2fed](https://github.com/apify/actor-runtime/commit/c2a2fed450affdf685d7279a1ec2a4d12afdec84)) by [@Pijukatel](https://github.com/Pijukatel)
 
 
-<!-- git-cliff-unreleased-end -->
 ## [0.1.1](https://github.com/apify/actor-runtime/releases/tag/v0.1.1) (2026-09-30)
 
 ### 🚀 Features
