@@ -13,9 +13,9 @@ import type {
 	UserRecord,
 } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
-import { getOwnedActor, resolveOwnedActor } from './actors.js';
+import { getOwnedActor } from './actors.js';
 import { isJsonContentType } from './input-schema.js';
-import { normalizeName, parseResourceReference } from './resource-reference.js';
+import { normalizeName } from './resource-reference.js';
 import { assertValidCronExpression, computeNextRunAt, isSupportedTimezone } from './schedule-cron.js';
 import { getOwnedTask, taskTitleFromName } from './tasks.js';
 
@@ -208,8 +208,8 @@ function actionId(raw: JsonObject, current: ScheduleRecord | undefined): string 
 
 /**
  * Checks the actions of a create or update body as the platform's `validateAndParseScheduleActions` does:
- * each names an existing Actor or task of `user`, with at most 10 of each kind. An Actor is accepted by
- * id or by name, like everywhere else here, and stored by id.
+ * each names an existing Actor or task of `user` by id (never by name, unlike the routes), with at most 10
+ * of each kind.
  */
 export async function parseScheduleActions(
 	user: UserRecord,
@@ -224,8 +224,7 @@ export async function parseScheduleActions(
 		const id = actionId(item, current);
 		if (item.type === 'RUN_ACTOR') {
 			if (typeof item.actorId !== 'string' || !item.actorId) fail('actorId is required');
-			const reference = parseResourceReference(item.actorId);
-			const actor = reference.kind === 'empty-name' ? null : await resolveOwnedActor(user, reference);
+			const actor = await getOwnedActor(user.id, item.actorId);
 			if (!actor) throw new ScheduleTargetNotFoundError('actor', item.actorId);
 			const runInput = runInputFromAction(item.runInput);
 			const runOptions = runOptionsFromAction(item.runOptions);

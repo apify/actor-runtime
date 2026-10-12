@@ -160,6 +160,10 @@ describe('schedules', () => {
 			type: 'schedule-actor-not-found',
 			message: 'Actor with ID "nope" not found',
 		});
+		// An action takes the Actor's id only, as on the platform; a name is not resolved.
+		const byName = await call('post', 'schedules', { actions: [{ type: 'RUN_ACTOR', actorId: '~my-actor' }] });
+		expect(byName.status).toBe(404);
+		expect(byName.data.error.type).toBe('schedule-actor-not-found');
 
 		const unknownTask = await call('post', 'schedules', {
 			actions: [{ type: 'RUN_ACTOR_TASK', actorTaskId: 'nope' }],
@@ -192,7 +196,7 @@ describe('schedules', () => {
 		const schedule = await server.client.schedules().create({
 			name: 'hourly',
 			cronExpression: '0 * * * *',
-			actions: [{ type: 'RUN_ACTOR', actorId: '~my-actor', runOptions: { memoryMbytes: 512 } }],
+			actions: [{ type: 'RUN_ACTOR', actorId, runOptions: { memoryMbytes: 512 } }],
 		} as never);
 		const actionId = schedule.actions[0]!.id;
 		expect(schedule.actions[0]).toMatchObject({ actorId, runOptions: { memoryMbytes: 512 } });

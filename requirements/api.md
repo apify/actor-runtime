@@ -234,8 +234,7 @@
       and run that could not start.
     - Deleting an Actor or a task drops the actions that would run it.
 - Differences: a run time that passed while the runtime was not running is made up once at the next start;
-  `notifications.email` is saved but no email is sent (`unsupported.md`); an action may name an Actor as
-  `username~name` like the rest of the API, and is stored by id.
+  `notifications.email` is saved but no email is sent (`unsupported.md`).
 
 # Actor Standby
 
