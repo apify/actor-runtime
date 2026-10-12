@@ -41,11 +41,7 @@
 
 # Actor run origin
 
-- A run started over the API (`v2/actors/:actorId/runs`, the `run-sync` endpoints, and the same for a task)
-  gets its `meta.origin` from the request's `X-Apify-Request-Origin` header when it names one of the
-  platform's origins (`CLI` for the Apify CLI, `WEBHOOK` for a webhook of this runtime, `WEB`, `CI`, ...),
-  as on the platform; otherwise, and for an unknown value, it is `API`. The run's `APIFY_META_ORIGIN` and the
-  `?origin=` filter of the last-run shortcuts see the same value.
+- A run's `meta.origin` is set as on the platform, from the caller's `X-Apify-Request-Origin`.
 
 # Resource id encoding
 
