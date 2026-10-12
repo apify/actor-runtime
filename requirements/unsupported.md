@@ -78,7 +78,8 @@ real account, not in the runtime.
 
 ## Inside the Actor container
 
-- Run metadata env vars (input key, build, user, timestamps)
+- Env vars for account, permissions, workflows, MCP connectors, the public API URL and the result cap
+  (`actor-driver.md`'s "Not set")
 - Apify Proxy env vars other than the password (hostname, port, status URL)
 - Log rate limiting, line truncation and size cap
 - Legacy `cpuInfo` events
