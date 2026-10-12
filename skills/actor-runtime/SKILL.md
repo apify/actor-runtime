@@ -418,7 +418,9 @@ a later step misses. Only a call naming an Actor this runtime does not know is r
 - The `runs/last` shortcuts address an Actor's newest run without knowing its id:
   `apify api GET v2/actors/<actorId>/runs/last`, and the same under `/log`, `/dataset/items`,
   `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
-  failed runs. `client.actor(id).lastRun()` in the SDKs uses these; `v2/actor-tasks/<taskId>/runs/last`
+  failed runs, or `?origin=CLI` for the newest run `apify call` started: a run's `meta.origin` comes
+  from the caller's `X-Apify-Request-Origin` as on the platform (`CLI`, `WEBHOOK`, `SCHEDULER`, ...; `API`
+  otherwise). `client.actor(id).lastRun()` in the SDKs uses these; `v2/actor-tasks/<taskId>/runs/last`
   does the same for a task.
 - The console at `http://localhost:3000` shows the same objects, plus the pricing and dev-folder forms,
   each run's usage and cost, the Migrate button, the browser view, each run's `containerUrl` and an

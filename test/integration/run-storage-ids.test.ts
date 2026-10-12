@@ -66,6 +66,26 @@ describe('extra named default storages (storageIds)', () => {
 		expect(JSON.parse(getCapturedEnv()!.ACTOR_STORAGES_JSON!)).toEqual(storageIds);
 	});
 
+	it('names the run and Actor on every default storage, the extra datasets included, as the platform does', async () => {
+		const run = await buildAndRun('owned-storages-actor', {
+			datasets: {
+				default: { actorSpecification: 1, fields: {} },
+				categories: { actorSpecification: 1, fields: {} },
+			},
+		});
+		const storageIds = (run as unknown as { storageIds: Record<string, Record<string, string>> }).storageIds;
+		const owner = { actId: run.actId, actRunId: run.id };
+
+		expect(await server.client.dataset(run.defaultDatasetId).get()).toMatchObject(owner);
+		expect(await server.client.dataset(storageIds.datasets.categories!).get()).toMatchObject(owner);
+		expect(await server.client.keyValueStore(run.defaultKeyValueStoreId).get()).toMatchObject(owner);
+		expect(await server.client.requestQueue(run.defaultRequestQueueId).get()).toMatchObject(owner);
+
+		// A storage a user creates belongs to no run.
+		const own = await server.client.datasets().getOrCreate('my-own-dataset');
+		expect(await server.client.dataset(own.id).get()).toMatchObject({ actId: null, actRunId: null });
+	});
+
 	it('reports only the default storages for an Actor that declares no extra datasets', async () => {
 		const run = await buildAndRun('single-dataset-actor');
 		const expected = {

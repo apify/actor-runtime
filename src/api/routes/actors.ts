@@ -58,6 +58,7 @@ import {
 } from '../../services/standby-config.js';
 import { deleteSourceContextFiles } from '../../services/source-context.js';
 import { defaultRunOptionsOf, mergeDefaultRunOptionsUpdate } from '../../services/default-run-options.js';
+import { requestOrigin } from '../../services/run-origin.js';
 import { deleteWebhooksWithCondition } from '../../services/webhooks.js';
 import { removeScheduleActionsFor } from '../../services/schedules.js';
 
@@ -236,6 +237,7 @@ export async function startActorRun(
 	// harvested-per-account password used specifically for each user").
 	return startRun(deps.driver, actor, build, {
 		input: processed.input,
+		origin: requestOrigin(req),
 		memoryMbytes: request.memoryMbytes,
 		timeoutSecs: request.timeoutSecs,
 		maxTotalChargeUsd: request.maxTotalChargeUsd,
