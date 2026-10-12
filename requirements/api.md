@@ -219,8 +219,7 @@
 
 - Implemented as on the platform, for the caller's own Actors and tasks.
 - Differences:
-    - Schedules run only while the runtime is running; a run time missed while it was not is made up
-      once at the next start.
+    - Schedules run only while the runtime is running; a run time that passed while it was not is skipped.
     - `notifications.email` is saved but no email is sent (`unsupported.md`).
 
 # Actor Standby

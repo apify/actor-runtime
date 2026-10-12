@@ -6,6 +6,7 @@ import { capturingDriver, startTestServer, type TestServerHandle } from './helpe
 import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
+import { startScheduler, stopSchedulerForTests } from '../../src/services/scheduler.js';
 import type { Driver, RunContext, RunOutcome } from '../../src/driver/types.js';
 import type { InputSchema, RunRecord } from '../../src/storage/entities.js';
 
@@ -321,6 +322,25 @@ describe('schedules', () => {
 		]);
 		await server.client.task(task.id).delete();
 		expect((await server.client.schedule(schedule.id).get())?.actions).toEqual([]);
+	});
+
+	it('skips a run time that passed while the runtime was not running', async () => {
+		const schedule = await server.client.schedules().create({
+			cronExpression: '0 * * * *',
+			isEnabled: true,
+			actions: [{ type: 'RUN_ACTOR', actorId }],
+		} as never);
+		await stopSchedulerForTests();
+		const missed = new Date(Date.now() - 60_000).toISOString();
+		await getRegistries().schedules.update(schedule.id, (current) =>
+			current ? { ...current, nextRunAt: missed } : null,
+		);
+
+		await startScheduler({ driver: scripted.driver });
+		const after = (await server.client.schedule(schedule.id).get())!;
+		expect(Date.parse(after.nextRunAt)).toBeGreaterThan(Date.now());
+		expect(after.lastRunAt).toBeNull();
+		expect(await scheduledRuns(schedule.id)).toEqual([]);
 	});
 
 	it('fires on its own at nextRunAt, then moves on to the next run', async () => {

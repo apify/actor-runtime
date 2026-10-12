@@ -3,7 +3,7 @@
  * scheduling daemons: every enabled schedule has a timer for its `nextRunAt`; when it fires, each action
  * starts its run (skipped while the action's previous run is still going, for an exclusive schedule), the
  * outcome goes to the schedule's log, and the next run time is computed. A run time that passed while the
- * runtime was not running is made up once at start, as the platform re-enqueues an overdue schedule.
+ * runtime was not running is skipped: at start, an overdue schedule is moved on to its next run time.
  */
 import { CONTAINER_API_BASE_URL } from '../config.js';
 import type { Driver } from '../driver/types.js';
@@ -47,7 +47,17 @@ export async function startScheduler(schedulerOptions: SchedulerOptions): Promis
 	options = schedulerOptions;
 	const registries = getRegistries();
 	unsubscribe = registries.schedules.onChange((_previous, next) => arm(next));
-	for (const schedule of await registries.schedules.list()) arm(schedule);
+	const now = new Date();
+	for (const schedule of await registries.schedules.list()) {
+		if (schedule.isEnabled && schedule.nextRunAt && Date.parse(schedule.nextRunAt) <= now.getTime()) {
+			// The write re-arms the timer through the listener above.
+			await registries.schedules.update(schedule.id, (current) =>
+				current ? { ...current, nextRunAt: nextRunAtOf(current, now) } : null,
+			);
+		} else {
+			arm(schedule);
+		}
+	}
 }
 
 function arm(schedule: ScheduleRecord | null): void {

@@ -156,7 +156,7 @@ apify api POST v2/schedules/<scheduleId>/invoke   # run its actions now
 apify api GET v2/schedules/<scheduleId>/log
 ```
 
-- A run time missed while the runtime was down is made up once at the next start.
+- A run time that passed while the runtime was down is skipped, not made up.
 - No email is sent when a run fails to start; the schedule's log says so instead.
 
 ## Run memory
