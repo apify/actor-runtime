@@ -44,6 +44,7 @@ function runStorageAliasEntries(prefix: string): SpecTableEntry[] {
 		pathTemplate('GET', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('HEAD', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('PUT', `${prefix}/key-value-store/records/:recordKey`, true),
+		pathTemplate('POST', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('DELETE', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('GET', `${prefix}/request-queue`, true),
 		pathTemplate('POST', `${prefix}/request-queue/requests/batch`, true),
@@ -81,11 +82,13 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	pathTemplate('POST', 'v2/actors/:actorId/versions', true),
 	pathTemplate('GET', 'v2/actors/:actorId/versions/:versionNumber', true),
 	pathTemplate('PUT', 'v2/actors/:actorId/versions/:versionNumber', true),
+	pathTemplate('POST', 'v2/actors/:actorId/versions/:versionNumber', true),
 	pathTemplate('DELETE', 'v2/actors/:actorId/versions/:versionNumber', true),
 	pathTemplate('GET', 'v2/actors/:actorId/versions/:versionNumber/env-vars', true),
 	pathTemplate('POST', 'v2/actors/:actorId/versions/:versionNumber/env-vars', true),
 	pathTemplate('GET', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
 	pathTemplate('PUT', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
+	pathTemplate('POST', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
 	pathTemplate('DELETE', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
 	pathTemplate('GET', 'v2/actors/:actorId/webhooks', true),
 
@@ -168,6 +171,7 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	pathTemplate('GET', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('HEAD', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('PUT', 'v2/key-value-stores/:storeId/records/:recordKey', true),
+	pathTemplate('POST', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('DELETE', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 
 	// --- Request queues ---

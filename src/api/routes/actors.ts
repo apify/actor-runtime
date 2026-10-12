@@ -398,35 +398,35 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		}),
 	);
 
-	router.put(
-		'/actors/:actorId/versions/:versionNumber',
-		h(async (req, res) => {
-			const actor = await resolveActorParam(req);
-			if (!actor) throw recordNotFound();
-			const existing = findVersion(actor, req.params.versionNumber as string);
-			if (!existing) throw recordNotFound();
-			const body = jsonBody<Partial<ActorVersionRecord>>(req);
-			const versionNumber = req.params.versionNumber as string;
-			const envFields = versionEnvFieldsFromBody(body, existing);
-			let dropped: ActorVersionRecord['localSourceContext'];
-			// Read under the lock, so a repository pushed meanwhile is neither lost nor resurrected.
-			const updated = await updateActor(actor.id, (current) => {
-				const latest = findVersion(current, versionNumber) ?? existing;
-				const keptContext = body.sourceFiles === undefined ? latest.localSourceContext : undefined;
-				dropped = keptContext ? undefined : latest.localSourceContext;
-				return addOrReplaceVersion(current, {
-					versionNumber,
-					buildTag: body.buildTag ?? latest.buildTag,
-					sourceType: 'SOURCE_FILES',
-					sourceFiles: body.sourceFiles ?? latest.sourceFiles,
-					...envFields,
-					...(keptContext ? { localSourceContext: keptContext } : {}),
-				});
+	const updateVersion = h(async (req, res) => {
+		const actor = await resolveActorParam(req);
+		if (!actor) throw recordNotFound();
+		const existing = findVersion(actor, req.params.versionNumber as string);
+		if (!existing) throw recordNotFound();
+		const body = jsonBody<Partial<ActorVersionRecord>>(req);
+		const versionNumber = req.params.versionNumber as string;
+		const envFields = versionEnvFieldsFromBody(body, existing);
+		let dropped: ActorVersionRecord['localSourceContext'];
+		// Read under the lock, so a repository pushed meanwhile is neither lost nor resurrected.
+		const updated = await updateActor(actor.id, (current) => {
+			const latest = findVersion(current, versionNumber) ?? existing;
+			const keptContext = body.sourceFiles === undefined ? latest.localSourceContext : undefined;
+			dropped = keptContext ? undefined : latest.localSourceContext;
+			return addOrReplaceVersion(current, {
+				versionNumber,
+				buildTag: body.buildTag ?? latest.buildTag,
+				sourceType: 'SOURCE_FILES',
+				sourceFiles: body.sourceFiles ?? latest.sourceFiles,
+				...envFields,
+				...(keptContext ? { localSourceContext: keptContext } : {}),
 			});
-			await deleteSourceContextFiles(dropped);
-			sendData(res, versionDto(storedVersion(updated, versionNumber)));
-		}),
-	);
+		});
+		await deleteSourceContextFiles(dropped);
+		sendData(res, versionDto(storedVersion(updated, versionNumber)));
+	});
+	router.put('/actors/:actorId/versions/:versionNumber', updateVersion);
+	// The spec's "Update version (POST)": an alias of the PUT.
+	router.post('/actors/:actorId/versions/:versionNumber', updateVersion);
 
 	router.get(
 		'/actors/:actorId/versions/:versionNumber/env-vars',
@@ -463,29 +463,29 @@ export function mountActors(router: Router, deps: ApiServerDeps): void {
 		}),
 	);
 
-	router.put(
-		'/actors/:actorId/versions/:versionNumber/env-vars/:envVarName',
-		h(async (req, res) => {
-			const { actor, version } = await resolveVersionParam(req);
-			const oldName = req.params.envVarName as string;
-			findEnvVarOrThrow(version, oldName);
-			const envVar = envVarFromBody(jsonBody(req));
-			await updateActor(actor.id, (current) => {
-				const currentVersion = findVersion(current, version.versionNumber);
-				if (!currentVersion) throw recordNotFound();
-				const envVars = currentVersion.envVars ?? [];
-				findEnvVarOrThrow(currentVersion, oldName);
-				if (oldName !== envVar.name && envVars.some((entry) => entry.name === envVar.name)) {
-					throw cannotRenameEnvVar();
-				}
-				return addOrReplaceVersion(current, {
-					...currentVersion,
-					envVars: envVars.map((entry) => (entry.name === oldName ? envVar : entry)),
-				});
+	const updateEnvVar = h(async (req, res) => {
+		const { actor, version } = await resolveVersionParam(req);
+		const oldName = req.params.envVarName as string;
+		findEnvVarOrThrow(version, oldName);
+		const envVar = envVarFromBody(jsonBody(req));
+		await updateActor(actor.id, (current) => {
+			const currentVersion = findVersion(current, version.versionNumber);
+			if (!currentVersion) throw recordNotFound();
+			const envVars = currentVersion.envVars ?? [];
+			findEnvVarOrThrow(currentVersion, oldName);
+			if (oldName !== envVar.name && envVars.some((entry) => entry.name === envVar.name)) {
+				throw cannotRenameEnvVar();
+			}
+			return addOrReplaceVersion(current, {
+				...currentVersion,
+				envVars: envVars.map((entry) => (entry.name === oldName ? envVar : entry)),
 			});
-			sendData(res, publicEnvVar(envVar, false));
-		}),
-	);
+		});
+		sendData(res, publicEnvVar(envVar, false));
+	});
+	router.put('/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', updateEnvVar);
+	// The spec's "Update environment variable (POST)": an alias of the PUT.
+	router.post('/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', updateEnvVar);
 
 	router.delete(
 		'/actors/:actorId/versions/:versionNumber/env-vars/:envVarName',
