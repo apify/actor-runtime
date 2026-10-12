@@ -129,7 +129,7 @@ apify api GET v2/actor-tasks/~small-crawl/runs/last/dataset/items
 - The saved input is validated against the input schema of the build the task runs, as on the platform.
 - A task of a Standby Actor has its own `standbyUrl` (see "Run an Actor server").
 - The console's Tasks page shows each task's input, run options, standby URL and runs.
-- Tasks cannot be published or scheduled here.
+- Tasks cannot be published here.
 
 ## Webhooks
 
@@ -145,6 +145,19 @@ apify api GET v2/webhooks/<webhookId>/dispatches  # each delivery, with every at
 - A URL naming the runtime's own API (`http://localhost:3333/v2/...`) is authenticated as you unless it
   has a `token`, so a webhook can start another local Actor.
 - Only HTTP request webhooks: Slack, email, Drive and GitHub actions are refused.
+
+## Schedules
+
+Schedules work as on the platform, including `apify-client`'s schedule calls, while the runtime is running.
+
+```sh
+apify api POST v2/schedules --body '{"cronExpression": "0 2 * * *", "isEnabled": true, "actions": [{"type": "RUN_ACTOR", "actorId": "<actorId>"}]}'
+apify api POST v2/schedules/<scheduleId>/invoke   # run its actions now
+apify api GET v2/schedules/<scheduleId>/log
+```
+
+- A run time that passed while the runtime was down is skipped, not made up.
+- No email is sent when a run fails to start; the schedule's log says so instead.
 
 ## Run memory
 

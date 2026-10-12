@@ -90,6 +90,11 @@
         - v2/webhook-dispatches
         - v2/webhook-dispatches/:dispatchId
         - v2/actors/:actorId/webhooks
+    - Schedules
+        - v2/schedules
+        - v2/schedules/:scheduleId
+        - v2/schedules/:scheduleId/log
+        - v2/schedules/:scheduleId/invoke
     - Builds
         - v2/actor-builds
         - v2/actor-builds/:buildId
@@ -209,6 +214,13 @@
       allowed and redirects are not followed.
     - The runtime's own API stands in for the Apify API: a request to it without a `token` is
       authenticated as the webhook's owner.
+
+# Schedules
+
+- Implemented as on the platform, for the caller's own Actors and tasks.
+- Differences:
+    - Schedules run only while the runtime is running; a run time that passed while it was not is skipped.
+    - `notifications.email` is saved but no email is sent (`unsupported.md`).
 
 # Actor Standby
 
