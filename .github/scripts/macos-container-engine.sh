@@ -17,9 +17,10 @@
 # install a developer has (Podman Desktop bundles that package; Homebrew builds the same pieces). It is
 # only the client and the VM tooling; no VM runs until a job makes one. Each job creates its own
 # `podman machine` (named `actor-runtime-e2e`, so nothing else of the runner user's is ever touched),
-# rootless (`podman-rootless`, the default a developer gets) or rootful (`podman-rootful`), and removes
-# it in `teardown`. That is the same Fedora CoreOS image, Virtualization.framework VM, virtiofs home
-# share and Rosetta a developer's machine is, so what passes here passes on their Mac. The machine's
+# rootless (`podman-rootless`, the default a developer gets) or rootful (`podman-rootful`), on the
+# `applehv` provider (see `PODMAN_MACHINE_PROVIDER`), and removes it in `teardown`. That is the same
+# Fedora CoreOS image, Virtualization.framework VM, virtiofs home share and Rosetta a developer's
+# machine is once they pick that provider, so what passes here passes on their Mac. The machine's
 # state lives where Podman keeps it (`~/.local/share/containers/podman/machine`, the connections in
 # `~/.config/containers`); `podman machine rm` takes all of it but the downloaded machine image, kept as
 # a cache (~1 GB) so the next job's `init` is quick.
@@ -98,6 +99,13 @@ export DOCKER_CONFIG=$engine_dir/docker-config
 export REGISTRY_AUTH_FILE=$engine_dir/podman-auth.json
 # The podman machine this script makes and removes; nothing else of the runner user's Podman is touched.
 PODMAN_MACHINE=actor-runtime-e2e
+# Its VM provider. Podman 6 made `libkrun` the default on Macs, and only `applehv` (Apple's
+# Virtualization.framework, Podman 5's default) can run amd64 binaries under Rosetta: a libkrun
+# machine runs them under the image's QEMU user-mode emulation, under which Chrome crashes, so the
+# Playwright sample Actors - and the browser view - cannot work there. `applehv` is therefore what
+# this leg tests, and what a developer on Podman 6 has to pick (`podman machine init --provider
+# applehv`) to run such Actors at all. The README says so.
+PODMAN_MACHINE_PROVIDER=${PODMAN_MACHINE_PROVIDER:-applehv}
 # Where podman.io's installer package puts the client, then Homebrew's places, in case `PATH` in the
 # runner's service environment has none of them (the package adds its own through /etc/paths.d, which
 # only login shells read).
@@ -223,14 +231,14 @@ smoke_tests() {
 	# amd64 emulation, for the browser-view files. A warning, not a failure: only those files need it,
 	# and their own assertions will say so if it is missing.
 	if "$cli" run --rm --platform linux/amd64 docker.io/library/busybox uname -m 2>/dev/null | grep -q x86_64; then
-		# Which emulator: the interpreter binfmt_misc hands the binary to is mapped into the process.
-		local emulator
-		emulator=$("$cli" run --rm --platform linux/amd64 docker.io/library/busybox \
-			sh -c 'grep -o -m1 -E "rosetta|qemu-x86_64[a-z_-]*" /proc/self/maps' 2>/dev/null || true)
-		echo "amd64 containers run on this engine (via ${emulator:-an emulator /proc/self/maps does not name})."
-		case "$emulator" in
-			qemu*) warn "amd64 containers run under QEMU, not Rosetta; the browser-view e2e files will fail (Chrome crashes under QEMU)." ;;
-		esac
+		# Which emulator: under Rosetta the process's /proc/self/maps is the kernel's view, with the
+		# rosetta interpreter mapped in it; QEMU user-mode emulation synthesizes that file for the
+		# guest and never names itself in it.
+		if "$cli" run --rm --platform linux/amd64 docker.io/library/busybox grep -q rosetta /proc/self/maps 2>/dev/null; then
+			echo "amd64 containers run on this engine under Rosetta."
+		else
+			warn "amd64 containers run under QEMU user-mode emulation, not Rosetta; the browser-view e2e files will fail (Chrome crashes under QEMU)."
+		fi
 	else
 		warn "amd64 containers do not run on this engine; the browser-view e2e files will fail."
 	fi
@@ -367,12 +375,13 @@ find_podman() {
 	echo "Using $(command -v podman): $(podman --version)"
 }
 
-# vm_root_sh <script>: runs a shell script as root inside the podman machine, passed base64-encoded so
-# no quoting has to survive two shells and ssh on the way.
+# vm_root_sh <script>: runs a shell script as root inside the podman machine. `podman machine ssh`
+# joins its arguments with spaces into one command line for the VM's shell - quoting does not
+# survive - so the script travels base64-encoded in a pipeline that needs no quoting at all.
 vm_root_sh() {
 	local encoded
 	encoded=$(printf '%s' "$1" | base64 | tr -d '\n')
-	podman machine ssh "$PODMAN_MACHINE" -- sudo sh -c "echo $encoded | base64 -d | sh"
+	podman machine ssh "$PODMAN_MACHINE" -- "echo $encoded | base64 -d | sudo sh"
 }
 
 # The Rosetta registration the machine's own activation service is supposed to make (binfmt_misc:
@@ -420,17 +429,16 @@ install_podman() {
 	echo "::group::Create the Podman machine ($mode)"
 	vm_size
 	ensure_rosetta || true
-	# Rosetta is a `containers.conf` setting (`[machine] rosetta`, on by default for applehv on Apple
-	# silicon; Podman 6 has no `init` flag for it). Only with no Rosetta on the host is it switched off,
-	# through an override file for this one command, so the machine starts and the fallback below
-	# registers QEMU handlers instead.
-	if [ -z "$rosetta" ]; then
-		printf '[machine]\nrosetta = false\n' > "$tmp_dir/containers-no-rosetta.conf"
-		export CONTAINERS_CONF_OVERRIDE=$tmp_dir/containers-no-rosetta.conf
-	fi
+	# Rosetta is a `containers.conf` setting (`[machine] rosetta`; Podman 6 has no `init` flag for it),
+	# applehv only. Set explicitly for this one command, through an override file, to what the host
+	# has: Podman 5.6 turned it off by default over kernel issues since fixed, and the setting's
+	# default has moved since, so the default is not relied on either way.
+	printf '[machine]\nrosetta = %s\n' "$([ -n "$rosetta" ] && echo true || echo false)" > "$tmp_dir/containers-machine.conf"
+	export CONTAINERS_CONF_OVERRIDE=$tmp_dir/containers-machine.conf
 	# `--memory` is MiB. `--disk-size` is a sparse maximum. Default mounts (`/Users`, `/private`,
 	# `/var/folders`) cover `$HOME`.
 	podman machine init \
+		--provider "$PODMAN_MACHINE_PROVIDER" \
 		--cpus "$vm_cpus" \
 		--memory "$((vm_memory * 1024))" \
 		--disk-size 60 \
