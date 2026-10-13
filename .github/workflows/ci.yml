@@ -52,6 +52,9 @@ jobs:
                     - browser-view-ts
                     - browser-view-py
                     - all-modes
+                    - pay-per-event
+                    - standby
+                    - web-server
         steps:
             - uses: actions/checkout@v4
             - uses: pnpm/action-setup@v4
@@ -90,9 +93,9 @@ jobs:
 
     e2e-arm64:
         name: e2e actor-dev-loop (apify-cli + docker on arm64)
-        # The Linux arm64 coverage in CI (`e2e-macos-arm64` below is the other): `release.yml` builds
-        # multi-arch but is dispatch-only, so an arm64 break would otherwise surface at release time.
-        # Native, so nothing here is emulated.
+        # The Linux arm64 coverage in CI (`e2e-macos-arm64` below is the other): `build-image.yml` builds
+        # multi-arch but runs only on dispatch or release, so an arm64 break would otherwise surface at
+        # release time. Native, so nothing here is emulated.
         runs-on: ubuntu-24.04-arm
         timeout-minutes: 30
         steps:

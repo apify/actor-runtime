@@ -10,12 +10,21 @@ import { bootstrapStorage, resetStorageForTests, shutdownStorage } from '../../.
 import { openRegistries, resetRegistriesForTests } from '../../../src/storage/registries.js';
 import { resetUsersForTests } from '../../../src/services/users.js';
 import { resetApiFallbackStateForTests } from '../../../src/services/api-fallback.js';
+import { resetApifyProxyEnabledForTests } from '../../../src/services/apify-proxy.js';
 import { createApiServer } from '../../../src/api/server.js';
 import { attachEventsWebSocket } from '../../../src/api/events-ws.js';
 import { resetLogsForTests, stopLogFlusher } from '../../../src/services/logs.js';
 import { resetEventsChannelForTests } from '../../../src/services/events-channel.js';
 import { resetMigrationsForTests } from '../../../src/services/migrations.js';
 import { resetGracefulAbortsForTests } from '../../../src/services/runs.js';
+import { resetChargingForTests } from '../../../src/services/charging.js';
+import { resetStandbyForTests } from '../../../src/services/standby.js';
+import { resetStandbyFinishingForTests } from '../../../src/services/standby-finish.js';
+import { startWebhookDispatcher, stopWebhookDispatcherForTests } from '../../../src/services/webhook-dispatches.js';
+import { startScheduler, stopSchedulerForTests } from '../../../src/services/scheduler.js';
+import { buildDto, runDto } from '../../../src/api/dto/actors.js';
+import { handleStandbyUpgrade } from '../../../src/api/standby-proxy.js';
+import { handleContainerUpgrade } from '../../../src/api/container-proxy.js';
 import type {
 	BuildContext,
 	BuildOutcome,
@@ -50,10 +59,38 @@ export function unavailableDriver(): Driver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
 	};
+}
+
+/** A driver whose builds and runs succeed at once, recording the last build's context and run's env, so
+ * env vars can be checked end to end without Docker. */
+export function capturingDriver(): {
+	driver: Driver;
+	captured: { build?: BuildContext; runEnv?: Record<string, string> };
+} {
+	const captured: { build?: BuildContext; runEnv?: Record<string, string> } = {};
+	const driver: Driver = {
+		...unavailableDriver(),
+		available: true,
+		unavailableReason: undefined,
+		async startBuild(ctx, onLog) {
+			captured.build = ctx;
+			onLog('build ok\n');
+			return { imageId: 'fake-image:test' };
+		},
+		async startRun(ctx, onLog) {
+			captured.runEnv = ctx.env;
+			onLog('done\n');
+			return { exitCode: 0 };
+		},
+	};
+	return { driver, captured };
 }
 
 /**
@@ -84,6 +121,9 @@ export function fixedRunOutcomeDriver(outcome: RunOutcome): Driver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -122,6 +162,9 @@ export function fixedBuildOutcomeDriver(
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -189,6 +232,9 @@ export function deferredRunDriver(): DeferredRunDriver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -249,6 +295,9 @@ export function deferredBuildDriver(): DeferredBuildDriver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -336,6 +385,9 @@ export function multiRunDriver(): MultiRunDriver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -358,6 +410,8 @@ export interface StartCall {
 	ctx: RunContext;
 	resolve(outcome: RunOutcome): void;
 	reject(error: Error): void;
+	/** The run's own `onSample` callback, so a test can simulate sampler ticks (see `MultiRunDriver.emitSample`). */
+	onSample?: (sample: RunResourceSample) => void;
 }
 
 /** Unlike `deferredRunDriver`/`multiRunDriver`, every `startRun` call gets its own deferred outcome -
@@ -390,9 +444,9 @@ export function restartTrackingDriver(): RestartTrackingDriver {
 			throw new Error('not used by this stub');
 		},
 		async abortBuild() {},
-		async startRun(ctx) {
+		async startRun(ctx, _onLog, onSample) {
 			return new Promise<RunOutcome>((resolve, reject) => {
-				startCalls.push({ ctx, resolve, reject });
+				startCalls.push({ ctx, resolve, reject, onSample });
 				notify();
 			});
 		},
@@ -449,11 +503,17 @@ export async function startTestServer(
 		const s = app.listen(0, () => resolve(s));
 	});
 	const { port } = server.address() as AddressInfo;
+	await startWebhookDispatcher({ apiPort: port, runResource: (run) => runDto(run), buildResource: buildDto });
+	await startScheduler({ driver });
 	const baseUrl = `http://127.0.0.1:${port}`;
 	const wsBaseUrl = `ws://127.0.0.1:${port}`;
 	// Same server, same upgrade path as production (`index.ts`) - a real `ws` client against this handle
 	// exercises the actual `api/events-ws.ts` code, not a stand-in.
-	const eventsWebSocketServer = attachEventsWebSocket(server);
+	const eventsWebSocketServer = attachEventsWebSocket(
+		server,
+		(req, socket, head) =>
+			handleContainerUpgrade(driver, req, socket, head) || handleStandbyUpgrade(driver, req, socket, head),
+	);
 
 	// maxRetries: 0 - real apify-client retries 5xx (so a deliberate 501 from the request-deletion
 	// endpoints would otherwise burn ~8 exponential-backoff retries per test); production behaviour is
@@ -476,16 +536,22 @@ export async function startTestServer(
 				server.close(() => resolve());
 				server.closeAllConnections();
 			});
+			await stopSchedulerForTests();
+			await stopWebhookDispatcherForTests();
 			stopLogFlusher();
 			resetLogsForTests();
 			resetEventsChannelForTests();
 			resetMigrationsForTests();
 			resetGracefulAbortsForTests();
+			resetChargingForTests();
+			resetStandbyForTests();
+			resetStandbyFinishingForTests();
 			await shutdownStorage();
 			resetStorageForTests();
 			resetRegistriesForTests();
 			resetUsersForTests();
 			resetApiFallbackStateForTests();
+			resetApifyProxyEnabledForTests();
 			// A background write (late log flush, run-record update) can land while the tree is
 			// being removed, recreating entries under an already-emptied directory — seen in CI as
 			// ENOTEMPTY. fs.rm retries exactly that class of error when maxRetries is set.

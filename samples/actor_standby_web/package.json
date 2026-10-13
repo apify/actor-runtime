@@ -1,0 +1,22 @@
+{
+	"name": "my-standby-web-actor",
+	"version": "0.0.1",
+	"type": "module",
+	"description": "A Standby web page and an Actor-to-Actor standby call, for actor-runtime.",
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"dependencies": {
+		"apify": "^3.7.0"
+	},
+	"devDependencies": {
+		"@apify/tsconfig": "^0.2.0",
+		"@types/node": "^24.0.0",
+		"typescript": "^6.0.0"
+	},
+	"scripts": {
+		"start": "node dist/main.js",
+		"build": "tsc"
+	},
+	"license": "ISC"
+}

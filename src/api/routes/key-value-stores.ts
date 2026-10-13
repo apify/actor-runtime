@@ -4,16 +4,18 @@ import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
 import { recordNotFound } from '../errors.js';
-import { h, optionalJsonBody, paginationParams, queryNumber, queryString, toNodeBuffer } from '../handler.js';
-import { openKeyValueStore } from '../../storage/open.js';
+import { resolveStorageParam } from '../resolve-reference.js';
 import {
-	createStorage,
-	getOwnedStorage,
-	listOwnedStorages,
-	renameStorage,
-	dropStorage,
-	touchStorage,
-} from '../../services/storages.js';
+	h,
+	optionalJsonBody,
+	paginationParams,
+	queryBoolean,
+	queryNumber,
+	queryString,
+	toNodeBuffer,
+} from '../handler.js';
+import { openKeyValueStore } from '../../storage/open.js';
+import { createStorage, listOwnedStorages, renameStorage, dropStorage, touchStorage } from '../../services/storages.js';
 import { keyValueStoreDto } from '../dto/storages.js';
 import { pageKeys } from '../../services/kv-key-listing.js';
 import type { StorageRecord } from '../../storage/entities.js';
@@ -91,18 +93,18 @@ export function mountKeyValueStoreOperations(router: Router, basePath: string, r
 		}),
 	);
 
-	router.put(
-		`${basePath}/records/:recordKey`,
-		h(async (req, res) => {
-			const record = await requireStore(req);
-			const store = await openKeyValueStore(record.id);
-			const contentType = req.header('content-type') ?? 'application/octet-stream';
-			const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-			await store.setValue(req.params.recordKey as string, body, { contentType });
-			await touchStorage(record.id);
-			res.status(201).end();
-		}),
-	);
+	const setRecord = h(async (req, res) => {
+		const record = await requireStore(req);
+		const store = await openKeyValueStore(record.id);
+		const contentType = req.header('content-type') ?? 'application/octet-stream';
+		const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+		await store.setValue(req.params.recordKey as string, body, { contentType });
+		await touchStorage(record.id);
+		res.status(201).end();
+	});
+	router.put(`${basePath}/records/:recordKey`, setRecord);
+	// The spec's "Store record (POST)": an alias of the PUT, for clients that cannot send PUT.
+	router.post(`${basePath}/records/:recordKey`, setRecord);
 
 	router.delete(
 		`${basePath}/records/:recordKey`,
@@ -122,7 +124,9 @@ export function mountKeyValueStores(router: Router): void {
 	router.get(
 		'/key-value-stores',
 		h(async (req, res) => {
-			const records = await listOwnedStorages(requireUser(req).id, 'keyValueStore');
+			const records = await listOwnedStorages(requireUser(req).id, 'keyValueStore', {
+				includeUnnamed: queryBoolean(req, 'unnamed') ?? false,
+			});
 			const sorted = sortByTimestamp(records, (record) => record.createdAt);
 			const envelope = paginate(sorted, paginationParams(req));
 			sendData(res, { ...envelope, items: envelope.items.map((record) => keyValueStoreDto(record)) });
@@ -142,7 +146,7 @@ export function mountKeyValueStores(router: Router): void {
 	router.put(
 		'/key-value-stores/:storeId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.storeId as string, 'keyValueStore');
+			const record = await resolveStorageParam(req, 'storeId', 'keyValueStore');
 			if (!record) throw recordNotFound();
 			const body = optionalJsonBody<{ name?: string }>(req);
 			const updated = body?.name ? await renameStorage(record.id, body.name) : record;
@@ -153,7 +157,7 @@ export function mountKeyValueStores(router: Router): void {
 	router.delete(
 		'/key-value-stores/:storeId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.storeId as string, 'keyValueStore');
+			const record = await resolveStorageParam(req, 'storeId', 'keyValueStore');
 			// Matches the real platform and this API's own documented contract - see the identical note
 			// on `DELETE /datasets/:datasetId`.
 			if (!record) throw recordNotFound();
@@ -163,6 +167,6 @@ export function mountKeyValueStores(router: Router): void {
 	);
 
 	mountKeyValueStoreOperations(router, '/key-value-stores/:storeId', async (req) =>
-		getOwnedStorage(requireUser(req).id, req.params.storeId as string, 'keyValueStore'),
+		resolveStorageParam(req, 'storeId', 'keyValueStore'),
 	);
 }

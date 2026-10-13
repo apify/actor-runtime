@@ -22,6 +22,26 @@ export function invalidRequest(message: string): ApiError {
 }
 
 /**
+ * The catch-all's own `404` `not-found`, for a route that matches a whole path family and has to reject an
+ * off-spec sub-path itself (`routes/last-run.ts`). Not `record-not-found`: nothing was looked up, and the
+ * two types are gated by different fallback toggles.
+ */
+export function endpointNotFound(message: string): ApiError {
+	return new ApiError(404, 'not-found', message);
+}
+
+/** Matches the real platform's rejection of an input its Actor's input schema does not accept
+ * (`@apify-packages/errors`'s `actor.inputNotValid` and its neighbours), message included. */
+export function invalidInput(message: string): ApiError {
+	return new ApiError(400, 'invalid-input', message);
+}
+
+/** Matches the real platform's `actor.invalidInputSchema`. */
+export function invalidInputSchema(message: string): ApiError {
+	return new ApiError(400, 'invalid-input-schema', message);
+}
+
+/**
  * Matches the real Apify platform exactly: `DELETE /v2/actor-runs/:runId` on a non-terminal run is
  * rejected rather than aborted-then-deleted (the public API answers 400 `cannot-remove-running-run`),
  * so this runtime does the same instead of silently leaking the run's container.
@@ -31,6 +51,25 @@ export function cannotRemoveRunningRun(): ApiError {
 		400,
 		'cannot-remove-running-run',
 		'It is not possible to delete a run that has not finished yet.',
+	);
+}
+
+/** Matches the real platform's `actor.statusNotTerminal`: only a finished run can be resurrected. */
+export function cannotResurrectUnfinishedRun(status: string): ApiError {
+	return new ApiError(400, 'invalid-input', `Cannot resurrect an Actor run with the ${status} status`);
+}
+
+/** Matches the real platform's `common.paramsMismatched`. */
+export function parametersMismatched(message: string): ApiError {
+	return new ApiError(400, 'parameters-mismatched', `Parameters mismatched: ${message}`);
+}
+
+/** Matches the real platform's `runs.cannotSetIsStatusMessageTerminal`. */
+export function cannotSetIsStatusMessageTerminal(): ApiError {
+	return new ApiError(
+		400,
+		'cannot-set-is-status-message-terminal',
+		'You must specify a valid status message together with information on whether it is terminal.',
 	);
 }
 
@@ -46,4 +85,158 @@ export function jobAlreadyFinished(): ApiError {
  */
 export function deletingUnfinishedBuild(): ApiError {
 	return new ApiError(400, 'deleting-unfinished-build', 'Deleting unfinished build while running is not allowed');
+}
+
+export function cannotChargeNonPayPerEventActor(): ApiError {
+	return new ApiError(
+		405,
+		'cannot-charge-non-pay-per-event-actor',
+		'You cannot charge events for an Actor that is not paid per event.',
+	);
+}
+
+/**
+ * Matches the platform: pricing is never part of creating an Actor (the public API answers 403
+ * `operation-not-allowed`), only of updating one that already exists.
+ */
+export function cannotSetPricingOnCreate(): ApiError {
+	return new ApiError(
+		403,
+		'operation-not-allowed',
+		'Pricing cannot be set while creating an Actor - set it with PUT /v2/actors/:actorId afterwards.',
+	);
+}
+
+/** The `apify-` prefixed events are charged by the runtime itself, never through the charge endpoint. */
+export function cannotChargeApifyEvent(eventName: string): ApiError {
+	return new ApiError(
+		405,
+		'cannot-charge-apify-event',
+		`Event "${eventName}" is system event and cannot be charged.`,
+	);
+}
+
+/** Matches the real platform's `tools.schemaValidationUserFriendlyError`, e.g. for a malformed env var. */
+export function schemaValidation(message: string): ApiError {
+	return new ApiError(400, 'schema-validation', message);
+}
+
+/** Matches the real platform's `actor.envVarAlreadyExists`. */
+export function envVarAlreadyExists(): ApiError {
+	return new ApiError(403, 'env-var-already-exists', 'Environment variable with this name already exists');
+}
+
+/** Matches the real platform's `actor.cannotRenameEnvVar`. */
+export function cannotRenameEnvVar(): ApiError {
+	return new ApiError(
+		403,
+		'cannot-rename-env-var',
+		'Environment variable cannot be renamed. An environment variable with the given new name already exists.',
+	);
+}
+
+/** Matches the real platform's `api.runTimeoutExceeded`; the run itself keeps going. */
+export function runTimeoutExceeded(timeoutSecs: number): ApiError {
+	return new ApiError(
+		408,
+		'run-timeout-exceeded',
+		`Actor run exceeded the timeout of ${timeoutSecs} seconds for this API endpoint`,
+	);
+}
+
+/** Matches the real platform's `api.runFailed`. */
+export function runFailed(runId: string, status: string): ApiError {
+	return new ApiError(400, 'run-failed', `Actor run did not succeed (run ID: ${runId}, status: ${status}).`);
+}
+
+/** Matches the real platform's `api.defaultDatasetNotFound`. */
+export function defaultDatasetNotFound(): ApiError {
+	return new ApiError(400, 'default-dataset-not-found', 'The run does not have a default dataset.');
+}
+
+/** Matches the real platform's `actorTask.actorTaskNameExists`. */
+export function actorTaskNameExists(name: string): ApiError {
+	return new ApiError(409, 'actor-task-name-not-unique', `Some other Actor task already has this name ("${name}").`);
+}
+
+/** Matches the real platform's `actorTask.cannotPublishActorTask`; publishing is not supported here. */
+export function cannotPublishActorTask(): ApiError {
+	return new ApiError(
+		400,
+		'cannot-publish-actor-task',
+		'Cannot publish Actor task: publishing tasks is not supported by the local runtime',
+	);
+}
+
+function jsonTypeOf(value: unknown): string {
+	return Array.isArray(value) ? 'array' : typeof value;
+}
+
+/** Matches the real platform's `actorTask.actorTaskInputNotObject`. */
+export function actorTaskInputNotObject(input: unknown): ApiError {
+	return new ApiError(403, 'invalid-input', `Actor task input must be object, got "${jsonTypeOf(input)}" instead.`);
+}
+
+/** Matches the real platform's `actorTask.providedInputNotObject`. */
+export function providedInputNotObject(input: unknown): ApiError {
+	return new ApiError(403, 'invalid-input', `Provided input must be object, got "${jsonTypeOf(input)}" instead.`);
+}
+
+/** Matches the real platform's `actorTask.providedInputNotValidJson`. */
+export function providedInputNotValidJson(error: Error): ApiError {
+	return new ApiError(400, 'invalid-input', `Cannot parse body of provided input: ${error.message}`);
+}
+
+/** Matches the real platform's `actorTask.actorTaskInputNotJson`. */
+export function actorTaskInputNotJson(): ApiError {
+	return new ApiError(403, 'invalid-input', 'Actor task input must have content type "application/json".');
+}
+
+/** Matches the real platform's `actor.unknownBuildTag`. */
+export function unknownBuildTag(tag: string): ApiError {
+	return new ApiError(
+		403,
+		'unknown-build-tag',
+		`Build with tag "${tag}" was not found. Has the Actor been built already?`,
+	);
+}
+
+/** Matches the real platform's `webhooks.idDoesNotMatch`: a test dispatch's run or build must be one the
+ * webhook fires for. */
+export function idDoesNotMatch(passedId: string, actualId: string): ApiError {
+	return new ApiError(
+		400,
+		'id-does-not-match',
+		`Passed run/build ${passedId} is not a run/build of Actor/task ${actualId}.`,
+	);
+}
+
+/** Matches the real platform's `scheduling.cronExpressionInvalid`; `message` already carries the prefix. */
+export function cronExpressionInvalid(message: string): ApiError {
+	return new ApiError(400, 'cron-expression-invalid', message);
+}
+
+/** Matches the real platform's `scheduling.scheduleNameExists`. */
+export function scheduleNameExists(name: string): ApiError {
+	return new ApiError(409, 'schedule-name-not-unique', `Some other schedule already has this name ("${name}").`);
+}
+
+/** Matches the real platform's `scheduling.scheduleTooManyValues`. */
+export function scheduleTooManyValues(message: string): ApiError {
+	return new ApiError(403, 'too-many-values', message);
+}
+
+/** Matches the real platform's `scheduling.actorNotFound` / `actorTaskNotFound`: a schedule action names a
+ * missing Actor or task. */
+export function scheduleTargetNotFound(target: 'actor' | 'task', message: string): ApiError {
+	return new ApiError(
+		404,
+		target === 'actor' ? 'schedule-actor-not-found' : 'schedule-actor-task-not-found',
+		message,
+	);
+}
+
+/** Matches the real platform's `scheduling.runInputBodyNotValidJson`. */
+export function runInputBodyNotValidJson(): ApiError {
+	return new ApiError(400, 'run-input-body-not-valid-json', 'The runInput.body is not valid JSON.');
 }

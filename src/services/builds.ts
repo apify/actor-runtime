@@ -6,9 +6,20 @@ import { recordTaggedBuild, updateActor } from './actors.js';
 import type { Driver } from '../driver/types.js';
 import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
+import { sourceFileToText } from './actor-source-files.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
+import { dockerContextFiles, nameInDockerContext, resolveDockerContext } from './docker-context.js';
+import { describeActorJsonDefect } from './actor-json-validation.js';
+import { DEFAULT_DOCKERFILE_NAME } from './default-dockerfile.js';
+import { resolveInputSchemaLocation } from './input-schema-location.js';
+import { resolveDatasetSchemas } from './dataset-schema.js';
+import { resolveExtraDatasetAliases } from './actor-storages.js';
+import { resolveActorMemorySettings } from './actor-memory.js';
+import { buildArgsOf } from './env-vars.js';
 import { appendLog, appendRuntimeLog, flushLog, markLogTerminal } from './logs.js';
+import { registeredDevFolderBuildLine } from './dev-folder.js';
+import { describeSourceContextOrigin, loadSourceContextFiles } from './source-context.js';
 import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
 
 /**
@@ -18,6 +29,9 @@ import { isTerminalJobStatus, transitionJobStatus } from './job-status.js';
  * reasonable placeholder for this runtime, not a matched platform constant.
  */
 const DEFAULT_BUILD_TIMEOUT_SECS = 1800;
+
+/** Passed to every build, as on the platform: the Actor's folder relative to the Docker context. */
+const ACTOR_PATH_IN_DOCKER_CONTEXT_BUILD_ARG = 'ACTOR_PATH_IN_DOCKER_CONTEXT';
 
 export async function listOwnedBuilds(userId: string, actorId?: string): Promise<BuildRecord[]> {
 	const all = await getRegistries().builds.list();
@@ -89,8 +103,7 @@ function qualifyDockerfileImages(
 ): SourceFile[] {
 	return sourceFiles.map((file) => {
 		if (normalizeEntryName(file.name) !== dockerfilePath) return file;
-		const text = file.format === 'BASE64' ? Buffer.from(file.content, 'base64').toString('utf8') : file.content;
-		const { dockerfile, qualified } = qualifyDockerfileImageReferences(text);
+		const { dockerfile, qualified } = qualifyDockerfileImageReferences(sourceFileToText(file));
 		if (qualified.length === 0) return file;
 		for (const { from, to } of qualified) {
 			log(`Using "${to}" for FROM "${from}" - a short image name means Docker Hub, as on the platform.\n`);
@@ -146,6 +159,19 @@ export async function startBuild(
 	return record;
 }
 
+/** Fails a build before any image exists, mirroring `services/runs.ts`'s `failBeforeContainer`: the
+ * reason reaches both the build log and the status message, which default to the same text. */
+async function failBuild(buildId: string, logMessage: string, statusMessage = logMessage): Promise<void> {
+	const { builds } = getRegistries();
+	appendRuntimeLog(buildId, logMessage);
+	await flushLog(buildId);
+	markLogTerminal(buildId);
+	await transitionJobStatus(builds, buildId, 'FAILED', {
+		finishedAt: new Date().toISOString(),
+		statusMessage,
+	});
+}
+
 /**
  * Exported only for direct testing of the guarded transitions/pre-start abort window (see
  * `test/integration/job-lifecycle.test.ts`) - not part of the service's public surface for callers
@@ -180,13 +206,7 @@ export async function runBuildInBackground(
 	}
 
 	if (!driver.available) {
-		appendRuntimeLog(record.id, `Docker is not available: ${driver.unavailableReason}`);
-		await flushLog(record.id);
-		markLogTerminal(record.id);
-		await transitionJobStatus(builds, record.id, 'FAILED', {
-			finishedAt: new Date().toISOString(),
-			statusMessage: driver.unavailableReason,
-		});
+		await failBuild(record.id, `Docker is not available: ${driver.unavailableReason}`, driver.unavailableReason);
 		return;
 	}
 
@@ -202,25 +222,101 @@ export async function runBuildInBackground(
 		return;
 	}
 
-	const dockerfileResolution = resolveDockerfileLocation(version.sourceFiles);
+	const context = version.localSourceContext;
+	const actorPath = context?.actorPath ?? '';
+	let versionSourceFiles = version.sourceFiles;
+	if (context) {
+		const contextFiles = await loadSourceContextFiles(context);
+		if (!contextFiles) {
+			await failBuild(record.id, 'The pushed Docker context is missing. Run apify push again.');
+			return;
+		}
+		versionSourceFiles = contextFiles;
+		appendRuntimeLog(
+			record.id,
+			`Building "${actorPath}" from ${context.fileCount} pushed files${describeSourceContextOrigin(context.git)}.\n`,
+		);
+	}
+
+	const dockerContext = resolveDockerContext(versionSourceFiles, actorPath);
+	if (dockerContext.outcome === 'failure') {
+		await failBuild(record.id, dockerContext.message);
+		return;
+	}
+	const { contextPath, actorPathInContext } = dockerContext;
+
+	const actorJsonDefect = describeActorJsonDefect(versionSourceFiles, actorPath);
+	if (actorJsonDefect) {
+		await failBuild(record.id, actorJsonDefect);
+		return;
+	}
+
+	const dockerfileResolution = resolveDockerfileLocation(versionSourceFiles, actorPath);
 	if (dockerfileResolution.outcome === 'failure') {
-		appendRuntimeLog(record.id, dockerfileResolution.message);
-		await flushLog(record.id);
-		markLogTerminal(record.id);
-		await transitionJobStatus(builds, record.id, 'FAILED', {
-			finishedAt: new Date().toISOString(),
-			statusMessage: dockerfileResolution.message,
-		});
+		await failBuild(record.id, dockerfileResolution.message);
 		return;
 	}
 	for (const line of dockerfileResolution.logLines) appendRuntimeLog(record.id, line);
+	// The platform reads the Dockerfile from the Docker context, so one outside it cannot build there either.
+	const dockerfilePath =
+		dockerfileResolution.outcome === 'default'
+			? DEFAULT_DOCKERFILE_NAME
+			: nameInDockerContext(dockerfileResolution.dockerfilePath, contextPath);
+	if (dockerfilePath === undefined) {
+		await failBuild(
+			record.id,
+			`Dockerfile "${dockerfileResolution.dockerfilePath}" is outside the Docker context "${contextPath}", so the build cannot read it.`,
+		);
+		return;
+	}
+
+	// Before the image is built, not after: an Actor whose declared input contract cannot be read fails
+	// the build, rather than producing an image whose every run would skip validation.
+	const inputSchemaResolution = resolveInputSchemaLocation(versionSourceFiles, actorPath);
+	if (inputSchemaResolution.outcome === 'failure') {
+		await failBuild(record.id, inputSchemaResolution.message);
+		return;
+	}
+	for (const line of inputSchemaResolution.logLines) appendRuntimeLog(record.id, line);
+	const inputSchema = inputSchemaResolution.outcome === 'resolved' ? inputSchemaResolution.schema : undefined;
+
+	const datasetSchemaResolution = resolveDatasetSchemas(versionSourceFiles, actorPath);
+	if (datasetSchemaResolution.outcome === 'failure') {
+		await failBuild(record.id, datasetSchemaResolution.message);
+		return;
+	}
+	for (const line of datasetSchemaResolution.logLines) appendRuntimeLog(record.id, line);
+	const datasetSchemas = datasetSchemaResolution.schemas;
+
+	const memoryResolution = resolveActorMemorySettings(versionSourceFiles, actorPath);
+	if (memoryResolution.outcome === 'failure') {
+		await failBuild(record.id, memoryResolution.message);
+		return;
+	}
+	const memorySettings = memoryResolution.settings;
+	const extraDatasetAliases = resolveExtraDatasetAliases(versionSourceFiles, actorPath);
+
+	const contextFiles = dockerContextFiles(versionSourceFiles, contextPath);
 	const sourceFiles: SourceFile[] = qualifyDockerfileImages(
 		dockerfileResolution.outcome === 'default'
-			? [...version.sourceFiles, dockerfileResolution.extraSourceFile]
-			: version.sourceFiles,
-		dockerfileResolution.dockerfilePath,
+			? [
+					...contextFiles.filter((file) => normalizeEntryName(file.name) !== DEFAULT_DOCKERFILE_NAME),
+					dockerfileResolution.extraSourceFile,
+				]
+			: contextFiles,
+		dockerfilePath,
 		(line) => appendRuntimeLog(record.id, line),
 	);
+
+	// As on the platform, an environment variable of the same name overrides it.
+	const envBuildArgs = buildArgsOf(actor, version);
+	const buildArgs = { [ACTOR_PATH_IN_DOCKER_CONTEXT_BUILD_ARG]: actorPathInContext, ...envBuildArgs };
+	if (envBuildArgs) {
+		appendRuntimeLog(
+			record.id,
+			`Passing the version's environment variables to the build as build arguments: ${Object.keys(envBuildArgs).join(', ')}`,
+		);
+	}
 
 	try {
 		const outcome = await driver.startBuild(
@@ -230,10 +326,17 @@ export async function runBuildInBackground(
 				sourceFiles,
 				useCache: options.useCache,
 				timeoutSecs: DEFAULT_BUILD_TIMEOUT_SECS,
-				dockerfilePath: dockerfileResolution.dockerfilePath,
+				dockerfilePath,
+				buildArgs,
 			},
 			(chunk) => appendLog(record.id, chunk),
 		);
+		// Re-read: `apify push` registers the folder right before starting the build, and the console can
+		// change it mid-build. No working directory means no mount - the run log explains that instead.
+		const { localDevFolder, localDevFolderEnabled } = (await getRegistries().actors.get(actor.id)) ?? actor;
+		if (localDevFolderEnabled && localDevFolder && outcome.imageWorkingDirectory) {
+			appendRuntimeLog(record.id, registeredDevFolderBuildLine(localDevFolder, outcome.imageWorkingDirectory));
+		}
 		// Flush before writing the terminal status, not after (mirrors the same fix in
 		// `services/runs.ts`'s `runInBackground`): by the time `driver.startBuild` resolves every `onLog`
 		// call has already happened, so flushing here guarantees the persisted log is complete before a
@@ -269,6 +372,10 @@ export async function runBuildInBackground(
 			...(outcome.imageWorkingDirectory !== undefined
 				? { imageWorkingDirectory: outcome.imageWorkingDirectory }
 				: {}),
+			...(inputSchema !== undefined ? { inputSchema } : {}),
+			...(datasetSchemas !== undefined ? { datasetSchemas } : {}),
+			...(memorySettings !== undefined ? { memorySettings } : {}),
+			...(extraDatasetAliases !== undefined ? { extraDatasetAliases } : {}),
 		});
 		if (succeeded?.status !== 'SUCCEEDED') {
 			await updateActor(actor.id, (current) => {

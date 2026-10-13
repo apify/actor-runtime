@@ -11,6 +11,19 @@ export interface StorageRecord {
 	createdAt: string;
 	modifiedAt: string;
 	accessedAt: string;
+	/** The dataset schema (`.actor/actor.json`'s `storages.dataset`) its items are validated against;
+	 * datasets only, absent when it has none. Set at creation, never changed after. */
+	schema?: DatasetSchema;
+	/** The Actor and run a run's default storage was created for, as on the platform; both absent for a
+	 * storage created by a user. Set at creation, never changed after. */
+	actId?: string;
+	actRunId?: string;
+}
+
+/** A dataset schema, exactly as it was pushed or posted; only its `fields` is ever read. */
+export interface DatasetSchema {
+	[key: string]: unknown;
+	fields?: Record<string, unknown>;
 }
 
 /**
@@ -40,6 +53,55 @@ export interface SourceFile {
 	name: string;
 	format: 'TEXT' | 'BASE64';
 	content: string;
+	/** Only for a symlink in a pushed monorepo repository; `content` is then empty. */
+	linkTarget?: string;
+}
+
+/**
+ * An Actor's input schema, exactly as it was pushed. A loose record rather than a modelled type: it is
+ * the developer's own document, handed to the platform's validator verbatim, and the runtime itself
+ * reads only `properties`/`required` out of it.
+ */
+export interface InputSchema {
+	[key: string]: unknown;
+	properties?: Record<string, unknown>;
+	required?: string[];
+}
+
+export interface ActorEnvVarRecord {
+	name: string;
+	/** For a secret, the sealed value (`services/secrets.ts`); plain text otherwise. */
+	value: string;
+	isSecret?: boolean;
+	/** A secret's AES key, encrypted with the Actor's public key. Never returned by the API. */
+	encryptedAes256Password?: string;
+}
+
+/** PEM-encoded, the private key protected by `passphrase`; created with the Actor and never returned by
+ * the API. */
+export interface ActorSecretKeys {
+	publicKey: string;
+	privateKey: string;
+	passphrase: string;
+}
+
+/** Shown in the build log only, never used to fetch anything. */
+export interface LocalSourceContextGit {
+	remoteUrl?: string;
+	branch?: string;
+	commit?: string;
+	dirty?: boolean;
+}
+
+/** A monorepo Actor's pushed repository; its files are in `__FILES__` under `fileId`. */
+export interface LocalSourceContext {
+	fileId: string;
+	/** The Actor's folder in the repository. */
+	actorPath: string;
+	fileCount: number;
+	sizeBytes: number;
+	uploadedAt: string;
+	git?: LocalSourceContextGit;
 }
 
 export interface ActorVersionRecord {
@@ -47,7 +109,11 @@ export interface ActorVersionRecord {
 	buildTag: string;
 	sourceType: SourceType;
 	sourceFiles: SourceFile[];
-	envVars?: Array<{ name: string; value: string }>;
+	envVars?: ActorEnvVarRecord[];
+	/** Passes `envVars`, secrets included, to the image build as Docker build arguments. */
+	applyEnvVarsToBuild?: boolean;
+	/** When set, builds use it instead of `sourceFiles`. Never exposed on `/v2`. */
+	localSourceContext?: LocalSourceContext;
 }
 
 /** Caller-facing language selector for the debug toggle. `'auto'` resolves from the built image at run
@@ -70,6 +136,75 @@ export interface ActorLocalBrowserView {
 	interactive: boolean;
 }
 
+/** The platform's `pricingModel` enum in full; only `FREE` and `PAY_PER_EVENT` are ever accepted here. */
+export type ActorPricingModel = 'FREE' | 'FLAT_PRICE_PER_MONTH' | 'PRICE_PER_DATASET_ITEM' | 'PAY_PER_EVENT';
+
+/** A chargeable event as the Actor stores it: exactly one of `eventPriceUsd`/`eventTieredPricingUsd`. */
+export interface ActorChargeEventRecord {
+	eventTitle: string;
+	eventDescription: string;
+	eventPriceUsd?: number;
+	eventTieredPricingUsd?: Record<string, { tieredEventPriceUsd: number }>;
+	isOneTimeEvent?: boolean;
+	isPrimaryEvent?: boolean;
+}
+
+/** Always normalized by `services/pricing.ts` before it lands here, so it can go out on `/v2` verbatim. */
+export interface ActorPricingInfoRecord {
+	pricingModel: ActorPricingModel;
+	createdAt: string;
+	startedAt: string;
+	apifyMarginPercentage: number;
+	reasonForChange?: string;
+	pricingPerEvent?: { actorChargeEvents: Record<string, ActorChargeEventRecord> };
+}
+
+/** One run's pricing: tiered prices already collapsed to the tier's own `eventPriceUsd`, the shape the
+ * SDKs expect on the run object. */
+export interface RunPricingInfoRecord {
+	pricingModel: ActorPricingModel;
+	createdAt: string;
+	startedAt: string;
+	apifyMarginPercentage: number;
+	pricingPerEvent?: {
+		actorChargeEvents: Record<
+			string,
+			{
+				eventTitle: string;
+				eventDescription: string;
+				eventPriceUsd: number;
+				isOneTimeEvent?: boolean;
+				isPrimaryEvent?: boolean;
+			}
+		>;
+	};
+}
+
+/** The platform's `actorStandby` Actor field, single-tenant only (`services/standby-config.ts`). */
+export interface ActorStandbyRecord {
+	isEnabled: boolean;
+	disableStandbyFieldsOverride: boolean;
+	tenancy: 'SINGLE_TENANT';
+	desiredRequestsPerActorRun: number;
+	maxRequestsPerActorRun: number;
+	idleTimeoutSecs: number;
+	build: string;
+	memoryMbytes: number;
+	shouldPassActorInput: boolean;
+}
+
+/** The platform's `defaultRunOptions` Actor field (`services/default-run-options.ts`). */
+export interface ActorDefaultRunOptionsRecord {
+	build: string;
+	timeoutSecs: number;
+	memoryMbytes: number;
+	maxTotalChargeUsd?: number;
+	restartOnError?: boolean;
+	/** Stored and returned only: result caps and permission levels are not emulated. */
+	maxItems?: number;
+	forcePermissionLevel?: string;
+}
+
 export interface ActorRecord {
 	id: string;
 	userId: string;
@@ -78,6 +213,13 @@ export interface ActorRecord {
 	createdAt: string;
 	modifiedAt: string;
 	versions: ActorVersionRecord[];
+	/** The Actor's pricing history (`actor-driver.md`). Unlike the `local*` fields below, it is exposed
+	 * on `/v2`. Absent or empty means the Actor is free. */
+	pricingInfos?: ActorPricingInfoRecord[];
+	/** Exposed on `/v2`; absent until the Actor is first given one. */
+	actorStandby?: ActorStandbyRecord;
+	/** Exposed on `/v2`; absent until the Actor is first given one, which reads as the defaults. */
+	defaultRunOptions?: ActorDefaultRunOptionsRecord;
 	/** tag -> latest successful build for that tag; `apify push` polls this after a build. */
 	taggedBuilds: Record<string, { buildId: string; buildNumber: string }>;
 	/** Host path bind-mounted over the image's working directory at run start (`actor-driver.md`). Set or
@@ -86,11 +228,172 @@ export interface ActorRecord {
 	 * this field, *is* exposed on `/v2`). Never touched by any other Actor write. Optional and never
 	 * exposed on `/v2` itself either (`dto/actors.ts: actorDto` is explicit field-by-field). */
 	localDevFolder?: string;
+	/** Live dev folder toggle; absent means off. Same `modifiedAt`/`/v2` rules as `localDevFolder`. */
+	localDevFolderEnabled?: true;
 	/** The per-Actor debug-mode toggle (`actor-driver.md`'s "Debug mode" section). Absent means off.
 	 * Same `modifiedAt`-preserving, never-`/v2`-exposed pattern as `localDevFolder` above. */
 	localDebug?: ActorLocalDebug;
 	/** Browser-view toggle; absent means off. Same `modifiedAt`/`/v2` rules as `localDevFolder`. */
 	localBrowserView?: ActorLocalBrowserView;
+	/** Encrypts and decrypts this Actor's secrets (`services/secrets.ts`). Absent only on an Actor stored
+	 * before Actors got one on creation, until its next write or run - which never bumps `modifiedAt`. */
+	secretKeys?: ActorSecretKeys;
+}
+
+/** A task's saved run options; an absent field falls back to the Actor's default. `maxItems` is kept
+ * and returned as given, never applied (`unsupported.md`). */
+export interface TaskRunOptions {
+	build?: string;
+	timeoutSecs?: number;
+	memoryMbytes?: number;
+	maxTotalChargeUsd?: number;
+	maxItems?: number;
+	restartOnError?: boolean;
+}
+
+/** A task's own Standby settings, merged over its Actor's (`services/standby-config.ts`). */
+export type TaskStandbyRecord = Omit<ActorStandbyRecord, 'isEnabled' | 'disableStandbyFieldsOverride'>;
+
+/** A saved Actor configuration (`api.md`'s "Tasks"). */
+export interface TaskRecord {
+	id: string;
+	userId: string;
+	actorId: string;
+	name: string;
+	title: string;
+	description?: string;
+	/** Absent when the task saves none, so every run option falls back to its default. */
+	options?: TaskRunOptions;
+	/** Stored as given: secret fields are encrypted when a run starts, not when the task is saved. */
+	input?: Record<string, unknown>;
+	/** Absent when the task's standby runs use the Actor's settings alone. */
+	actorStandby?: TaskStandbyRecord;
+	createdAt: string;
+	modifiedAt: string;
+}
+
+/** What a webhook fires for: every job of an Actor, every run of a task, or one run (`api.md`'s "Webhooks"). */
+export type WebhookCondition = { actorId: string } | { actorTaskId: string } | { actorRunId: string };
+
+/** The platform's `lastDispatch` webhook field: the newest dispatch's outcome so far. */
+export interface WebhookLastDispatch {
+	status: WebhookDispatchStatus;
+	finishedAt: string | null;
+}
+
+/** A webhook (`api.md`'s "Webhooks"); only the `HTTP_REQUEST` action is ever stored. */
+export interface WebhookRecord {
+	id: string;
+	userId: string;
+	createdAt: string;
+	modifiedAt: string;
+	isEnabled: boolean;
+	isAdHoc: boolean;
+	eventTypes: string[];
+	condition: WebhookCondition;
+	requestUrl: string;
+	payloadTemplate: string;
+	headersTemplate?: string;
+	ignoreSslErrors: boolean;
+	doNotRetry: boolean;
+	shouldInterpolateStrings: boolean;
+	title?: string;
+	description?: string;
+	idempotencyKey?: string;
+	lastDispatch: WebhookLastDispatch | null;
+	stats: { totalDispatches: number };
+}
+
+export type WebhookDispatchStatus = 'ACTIVE' | 'SUCCEEDED' | 'FAILED';
+
+/** One delivery attempt of a dispatch, as the platform records it. */
+export interface WebhookDispatchCall {
+	startedAt: string;
+	finishedAt: string | null;
+	errorMessage: string | null;
+	responseStatus: number | null;
+	responseBody: string | null;
+}
+
+/** One event delivered to one webhook (`api.md`'s "Webhooks"), with every attempt made so far. */
+export interface WebhookDispatchRecord {
+	id: string;
+	userId: string;
+	webhookId: string;
+	createdAt: string;
+	finishedAt: string | null;
+	status: WebhookDispatchStatus;
+	eventType: string;
+	eventData: Record<string, string> | null;
+	/** The webhook as it was when the event happened; its later edits do not change this dispatch. */
+	webhook: WebhookRecord;
+	/** The run or build as the API returned it when the event happened, or a test dispatch's own resource. */
+	resource: Record<string, unknown>;
+	/** When the next attempt is due; meaningful only while `ACTIVE`. */
+	callAt: string;
+	calls: WebhookDispatchCall[];
+}
+
+/** The platform's `SCHEDULE_ACTIONS`. */
+export type ScheduleActionType = 'RUN_ACTOR' | 'RUN_ACTOR_TASK';
+
+/** A schedule's run options for an Actor action; an absent field falls back to the Actor's default. */
+export interface ScheduledActorRunOptions {
+	build?: string;
+	timeoutSecs?: number;
+	memoryMbytes?: number;
+	restartOnError?: boolean;
+}
+
+/** `RUN_ACTOR`: a run of an Actor from the given input and run options, like `POST /v2/actors/:actorId/runs`. */
+export interface ScheduledActorAction {
+	id: string;
+	type: 'RUN_ACTOR';
+	actorId: string;
+	runInput?: { body: string; contentType: string } | null;
+	runOptions?: ScheduledActorRunOptions | null;
+}
+
+/** `RUN_ACTOR_TASK`: a run of a task, `input` merged over the task's saved input. */
+export interface ScheduledTaskAction {
+	id: string;
+	type: 'RUN_ACTOR_TASK';
+	actorTaskId: string;
+	input?: Record<string, unknown>;
+}
+
+export type ScheduleAction = ScheduledActorAction | ScheduledTaskAction;
+
+export type ScheduleLogLevel = 'INFO' | 'WARNING' | 'ERROR';
+
+/** One line of a schedule's log (`GET /v2/schedules/:scheduleId/log`). */
+export interface ScheduleLogMessage {
+	message: string;
+	level: ScheduleLogLevel;
+	createdAt: string;
+}
+
+/** A schedule (`api.md`'s "Schedules"): a cron expression that starts its actions' runs. */
+export interface ScheduleRecord {
+	id: string;
+	userId: string;
+	name: string;
+	title: string;
+	description?: string;
+	cronExpression: string;
+	timezone: string;
+	isEnabled: boolean;
+	isExclusive: boolean;
+	notifications: { email: boolean };
+	/** Fixed at creation: spreads `@hourly`/`@daily`/... schedules over their period, as on the platform. */
+	randomOffsetCoeff: number;
+	actions: ScheduleAction[];
+	createdAt: string;
+	modifiedAt: string;
+	/** `null` while the schedule is disabled. */
+	nextRunAt: string | null;
+	lastRunAt: string | null;
+	log: ScheduleLogMessage[];
 }
 
 export type JobStatus = 'READY' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'ABORTING' | 'ABORTED' | 'TIMED-OUT';
@@ -120,14 +423,49 @@ export interface BuildRecord {
 	 * inspect failed or the working directory was empty/`/` (mounting over `/` would destroy the
 	 * container) - never present on a non-`SUCCEEDED` build. */
 	imageWorkingDirectory?: string;
+	/** The input schema this build's own source files declared, written with `SUCCEEDED` like
+	 * `imageWorkingDirectory` above, and build-specific for the same reason: a run validates against the
+	 * schema of the build it resolved, never another tag's more recently pushed one. Absent when the
+	 * Actor declares none - such a run takes its input exactly as the caller sent it. */
+	inputSchema?: InputSchema;
+	/** The dataset schemas this build's source declared, by `storages.datasets` alias (`default` for
+	 * `storages.dataset`), build-specific like `inputSchema`; each run's dataset of that alias is created
+	 * with its schema. Absent when the Actor declares none. */
+	datasetSchemas?: Record<string, DatasetSchema>;
+	/** The memory fields this build's `.actor/actor.json` declared, build-specific like `inputSchema`.
+	 * Absent when it declares none. */
+	memorySettings?: ActorMemorySettings;
+	/** The `storages.datasets` aliases other than `default` this build's `.actor/actor.json` declared;
+	 * each run of the build gets one dataset per alias. Absent when it declares none. */
+	extraDatasetAliases?: string[];
 	exitCode?: number;
 	statusMessage?: string;
+}
+
+/** `.actor/actor.json`'s run-memory fields; `defaultMemoryMbytes` may be a memory expression. */
+export interface ActorMemorySettings {
+	defaultMemoryMbytes?: string | number;
+	minMemoryMbytes?: number;
+	maxMemoryMbytes?: number;
+}
+
+/** The platform's run `meta`: how the run was started, and for a scheduled run, by which schedule action
+ * and for which of its run times (the platform's own field names, `scheduledAct2Id` included). */
+export interface RunMeta {
+	/** One of the platform's `META_ORIGINS` (`services/run-origin.ts`). */
+	origin: string;
+	scheduleId?: string;
+	scheduledAct2Id?: string;
+	scheduledActorTaskId?: string;
+	scheduledAt?: string;
 }
 
 export interface RunRecord {
 	id: string;
 	userId: string;
 	actorId: string;
+	/** The task the run was started from; absent for a run of the Actor itself. */
+	actorTaskId?: string;
 	buildId: string;
 	buildNumber: string;
 	status: JobStatus;
@@ -136,8 +474,16 @@ export interface RunRecord {
 	defaultDatasetId: string;
 	defaultKeyValueStoreId: string;
 	defaultRequestQueueId: string;
+	/** The run's storages by alias, as the platform's `Run.storageIds`; the `default` entries repeat the
+	 * `default*Id` fields. Optional for runs created before it was recorded (`runStorageIds` backfills). */
+	storageIds?: {
+		datasets: Record<string, string>;
+		keyValueStores: Record<string, string>;
+		requestQueues: Record<string, string>;
+	};
 	options: {
 		memoryMbytes: number;
+		/** `0` means no timeout - only a standby run has none. */
 		timeoutSecs: number;
 		/** Which build tag or build number this run used - the real platform's `options.build`
 		 * (the public API's `ActorRunOptions.build`). Optional here (unlike the always-populated real
@@ -150,18 +496,48 @@ export interface RunRecord {
 		 * default). Optional here for the same test-fixture-compatibility reason as `build`; `startRun`
 		 * always sets it for real runs, and `runDto` backfills a sensible default when absent. */
 		diskMbytes?: number;
+		/** Absent means no cap. */
+		maxTotalChargeUsd?: number;
+		restartOnError?: boolean;
 	};
 	exitCode?: number;
 	statusMessage?: string;
-	meta: { origin: string };
-	/** The platform's restart-bookkeeping subset of `Run.stats`; locally only `migrationCount` and
-	 * `rebootCount` ever move. Optional for pre-existing test fixtures; `runDto` backfills zeros. */
+	/** Set by the Actor (or the runtime) to say `statusMessage` is the run's final word. */
+	isStatusMessageTerminal?: boolean;
+	/** The runtime's own reason for ending the run, which the Actor's later messages must not hide. */
+	isStatusMessageFromRuntime?: boolean;
+	meta: RunMeta;
+	/** When the run was last resurrected (`services/runs.ts: resurrectRun`); absent until then. The
+	 * timeout budget and the current incarnation's duration count from here, `startedAt` staying the
+	 * original as on the platform. Never on `/v2`. */
+	resurrectedAt?: string;
+	/** The platform's restart-bookkeeping subset of `Run.stats`. Optional for pre-existing test fixtures; `runDto`
+	 * backfills zeros. */
 	stats?: {
 		migrationCount?: number;
 		rebootCount?: number;
 		restartCount?: number;
 		resurrectCount?: number;
+		inputBodyLen?: number;
+		/** What the run had consumed before its last resurrection, so the time it spent finished is not
+		 * billed as run time. Never on `/v2`; `durationMillis` there already includes it. */
+		durationMillisBeforeResurrect?: number;
+		/** The run's final resource figures, written when it ends. While it is live the equivalent figures
+		 * are the events channel's live accumulators, which is what `runDto` reads instead. */
+		memAvgBytes?: number;
+		memMaxBytes?: number;
+		memCurrentBytes?: number;
+		cpuAvgUsage?: number;
+		cpuMaxUsage?: number;
+		cpuCurrentUsage?: number;
 	};
+	/** Resolved at run creation and never rewritten, so an Actor's later pricing change cannot reprice a
+	 * run that already exists. Absent for a run of an Actor with no pricing. */
+	pricingInfo?: RunPricingInfoRecord;
+	/** Charges so far, keyed by event name; present only on a pay-per-event run. */
+	chargedEventCounts?: Record<string, number>;
+	/** When the run first reached `options.maxTotalChargeUsd`; set once (`services/charging.ts`). */
+	chargingStoppedAt?: string;
 	/** Required by the real Apify API contract (`Run.generalAccess`) but optional here for the same
 	 * test-fixture-compatibility reason as `options.build`/`options.diskMbytes` above; `startRun` always
 	 * sets it for real runs (`FOLLOW_USER_SETTING`, the platform's run-creation default), and `runDto`

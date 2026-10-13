@@ -7,8 +7,12 @@ describe('matchSpecPath', () => {
 		expect(entry?.implemented).toBe(true);
 	});
 
+	it('knows run resurrection as implemented', () => {
+		expect(matchSpecPath('POST', 'v2/actor-runs/abc/resurrect')?.implemented).toBe(true);
+	});
+
 	it('matches a real-but-unimplemented spec path as not implemented', () => {
-		const entry = matchSpecPath('GET', 'v2/schedules');
+		const entry = matchSpecPath('GET', 'v2/store');
 		expect(entry).toBeDefined();
 		expect(entry?.implemented).toBe(false);
 	});
@@ -24,5 +28,55 @@ describe('matchSpecPath', () => {
 
 	it('is sensitive to method', () => {
 		expect(matchSpecPath('PATCH', 'v2/actors')).toBeUndefined();
+	});
+
+	it("knows the last-run shortcut family, mirroring each target path's own implemented flag", () => {
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/log')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/abort')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/dataset/items')?.implemented).toBe(true);
+		expect(matchSpecPath('PUT', 'v2/actors/abc/runs/last/key-value-store/records/OUTPUT')?.implemented).toBe(true);
+		// Same 501s as their own targets.
+		expect(matchSpecPath('GET', 'v2/actors/abc/runs/last/key-value-store/records')?.implemented).toBe(false);
+		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/metamorph')?.implemented).toBe(false);
+	});
+
+	it('serves the POST aliases the spec defines for three PUT endpoints', () => {
+		expect(matchSpecPath('POST', 'v2/key-value-stores/abc/records/OUTPUT')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actor-runs/abc/key-value-store/records/OUTPUT')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/runs/last/key-value-store/records/OUTPUT')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/versions/0.0')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/actors/abc/versions/0.0/env-vars/MY_VAR')?.implemented).toBe(true);
+	});
+
+	it('serves the run-sync endpoints of Actors and tasks', () => {
+		for (const method of ['GET', 'POST']) {
+			expect(matchSpecPath(method, 'v2/actors/abc/run-sync')?.implemented).toBe(true);
+			expect(matchSpecPath(method, 'v2/actors/abc/run-sync-get-dataset-items')?.implemented).toBe(true);
+			expect(matchSpecPath(method, 'v2/actor-tasks/abc/run-sync')?.implemented).toBe(true);
+			expect(matchSpecPath(method, 'v2/actor-tasks/abc/run-sync-get-dataset-items')?.implemented).toBe(true);
+		}
+	});
+
+	it('serves tasks and their webhooks', () => {
+		expect(matchSpecPath('GET', 'v2/actor-tasks')?.implemented).toBe(true);
+		expect(matchSpecPath('PUT', 'v2/actor-tasks/abc/input')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actor-tasks/abc/runs/last/dataset/items')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actor-tasks/abc/webhooks')?.implemented).toBe(true);
+	});
+
+	it('serves schedules, their log and manual invocation', () => {
+		expect(matchSpecPath('POST', 'v2/schedules')?.implemented).toBe(true);
+		expect(matchSpecPath('PUT', 'v2/schedules/abc')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/schedules/abc/log')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/schedules/abc/invoke')?.implemented).toBe(true);
+	});
+
+	it('serves webhooks and webhook dispatches', () => {
+		expect(matchSpecPath('POST', 'v2/webhooks')?.implemented).toBe(true);
+		expect(matchSpecPath('POST', 'v2/webhooks/abc/test')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/webhooks/abc/dispatches')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/webhook-dispatches/abc')?.implemented).toBe(true);
+		expect(matchSpecPath('GET', 'v2/actors/abc/webhooks')?.implemented).toBe(true);
 	});
 });

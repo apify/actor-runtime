@@ -44,6 +44,7 @@ function runStorageAliasEntries(prefix: string): SpecTableEntry[] {
 		pathTemplate('GET', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('HEAD', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('PUT', `${prefix}/key-value-store/records/:recordKey`, true),
+		pathTemplate('POST', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('DELETE', `${prefix}/key-value-store/records/:recordKey`, true),
 		pathTemplate('GET', `${prefix}/request-queue`, true),
 		pathTemplate('POST', `${prefix}/request-queue/requests/batch`, true),
@@ -73,11 +74,60 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	pathTemplate('GET', 'v2/actors/:actorId/builds/default', true),
 	pathTemplate('GET', 'v2/actors/:actorId/runs', true),
 	pathTemplate('POST', 'v2/actors/:actorId/runs', true),
+	pathTemplate('GET', 'v2/actors/:actorId/run-sync', true),
+	pathTemplate('POST', 'v2/actors/:actorId/run-sync', true),
+	pathTemplate('GET', 'v2/actors/:actorId/run-sync-get-dataset-items', true),
+	pathTemplate('POST', 'v2/actors/:actorId/run-sync-get-dataset-items', true),
 	pathTemplate('GET', 'v2/actors/:actorId/versions', true),
 	pathTemplate('POST', 'v2/actors/:actorId/versions', true),
 	pathTemplate('GET', 'v2/actors/:actorId/versions/:versionNumber', true),
 	pathTemplate('PUT', 'v2/actors/:actorId/versions/:versionNumber', true),
+	pathTemplate('POST', 'v2/actors/:actorId/versions/:versionNumber', true),
 	pathTemplate('DELETE', 'v2/actors/:actorId/versions/:versionNumber', true),
+	pathTemplate('GET', 'v2/actors/:actorId/versions/:versionNumber/env-vars', true),
+	pathTemplate('POST', 'v2/actors/:actorId/versions/:versionNumber/env-vars', true),
+	pathTemplate('GET', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
+	pathTemplate('PUT', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
+	pathTemplate('POST', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
+	pathTemplate('DELETE', 'v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName', true),
+	pathTemplate('GET', 'v2/actors/:actorId/webhooks', true),
+
+	// --- Tasks ---
+	pathTemplate('GET', 'v2/actor-tasks', true),
+	pathTemplate('POST', 'v2/actor-tasks', true),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId', true),
+	pathTemplate('PUT', 'v2/actor-tasks/:taskId', true),
+	pathTemplate('DELETE', 'v2/actor-tasks/:taskId', true),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/input', true),
+	pathTemplate('PUT', 'v2/actor-tasks/:taskId/input', true),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/runs', true),
+	pathTemplate('POST', 'v2/actor-tasks/:taskId/runs', true),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/run-sync', true),
+	pathTemplate('POST', 'v2/actor-tasks/:taskId/run-sync', true),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/run-sync-get-dataset-items', true),
+	pathTemplate('POST', 'v2/actor-tasks/:taskId/run-sync-get-dataset-items', true),
+
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/webhooks', true),
+
+	// --- Webhooks ---
+	pathTemplate('GET', 'v2/webhooks', true),
+	pathTemplate('POST', 'v2/webhooks', true),
+	pathTemplate('GET', 'v2/webhooks/:webhookId', true),
+	pathTemplate('PUT', 'v2/webhooks/:webhookId', true),
+	pathTemplate('DELETE', 'v2/webhooks/:webhookId', true),
+	pathTemplate('POST', 'v2/webhooks/:webhookId/test', true),
+	pathTemplate('GET', 'v2/webhooks/:webhookId/dispatches', true),
+	pathTemplate('GET', 'v2/webhook-dispatches', true),
+	pathTemplate('GET', 'v2/webhook-dispatches/:dispatchId', true),
+
+	// --- Schedules ---
+	pathTemplate('GET', 'v2/schedules', true),
+	pathTemplate('POST', 'v2/schedules', true),
+	pathTemplate('GET', 'v2/schedules/:scheduleId', true),
+	pathTemplate('PUT', 'v2/schedules/:scheduleId', true),
+	pathTemplate('DELETE', 'v2/schedules/:scheduleId', true),
+	pathTemplate('GET', 'v2/schedules/:scheduleId/log', true),
+	pathTemplate('POST', 'v2/schedules/:scheduleId/invoke', true),
 
 	// --- Builds ---
 	pathTemplate('GET', 'v2/actor-builds', true),
@@ -89,9 +139,12 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	// --- Runs ---
 	pathTemplate('GET', 'v2/actor-runs', true),
 	pathTemplate('GET', 'v2/actor-runs/:runId', true),
+	pathTemplate('PUT', 'v2/actor-runs/:runId', true),
 	pathTemplate('DELETE', 'v2/actor-runs/:runId', true),
 	pathTemplate('POST', 'v2/actor-runs/:runId/abort', true),
 	pathTemplate('POST', 'v2/actor-runs/:runId/reboot', true),
+	pathTemplate('POST', 'v2/actor-runs/:runId/resurrect', true),
+	pathTemplate('POST', 'v2/actor-runs/:runId/charge', true),
 	pathTemplate('GET', 'v2/actor-runs/:runId/log', true),
 
 	// --- Datasets ---
@@ -118,6 +171,7 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	pathTemplate('GET', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('HEAD', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('PUT', 'v2/key-value-stores/:storeId/records/:recordKey', true),
+	pathTemplate('POST', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 	pathTemplate('DELETE', 'v2/key-value-stores/:storeId/records/:recordKey', true),
 
 	// --- Request queues ---
@@ -149,32 +203,28 @@ export const SPEC_TABLE: SpecTableEntry[] = [
 	// --- Default run storages (requirements amendment for the request sub-resources) ---
 	...runStorageAliasEntries('v2/actor-runs/:runId'),
 
+	// --- Last-run shortcuts ---
+	// These re-dispatch onto the run's own endpoints (`routes/last-run.ts`), so the catch-all only ever sees
+	// them rewritten. Listed anyway, mirroring each target's own flag, so the table stays an honest per-path
+	// answer to "does the runtime serve this?".
+	pathTemplate('GET', 'v2/actors/:actorId/runs/last', true),
+	pathTemplate('GET', 'v2/actors/:actorId/runs/last/log', true),
+	pathTemplate('POST', 'v2/actors/:actorId/runs/last/abort', true),
+	pathTemplate('POST', 'v2/actors/:actorId/runs/last/reboot', true),
+	pathTemplate('POST', 'v2/actors/:actorId/runs/last/metamorph', false),
+	...runStorageAliasEntries('v2/actors/:actorId/runs/last'),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/runs/last', true),
+	pathTemplate('GET', 'v2/actor-tasks/:taskId/runs/last/log', true),
+	pathTemplate('POST', 'v2/actor-tasks/:taskId/runs/last/abort', true),
+	pathTemplate('POST', 'v2/actor-tasks/:taskId/runs/last/reboot', true),
+	pathTemplate('POST', 'v2/actor-tasks/:taskId/runs/last/metamorph', false),
+	...runStorageAliasEntries('v2/actor-tasks/:taskId/runs/last'),
+
 	// --- Known, real Apify API v2 paths this runtime does not implement (-> 501) ---
-	pathTemplate('GET', 'v2/actor-tasks', false),
-	pathTemplate('POST', 'v2/actor-tasks', false),
-	pathTemplate('GET', 'v2/actor-tasks/:taskId', false),
-	pathTemplate('PUT', 'v2/actor-tasks/:taskId', false),
-	pathTemplate('DELETE', 'v2/actor-tasks/:taskId', false),
-	pathTemplate('GET', 'v2/actor-tasks/:taskId/runs', false),
-	pathTemplate('POST', 'v2/actor-tasks/:taskId/runs', false),
-	pathTemplate('GET', 'v2/schedules', false),
-	pathTemplate('POST', 'v2/schedules', false),
-	pathTemplate('GET', 'v2/schedules/:scheduleId', false),
-	pathTemplate('PUT', 'v2/schedules/:scheduleId', false),
-	pathTemplate('DELETE', 'v2/schedules/:scheduleId', false),
-	pathTemplate('GET', 'v2/webhooks', false),
-	pathTemplate('POST', 'v2/webhooks', false),
-	pathTemplate('GET', 'v2/webhooks/:webhookId', false),
-	pathTemplate('PUT', 'v2/webhooks/:webhookId', false),
-	pathTemplate('DELETE', 'v2/webhooks/:webhookId', false),
-	pathTemplate('GET', 'v2/webhooks/:webhookId/dispatches', false),
-	pathTemplate('GET', 'v2/webhook-dispatches', false),
-	pathTemplate('GET', 'v2/webhook-dispatches/:dispatchId', false),
 	pathTemplate('GET', 'v2/store', false),
 	pathTemplate('GET', 'v2/store/:storeId', false),
 	pathTemplate('GET', 'v2/users/:userId/limits', false),
 	pathTemplate('GET', 'v2/users/:userId/usage/monthly', false),
-	pathTemplate('POST', 'v2/actor-runs/:runId/resurrect', false),
 	pathTemplate('POST', 'v2/actor-runs/:runId/metamorph', false),
 	pathTemplate('POST', 'v2/actor-tasks/:taskId/webhooks', false),
 ];

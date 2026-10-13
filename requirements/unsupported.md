@@ -12,24 +12,12 @@ real account, not in the runtime.
 
 ## Running Actors
 
-- Actor server (Actor Standby)
-- Run web server and live view (`containerUrl`)
+- Multi-tenant Actor Standby, and Standby's Console-auth and tokenless options
 - Metamorph
-- Resurrecting finished runs
-- Restart on error
-- Infinite runs (timeout `0`)
-- Synchronous runs returning output (`run-sync`)
-- Actor-set run status messages
-- Pay-per-event charging from a run
-- Result and cost caps (`maxItems`, `maxTotalChargeUsd`)
+- Result cap (`maxItems`)
 - Ad-hoc webhooks on run start
-- Run usage, cost and compute units
-- Last-run shortcuts (`runs/last`)
-- Input validation and defaults from the input schema
-- Encrypted secret input fields
-- Actor-level default run options
-- Dynamic and bounded memory from `.actor/actor.json`
-- Extra named default storages (`storageIds`)
+- Metered usage other than compute units: storage operations, data transfer and proxy
+- Billing: a run's charges and costs are reported, never invoiced or paid out
 - Limited-permission Actors and per-run scoped tokens
 - Automatic run and build retention
 - Running Actors from the console
@@ -38,34 +26,31 @@ real account, not in the runtime.
 
 - Building from Git repository, archive or Gist
 - Build on push (Git integration)
-- Secret and build-time environment variables
 - Generated per-build OpenAPI definition
 - Output, key-value store and web server schemas
-- Publishing to Apify Store
-- Actor monetization (rental, pay per result, pay per event)
+- Publishing to Apify Store, published tasks included
+- Actor monetization other than pay-per-event pricing (`actor-driver.md`): rental, pay per result, and the
+  Store-side flows (payouts, pricing-change notifications, per-tier prices above the lowest paid tier)
 - Actor status, deprecation and maintenance notices
 - README, changelog, categories and SEO metadata
 
 ## Automation and integrations
 
-- Tasks (saved input configurations)
-- Schedules
-- Webhooks and webhook dispatches
+- Webhook actions other than HTTP requests (Slack, email, Drive, GitHub issues)
 - Actor-to-Actor integrations
 - Integrations (Slack, Gmail, Drive, GitHub, Zapier, Make)
-- Run notifications (email, Slack)
+- Run notifications (email, Slack), and the email a schedule sends when a run fails to start
 - Monitoring and alerting
 - Apify MCP server and MCP connectors
 
 ## Storage
 
 - Dataset export formats (CSV, XLSX, XML, HTML, RSS, JSONL)
-- Dataset views, schema validation and field statistics
+- Dataset views and field statistics
 - Key-value store schema and collections
 - Bulk key-value store download (zip)
 - Public and signed storage URLs
 - Sharing runs and storages (`generalAccess`, access rights)
-- Storage addressing by `username~name`
 - Unnamed and shared storage listing filters
 - Storage retention and expiry
 - Request queue locking and request deletion (`storage.md`)
@@ -85,7 +70,7 @@ real account, not in the runtime.
 ## Console
 
 - Input editor and run start from the console
-- Run charts, usage and cost
+- Run charts
 - Output tab, storage export and download
 - Login, account, token and billing settings
 - Actor insights, analytics and monitoring
@@ -93,16 +78,17 @@ real account, not in the runtime.
 
 ## Inside the Actor container
 
-- Run metadata env vars (input key, build, task, user, timestamps)
-- Web server, Standby and proxy env vars
-- Input secrets private key
+- Env vars for account, permissions, workflows, MCP connectors, the public API URL and the result cap
+  (`actor-driver.md`'s "Not set")
+- Apify Proxy env vars other than the password (hostname, port, status URL)
 - Log rate limiting, line truncation and size cap
-- Secret redaction in logs
 - Legacy `cpuInfo` events
 
 ## Platform limits not enforced
 
-- Memory steps and bounds (128 MB - 32 GB, powers of two)
+- Memory steps and bounds (128 MB - 32 GB, powers of two); a run asking for anything else is warned
+  about in its log and started with it anyway
+- Run disk limit (`diskMbytes`)
 - Record, item and input size limits
 - Concurrent run, rate and per-account quotas
 - Process, file-descriptor and shared-memory limits

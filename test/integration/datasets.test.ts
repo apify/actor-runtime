@@ -26,6 +26,31 @@ describe('datasets API (via real apify-client)', () => {
 		expect(fetched?.id).toBe(created.id);
 	});
 
+	it('lists only named storages unless unnamed=true, as the platform does', async () => {
+		const named = await server.client.datasets().getOrCreate('named');
+		const unnamed = await server.client.datasets().getOrCreate();
+
+		const byDefault = await server.client.datasets().list();
+		expect(byDefault.items.map((dataset) => dataset.id)).toEqual([named.id]);
+		expect(byDefault.total).toBe(1);
+
+		const all = await server.client.datasets().list({ unnamed: true });
+		expect(all.items.map((dataset) => dataset.id).sort()).toEqual([named.id, unnamed.id].sort());
+		expect(all.total).toBe(2);
+
+		for (const path of ['key-value-stores', 'request-queues']) {
+			await fetch(`${server.baseUrl}/v2/${path}?token=${server.token}`, { method: 'POST' });
+			const hidden = (await (await fetch(`${server.baseUrl}/v2/${path}?token=${server.token}`)).json()) as {
+				data: { total: number };
+			};
+			expect(hidden.data.total).toBe(0);
+			const shown = (await (
+				await fetch(`${server.baseUrl}/v2/${path}?unnamed=true&token=${server.token}`)
+			).json()) as { data: { total: number } };
+			expect(shown.data.total).toBe(1);
+		}
+	});
+
 	it('pushes and paginates items', async () => {
 		const { id } = await server.client.datasets().getOrCreate();
 		const dataset = server.client.dataset(id);

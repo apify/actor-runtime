@@ -19,7 +19,7 @@ import {
 	stopRuntimeContainer,
 	waitForHttpOk,
 } from './docker.js';
-import { CONSOLE_URL, readMirrorGreeting } from './console-view.js';
+import { CONSOLE_URL, fetchConsole, readMirrorGreeting } from './console-view.js';
 import { withRunLogOnFailure } from './run-log.js';
 import { waitFor } from './wait.js';
 import {
@@ -42,7 +42,7 @@ const REPO_ROOT = join(__dirname, '..', '..', '..');
 export const CRAWL_START_URL = 'https://demo-webstore.apify.org/';
 
 export interface BrowserViewSample {
-	/** Directory under the repository root. */
+	/** Directory under `samples/`. */
 	dir: string;
 	label: string;
 	baseImage: string;
@@ -112,7 +112,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				loginApifyCli(REPO_ROOT, isolatedApifyHome);
 
 				const pushOutput = apify(['push', '--json'], {
-					cwd: join(REPO_ROOT, sample.dir),
+					cwd: join(REPO_ROOT, 'samples', sample.dir),
 					env: apifyEnv(isolatedApifyHome),
 				});
 				const push = JSON.parse(pushOutput) as PushResult;
@@ -133,7 +133,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 			`${sample.label} sample: toggle on -> run: the log names the viewer URL, the viewer websocket reaches a live RFB server while the run crawls, the console links to the page, and the run finishes with the input-dependent item count`,
 			async () => {
 				const env = apifyEnv(isolatedApifyHome);
-				const actorDir = join(REPO_ROOT, sample.dir);
+				const actorDir = join(REPO_ROOT, 'samples', sample.dir);
 				const actorId = pushedActorId;
 
 				const toggle = apify(
@@ -163,12 +163,12 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				expect(greeting.startsWith('RFB 003.')).toBe(true);
 
 				// The console's run page links to the viewer, and the viewer page embeds the noVNC client.
-				const runPage = await fetch(`${CONSOLE_URL}/runs/${run.id}`);
+				const runPage = await fetchConsole(`/runs/${run.id}`);
 				expect(await runPage.text()).toContain(`href="/runs/${run.id}/browser"`);
-				const viewerPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				const viewerPage = await fetchConsole(`/runs/${run.id}/browser`);
 				expect(viewerPage.status).toBe(200);
 				expect(await viewerPage.text()).toContain('/vendor/novnc/core/rfb.js');
-				const client = await fetch(`${CONSOLE_URL}/vendor/novnc/core/rfb.js`);
+				const client = await fetchConsole(`/vendor/novnc/core/rfb.js`);
 				expect(client.status).toBe(200);
 
 				await withRunLogOnFailure(
@@ -200,7 +200,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 				);
 
 				// Once the run is over its mirror is gone: the viewer page says so, and the websocket is refused.
-				const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+				const endedPage = await fetchConsole(`/runs/${run.id}/browser`);
 				expect(await endedPage.text()).toContain('This run has ended');
 				await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 			},
@@ -213,7 +213,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 			'with the toggle cleared, a plain `apify call` of the same Actor runs exactly as before (no mirror, same crawl)',
 			() => {
 				const env = apifyEnv(isolatedApifyHome);
-				const actorDir = join(REPO_ROOT, sample.dir);
+				const actorDir = join(REPO_ROOT, 'samples', sample.dir);
 				const actorId = pushedActorId;
 				apify(['api', 'POST', `/actor-runtime/browser-view/${actorId}`, '--body', '{"enabled": false}'], {
 					cwd: REPO_ROOT,

@@ -4,11 +4,38 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Invokes the stock, unmodified `apify-cli` from npm (v1.8.0 or newer, per `cli.md`) via `npx`, so the
+ * Set to a built `apify-cli` entry script (`<apify-cli checkout>/dist/apify.js`) to drive the suite with
+ * that CLI instead of the published one - for runtime features whose CLI side is not released yet.
+ */
+const LOCAL_APIFY_CLI_ENV_VAR = 'ACTOR_RUNTIME_E2E_APIFY_CLI';
+
+/**
+ * By default the stock, unmodified `apify-cli` from npm (v1.8.0 or newer, per `cli.md`) via `npx`, so the
  * e2e suite does not require a global install. No fork/patch of the CLI - exactly `cli.md`'s contract.
  */
+function apifyCommand(args: string[]): [string, string[]] {
+	const localCli = process.env[LOCAL_APIFY_CLI_ENV_VAR];
+	if (localCli) return [process.execPath, [localCli, ...args]];
+	return ['npx', ['-y', '-p', 'apify-cli', 'apify', ...args]];
+}
+
 export function apify(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): string {
-	return execFileSync('npx', ['-y', '-p', 'apify-cli', 'apify', ...args], {
+	const [command, commandArgs] = apifyCommand(args);
+	return execFileSync(command, commandArgs, {
+		cwd: options.cwd,
+		env: options.env,
+		encoding: 'utf8',
+	});
+}
+
+interface ApifyOptions {
+	cwd: string;
+	env: NodeJS.ProcessEnv;
+}
+
+function spawnApify(args: string[], options: ApifyOptions): ReturnType<typeof spawnSync<string>> {
+	const [command, commandArgs] = apifyCommand(args);
+	return spawnSync(command, commandArgs, {
 		cwd: options.cwd,
 		env: options.env,
 		encoding: 'utf8',
@@ -20,14 +47,19 @@ export function apify(args: string[], options: { cwd: string; env: NodeJS.Proces
  * including the log content of `apify runs log` (see `outputJobLog`'s `process.stderr.write`) — to
  * stderr, keeping stdout for machine-readable payloads, so log-content assertions must read stderr.
  */
-export function apifyAllOutput(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): string {
-	const result = spawnSync('npx', ['-y', '-p', 'apify-cli', 'apify', ...args], {
-		cwd: options.cwd,
-		env: options.env,
-		encoding: 'utf8',
-	});
+export function apifyAllOutput(args: string[], options: ApifyOptions): string {
+	const result = spawnApify(args, options);
 	if (result.status !== 0) {
 		throw new Error(`apify ${args.join(' ')} exited with ${result.status}:\n${result.stderr}`);
+	}
+	return `${result.stdout}\n${result.stderr}`;
+}
+
+/** Like `apifyAllOutput()`, but requires a non-zero exit. */
+export function apifyExpectingFailure(args: string[], options: ApifyOptions): string {
+	const result = spawnApify(args, options);
+	if (result.status === 0) {
+		throw new Error(`apify ${args.join(' ')} was expected to fail, but succeeded:\n${result.stdout}`);
 	}
 	return `${result.stdout}\n${result.stderr}`;
 }
@@ -82,6 +114,11 @@ export function apifyEnv(isolatedApifyHome: string): NodeJS.ProcessEnv {
  */
 export function loginApifyCli(cwd: string, isolatedApifyHome: string): void {
 	apify(['login', '--token', APIFY_TOKEN], { cwd, env: apifyEnv(isolatedApifyHome) });
+}
+
+/** Off by default, so a suite relying on the dev-folder mount turns it on for its Actor. */
+export function enableLiveDevFolder(actorId: string, cwd: string, env: NodeJS.ProcessEnv): void {
+	apify(['api', 'POST', `/actor-runtime/live-dev-folder/${actorId}`, '--body', '{"enabled": true}'], { cwd, env });
 }
 
 /** The `{ data: ... }` envelope every Apify API response (and `apify api`'s printed output) uses. */

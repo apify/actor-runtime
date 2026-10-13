@@ -11,7 +11,7 @@
   `RUNNING -> ABORTING -> ABORTED` while a stop is in flight (`ABORTING`/`ABORTED` are also reachable
   directly from `READY` - an abort issued before the build/run ever started).
 - Both builds and runs can end `TIMED-OUT` (timeout deadline reached) or `ABORTED`.
-- a **run's** timeout is caller-configurable (`timeoutSecs` on `POST .../runs`, default **300s** if omitted)
+- a **run's** timeout is caller-configurable (`timeoutSecs` on `POST .../runs`, the Actor's default if omitted, `0` for none)
 - a **build's** timeout is a fixed internal default **1800s**
 - **Abort and timeout are race-proof.** A build/run never moves out of a terminal status; only the
   transitions drawn above ever occur. `POST /actor-builds/:id/abort` and `POST /actor-runs/:id/abort`
@@ -33,6 +33,30 @@
     3. `Dockerfile` at the Actor root
     4. the platform's bundled default Dockerfile, for that build only - the pushed source itself is unchanged.
     - Matching is case-insensitive, exact-case wins ties, and every outcome is stated in the build log.
+
+# Monorepo Actors
+
+- Actors that set `dockerContextDir` build as the platform builds them from a Git repository with the
+  Actor's folder selected.
+- `apify push` from the Actor's folder sends the repository as it is locally, uncommitted changes
+  included, with a warning that the platform builds only what is committed and pushed. `.actorignore`
+  does not apply, as for the platform's Git builds.
+- The runtime never fetches from Git. The build log and console show the pushed branch and commit.
+- `apify push` refuses such an Actor against the Apify platform, which does not support it yet.
+
+# Input schema, validation and defaults
+
+- **Input schemas work as on the Apify platform**: the schema is read from the pushed source when the
+  Actor is built - the `input` field of `.actor/actor.json`, else `.actor/INPUT_SCHEMA.json`, else
+  `INPUT_SCHEMA.json` - a build whose named schema file is missing, cannot be read or is not a valid input
+  schema fails with the reason in its log, and every run of a build is validated against that build's schema with its
+  defaults applied, a rejected input starting nothing (`api.md`). A build with no input schema takes
+  every input exactly as the caller sent it.
+- Secret input fields work as on the platform.
+- **Differences**: Apify Proxy group availability is not checked, so any `apifyProxyGroups` selection
+  is accepted, while the rest of a `proxy` field is still validated.
+- An Actor running from a registered dev folder uses its last build's schema: unlike a source edit,
+  an edited input schema takes effect only after `apify push`.
 
 # Bind mount volumes with Actor source code
 
@@ -60,6 +84,9 @@
 - The working directory the mount covers is recorded **per build**, never on the Actor
   (`storage.md`); the mount a run applies always uses the one from _that run's own resolved build_,
   never any other build the Actor happens to have.
+- **The mount is off by default**: it applies only after the live dev folder is enabled for the Actor
+  (`POST /actor-runtime/live-dev-folder/:actorId` or the console's Actor detail view); until then, a run's
+  log says the registered folder is not mounted.
 - **The mount is applied only when both a registered dev folder and a known working directory exist**
   for the run's resolved build; either missing means the run starts exactly as if the feature did not
   exist.
@@ -143,15 +170,23 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   command, environment, network and ports are those of an ordinary run, and whether the view is on, off, or
   being watched changes nothing about the browser.
 - The runtime never changes the browser's headless mode. A headless browser shows an empty display; an
-  Actor that wants to be watched runs its browser headful (the bundled `sample_actor_playwright` and
-  `sample_actor_playwright_py` do). The Actor image must provide an X display; the Apify Playwright and
+  Actor that wants to be watched runs its browser headful (the bundled `samples/actor_playwright` and
+  `samples/actor_playwright_py` do). The Actor image must provide an X display; the Apify Playwright and
   Puppeteer base images do.
 - The view lives exactly as long as the run, survives a migration/reboot of the run, and is gone once the run
   ends. It composes with debug mode and the dev-folder bind mount.
 
+# Web server (live view)
+
+- Implemented as on the platform: every run has a `containerUrl` reaching the server the Actor starts on
+  `ACTOR_WEB_SERVER_PORT`, linked from the run's console page as its live view (`console.md`).
+- Differences: the URL is local (`api.md`) and the run log names it; under rootless Podman 3.x the
+  runtime container must be started with `--network slirp4netns:allow_host_loopback=true`
+  (`apify runtime start` does), or only a standby run's server is reachable, which the run log says.
+
 # Networking
 
-- Every Actor container reaches the runtime's API at `http://apify-api:3333`, whatever the host's own
+- Every Actor container reaches the runtime's API at `http://apify-api:<API port>`, whatever the host's own
   networking, whichever supported engine runs the containers, and however the runtime itself was started
   (as a container or not). The runtime provides the `apify-local` network with the DNS alias `apify-api`
   for this; when it has to reach the same goal another way, it says so at startup.
@@ -168,6 +203,16 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
   storages are reachable only through `APIFY_API_BASE_URL`.
 - Run details and the run log are kept in internal records that persist across runtime restarts
   (`storage.md`).
+- Actor-level default run options apply as on the platform.
+
+## Run memory
+
+- Run memory follows the platform's `.actor/actor.json` rules (`defaultMemoryMbytes`, `minMemoryMbytes`,
+  `maxMemoryMbytes`). Differences:
+    - A `defaultMemoryMbytes` that fails to evaluate, and a memory changed by the min/max bounds, are
+      noted in the run log.
+    - `defaultMemoryMbytes` is not capped to a plan's maximum memory.
+    - A memory field its schema forbids fails the build.
 
 ## Resource limits
 
@@ -177,7 +222,6 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - Limits are applied exactly as requested, even when they exceed the host's own capacity. Such a run is
   warned about in its own log, naming the requested and the host figures; the limits still apply. When the
   host's capacity cannot be determined, no warning is produced.
-- Disk is not limited. `diskMbytes` is reported but never enforced.
 
 ## Run resource telemetry
 
@@ -197,38 +241,77 @@ start`, ...) is refused by name, naming both the `CMD` fix and how to clear debu
 - The bundled sample Actors log their granted resources and each `systemInfo` event they receive, so the
   contract is observable from a single `apify call`.
 
+## Run usage estimate
+
+- Every run reports its usage and what it would cost, as on the platform. It differs in two ways: only
+  compute units are metered, so storage operations, data transfer and proxy usage are neither counted nor
+  priced; and every price is the lowest paid subscription tier's.
+- Nothing is billed anywhere. The figures exist so a developer can see what a run of their Actor would
+  cost the user running it.
+
+# Pay-per-event pricing
+
+- An Actor can be given a pay-per-event pricing, and its runs are charged against it, as on the platform:
+  the same pricing on the Actor, set only on an existing Actor and only ever appended to, the same events
+  charged by the Actor and by the runtime on its behalf, the same per-run maximum total charge, which
+  ends the run when reached.
+- It differs in four ways: only the free and pay-per-event pricing models are accepted; an event priced
+  per subscription tier is charged at the lowest paid tier; nothing is ever billed or paid out; and the
+  rules tying a price change to payout details, notice periods and subscription tiers do not apply.
+- A run ended by its maximum total charge keeps that reason as its status message; status messages the
+  Actor sets afterwards do not replace it.
+- An Actor's own charging code therefore runs here unchanged, with no local-testing switch.
+- A run's log states what it was pre-charged for starting, so the count is visible where the platform
+  leaves it to be discovered on the bill.
+- The pricing can also be set from the console (`console.md`).
+
+# Actor Standby
+
+- Implemented as on the platform (settings, `usesStandbyMode`, scaling, readiness, idle shutdown, env vars),
+  for Actors and their tasks (`api.md`'s "Tasks").
+- Differences: single-tenant, owner-only; a new build of the standby tag replaces older standby runs; a
+  runtime restart aborts standby runs.
+
 # Users
 
 - Users are created adhoc by the runtime for each new token used in the API call (`cli.md`'s User bootstrap).
 
 # Environment variables in every Actor container
 
-- The Actor version's own `envVars` (accepted and stored on `POST`/`PUT
-.../actors/:actorId/versions`) are applied to the run's container environment, but every
-  platform-owned var listed below takes precedence: a version cannot override `APIFY_TOKEN`, the
-  default storage ids, or any other contract var the runtime itself sets.
-- `APIFY_IS_AT_HOME=1` (mirrors the real platform; an SDK/client instantiated
-  in the container reports `isAtHome`/`is_at_home = true`).
-- `APIFY_META_ORIGIN` — `API` for ordinary runs (every local run arrives via
-  the API, apify-cli included)
-- `APIFY_API_BASE_URL` — the runtime's own API, reachable by name from any
-  Actor container on the shared Docker network (see "Networking" above).
-- `APIFY_TOKEN` — the run owner's token
-- `APIFY_DEFAULT_KEY_VALUE_STORE_ID` / `APIFY_DEFAULT_DATASET_ID` /
-  `APIFY_DEFAULT_REQUEST_QUEUE_ID` — the run's real storage ids (as returned by
-  the API)
-- `APIFY_ACTOR_ID` / `ACTOR_ID` and `APIFY_ACTOR_RUN_ID` / `ACTOR_RUN_ID` —
-  both the legacy `APIFY_`-prefixed and the modern unprefixed spellings, equal
-  in value.
-- `APIFY_PROXY_PASSWORD` — set when a value is known, from either of two sources in precedence order:
-  (1) `APIFY_PROXY_PASSWORD` set in the runtime's own environment (README.md's "Apify Proxy" section) —
-  always wins when set; otherwise (2) the proxy password obtained for the run owner's own account during
-  User bootstrap (`cli.md`). If neither source has a value, the key is absent entirely — never a
-  placeholder.
-- `ACTOR_EVENTS_WEBSOCKET_URL` / `APIFY_ACTOR_EVENTS_WS_URL` — the run's own events channel
-  (`api.md`), carrying no credential.
-- `ACTOR_MEMORY_MBYTES` / `APIFY_MEMORY_MBYTES` — the run's requested `memoryMbytes`.
-- `APIFY_DEDICATED_CPUS` — the run's granted CPU cores. No `ACTOR_`-prefixed counterpart; only the
-  Python SDK reads it.
-- Every `ACTOR_*`/`APIFY_*` pair above is set to an identical value (the two SDKs disagree on which name
-  wins).
+- The Actor version's own `envVars` (plain, secret and build-time ones) are applied as on the platform,
+  and secrets are masked in run logs as on the platform.
+- Set as on the platform, with the same values (empty ones included), each `ACTOR_*`/`APIFY_*` pair equal
+  in value:
+    - Identity: `ACTOR_ID`, `ACTOR_RUN_ID`, `ACTOR_TASK_ID`, `ACTOR_FULL_NAME`, `APIFY_USER_ID`, and the
+      legacy `APIFY_ACTOR_ID`, `APIFY_ACTOR_RUN_ID`, `APIFY_ACTOR_TASK_ID`, `APIFY_ACT_ID`,
+      `APIFY_ACT_RUN_ID`.
+    - Build: `ACTOR_BUILD_ID`, `ACTOR_BUILD_NUMBER`, `ACTOR_BUILD_TAGS`, and the legacy
+      `APIFY_ACTOR_BUILD_ID`, `APIFY_ACTOR_BUILD_NUMBER`.
+    - Storages and input: `ACTOR_DEFAULT_DATASET_ID`, `ACTOR_DEFAULT_KEY_VALUE_STORE_ID`,
+      `ACTOR_DEFAULT_REQUEST_QUEUE_ID`, `ACTOR_STORAGES_JSON`, `ACTOR_INPUT_KEY`, and the legacy
+      `APIFY_DEFAULT_DATASET_ID`, `APIFY_DEFAULT_KEY_VALUE_STORE_ID`, `APIFY_DEFAULT_REQUEST_QUEUE_ID`,
+      `APIFY_INPUT_KEY`.
+    - Timing and resources: `ACTOR_STARTED_AT`, `ACTOR_TIMEOUT_AT`, `ACTOR_MEMORY_MBYTES`,
+      `APIFY_DEDICATED_CPUS`, and the legacy `APIFY_STARTED_AT`, `APIFY_TIMEOUT_AT`, `APIFY_MEMORY_MBYTES`.
+    - Run options: `ACTOR_MAX_TOTAL_CHARGE_USD`, `ACTOR_RESTART_ON_ERROR`, `APIFY_META_ORIGIN`.
+    - Ports: `ACTOR_WEB_SERVER_PORT`, `ACTOR_STANDBY_PORT`, and the legacy `APIFY_CONTAINER_PORT`.
+    - Platform: `APIFY_TOKEN`, `APIFY_IS_AT_HOME`, `APIFY_HEADLESS`, `APIFY_INPUT_SECRETS_PRIVATE_KEY_FILE`,
+      `APIFY_INPUT_SECRETS_PRIVATE_KEY_PASSPHRASE`.
+- Differences:
+    - `APIFY_API_BASE_URL`, `ACTOR_EVENTS_WEBSOCKET_URL` / `APIFY_ACTOR_EVENTS_WS_URL`,
+      `ACTOR_WEB_SERVER_URL` / `APIFY_CONTAINER_URL` and `ACTOR_STANDBY_URL` point at the runtime's own
+      local addresses ("Networking" above, `api.md`).
+    - `APIFY_PROXY_PASSWORD` is a real Apify Proxy password when one is known - the runtime's own
+      (README.md's "Apify Proxy" section), else the run owner's account's (`cli.md`) - and absent
+      otherwise; with the console's "Use Apify Proxy" setting off (`console.md`) it is empty. A run given
+      a password has one warning line in its log saying the Actor can use the real Apify Proxy, billed to
+      the Apify account, and that the Settings page can disable it.
+    - The variables above always win over a version's own `envVars` of the same name.
+    - Secret env vars are protected only against being read by accident, since the key that decrypts
+      them is kept in the runtime's data directory too.
+    - `APIFY_ACTOR_PRICING_INFO` and `APIFY_CHARGED_ACTOR_EVENT_COUNTS` are not set, so the SDKs read the
+      run's charging state from the API, current after a migration restart too.
+    - Not set: `APIFY_USER_IS_PAYING`, `APIFY_USER_PRICING_TIER`, `ACTOR_PERMISSION_LEVEL`,
+      `APIFY_WORKFLOW_KEY`, `ACTOR_MCP_CONNECTOR_BASE_URL` / `APIFY_MCP_PROXY_URL`,
+      `APIFY_API_PUBLIC_BASE_URL`, `ACTOR_MAX_PAID_DATASET_ITEMS`, `APIFY_PROXY_HOSTNAME`,
+      `APIFY_PROXY_PORT`, `APIFY_PROXY_STATUS_URL` and `APIFY_FACT` (`unsupported.md`).

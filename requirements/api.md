@@ -17,7 +17,13 @@
 - `DELETE /v2/actor-builds/:buildId` and `DELETE /v2/actor-runs/:runId` on a **non-terminal** build/run
   are rejected, not aborted-then-deleted: `400` with error type `deleting-unfinished-build` (builds) or
   `cannot-remove-running-run` (runs), matching the Apify platform.
-- Three endpoints are exceptions to the `{data}` envelope:
+- `POST /v2/actors/:actorId/runs` validates the input against the input schema of the build it
+  resolved, when that build has one (`actor-driver.md`), and starts nothing when it does not pass:
+  `400` `invalid-input` for a body that is not `application/json`, is not parseable JSON, is not a
+  JSON object, or that the schema rejects, naming every offending field; `400` `invalid-input-schema`
+  when the Actor's own schema is not valid. Both messages match the Apify platform's. A build with no
+  input schema accepts any body, unvalidated.
+- Five endpoints are exceptions to the `{data}` envelope:
     - `GET /v2/logs/:buildOrRunId` (and its `actor-builds`/`actor-runs` aliases): the body is plain text,
       never `{data}`-wrapped, matching apify-client-js's `log().get()`.
     - `GET /v2/datasets/:datasetId/items` (and its `actor-runs/:runId/dataset/items` alias): the body is
@@ -25,17 +31,27 @@
       `x-apify-pagination-*` response headers, matching apify-client-js's pagination handling.
     - `GET /actor-runtime/events/:runId`: a websocket upgrade, not a JSON response at all - see "Actor
       runtime API" below.
+    - `POST /v2/actor-runs/:runId/charge`: a bare `{}`, matching the platform.
+    - `GET`/`PUT /v2/actor-tasks/:actorTaskId/input`: the bare input object, matching the platform.
 - `*At` timestamp fields are ISO-8601 strings.
 - Log content matches the Apify platform's log format: every log line starts with an ISO-8601 UTC
   timestamp with millisecond precision followed by a space (`2026-08-31T09:13:25.123Z `), exactly one
   timestamp per line regardless of how the output was chunked when produced. Apify clients' log
   redirection (e.g. `Actor.call` in the SDKs) relies on this prefix to recognize log messages.
 
-# Actor id encoding
+# Actor run origin
 
-- `:actorId` accepts the real id, the plain Actor `name`, or `username~name` (a literal `/` in a
-  client-supplied identifier is rewritten to `~` by apify-client-js before the request is sent). This
-  is how stock `apify push` finds an existing Actor by name before an id has ever been minted.
+- A run's `meta.origin` is set as on the platform, from the caller's `X-Apify-Request-Origin`.
+
+# Resource id encoding
+
+- `:actorId`, `:actorTaskId`, `:datasetId`, `:storeId` and `:queueId` accept `~name` (the caller's own),
+  `username~name` or `userId~name` in place of the id, on every route.
+- A bare segment without a separator is an id, except `:actorId`, which also accepts a plain Actor name
+  (what `apify push` looks up before an id exists).
+- Names and usernames match case-insensitively; an empty name is `400` `invalid-request`, and anything
+  else that does not resolve - another user's resource included - is `404` `record-not-found`, relayed
+  when `fallbackNotFoundEnabled` is on.
 
 # 501 vs 404
 
@@ -54,8 +70,35 @@
         - v2/actors/:actorId/builds
         - v2/actors/:actorId/builds/default
         - v2/actors/:actorId/runs
+        - v2/actors/:actorId/run-sync
+        - v2/actors/:actorId/run-sync-get-dataset-items
+        - v2/actors/:actorId/runs/last, and its sub-paths (see "Last-run shortcuts")
         - v2/actors/:actorId/versions
         - v2/actors/:actorId/versions/:versionNumber
+        - v2/actors/:actorId/versions/:versionNumber/env-vars
+        - v2/actors/:actorId/versions/:versionNumber/env-vars/:envVarName
+    - Tasks
+        - v2/actor-tasks
+        - v2/actor-tasks/:actorTaskId
+        - v2/actor-tasks/:actorTaskId/input
+        - v2/actor-tasks/:actorTaskId/runs
+        - v2/actor-tasks/:actorTaskId/run-sync
+        - v2/actor-tasks/:actorTaskId/run-sync-get-dataset-items
+        - v2/actor-tasks/:actorTaskId/runs/last, and its sub-paths (see "Last-run shortcuts")
+        - v2/actor-tasks/:actorTaskId/webhooks
+    - Webhooks
+        - v2/webhooks
+        - v2/webhooks/:webhookId
+        - v2/webhooks/:webhookId/test
+        - v2/webhooks/:webhookId/dispatches
+        - v2/webhook-dispatches
+        - v2/webhook-dispatches/:dispatchId
+        - v2/actors/:actorId/webhooks
+    - Schedules
+        - v2/schedules
+        - v2/schedules/:scheduleId
+        - v2/schedules/:scheduleId/log
+        - v2/schedules/:scheduleId/invoke
     - Builds
         - v2/actor-builds
         - v2/actor-builds/:buildId
@@ -66,6 +109,8 @@
         - v2/actor-runs/:runId
         - v2/actor-runs/:runId/abort
         - v2/actor-runs/:runId/reboot
+        - v2/actor-runs/:runId/resurrect
+        - v2/actor-runs/:runId/charge
         - v2/actor-runs/:runId/log
     - Datasets
         - v2/datasets
@@ -121,6 +166,79 @@
       `404`.
 - All endpoints from the specification that do not have implementation must return response `501 Not Implemented`
 - All endpoints not present in specification must return `404 Not Found` - **except** the `/actor-runtime/*`
+
+# Last-run shortcuts
+
+- `v2/actors/:actorId/runs/last` answers with the caller's newest run of that Actor
+  (`v2/actor-tasks/:actorTaskId/runs/last`: of that task), and each sub-path
+  under it - `/log`, `/dataset/*`, `/key-value-store/*`, `/request-queue/*`, `/abort`, `/reboot`,
+  `/metamorph` - answers exactly as the same request against that run's own endpoint, for every method
+  the endpoint accepts. The bare form is `GET`-only; any other sub-path is `404` `not-found`.
+- `?status=` and `?origin=` narrow which run is picked, taking the platform's own values for each; any
+  other value is `400` `invalid-request`.
+- An unknown Actor and no matching run are both `404` `record-not-found`; past that the target endpoint's
+  own responses apply, `501` included.
+- **One source per request**: an Actor (or task) that resolves locally is answered locally, including
+  every later miss; only a request naming one unknown here is eligible for the upstream fallback (below),
+  and then as the caller's original request, which the platform resolves end to end.
+
+# Tasks
+
+- Implemented as on the platform, for the caller's own Actors: a task saves an Actor's input and run
+  options (`build`, `timeoutSecs`, `memoryMbytes`, `maxTotalChargeUsd`, `restartOnError`), and a task run is a run of that
+  Actor started from them.
+    - A task created without a `name` is named `<actor-name>-task` (`-1`, `-2`, ... when taken); without
+      `input`, it starts from the input schema's prefill values. Names are unique per user (`409`
+      `actor-task-name-not-unique`).
+    - Creating a task, or saving its input, needs the build its runs use (`options.build`, or the
+      Actor's default build) to exist (`403` `unknown-build-tag`); the input is validated against that build's input
+      schema.
+    - A task run merges the request's input over the task's, key by key, and the request's run options
+      over the task's, which go over the Actor's default run options; the merged input is validated like any run's. The run's `actorTaskId` names the
+      task, as do `ACTOR_TASK_ID` / `APIFY_ACTOR_TASK_ID` in its container.
+    - `PUT .../input` merges the given fields into the saved input.
+    - Deleting a task aborts its unfinished runs; the runs themselves stay.
+    - Standby for tasks works as on the platform: while the Actor's Standby is on, a task is served at its
+      own `standbyUrl` (`<username>--<task-name>`, as in "Actor Standby" below) by standby runs of its own,
+      with its `actorStandby` settings over the Actor's (unless the Actor sets
+      `disableStandbyFieldsOverride`), its input when `shouldPassActorInput` is set, and its other run
+      options. A task's `actorStandby` takes every Actor setting except `isEnabled` and
+      `disableStandbyFieldsOverride`. An Actor and a task of the same name share an address; the Actor
+      is served there.
+- Differences: a task's secret input fields are stored as given, and encrypted only in each run's input;
+  `maxItems` is saved but not applied; a task cannot be published (`400`
+  `cannot-publish-actor-task`).
+
+# Webhooks
+
+- Implemented as on the platform, for the caller's own Actors, tasks and runs.
+- Differences:
+    - Only the `HTTP_REQUEST` action is supported (`400` `invalid-request` for the others).
+    - Requests are sent from the runtime: `localhost` means the runtime itself, private addresses are
+      allowed and redirects are not followed.
+    - The runtime's own API stands in for the Apify API: a request to it without a `token` is
+      authenticated as the webhook's owner.
+
+# Schedules
+
+- Implemented as on the platform, for the caller's own Actors and tasks.
+- Differences:
+    - Schedules run only while the runtime is running; a run time that passed while it was not is skipped.
+    - `notifications.email` is saved but no email is sent (`unsupported.md`).
+
+# Actor Standby
+
+- Implemented as on the platform. Differences: only the owner is served, and `standbyUrl` is
+  `http://<username>--<actor-name>.localhost:3333`, or `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`
+  for clients without `*.localhost` (`http://apify-api:3333/...` from Actors). Standby errors are never
+  relayed by the upstream fallback.
+
+# Run web server
+
+- Implemented as on the platform. Difference: `containerUrl` is `http://<runId>.runs.localhost:3333`, or
+  `http://localhost:3333/actor-runtime/container/<runId>` for clients without `*.localhost`
+  (`http://apify-api:3333/...` from Actors). A request the Actor's server cannot answer (not listening yet,
+  run finished, unknown run) gets an error saying why, never relayed by the upstream fallback.
 
 # Actor runtime API
 
@@ -194,6 +312,11 @@
     - **Body**: `{ "enabled": boolean, "interactive"?: boolean }`, `interactive` defaulting to `false`. A call
       fully replaces the prior state; `{"enabled": false}` clears it. Any other shape is `400 invalid-request`.
     - **Response**: `{ data: { localBrowserView: { interactive } | null } }` - the read-back; there is no `GET`.
+- **`PUT /actor-runtime/source-context/:actorId/:versionNumber`** - how `apify push` sends a monorepo
+  Actor (`actor-driver.md`): replaces an existing version's source with the repository as a `.tar.gz`
+  body, the Actor's folder in it given as `actorPath`, and optional Git details shown in the build log.
+  Owner-scoped; `400` for an invalid archive or `actorPath`, `404` for an unknown Actor or version. The
+  version reads on `/v2` as one with no source files; pushing `sourceFiles` to it replaces the repository.
 - **`GET /actor-runtime/events/:runId`** - a websocket upgrade, reachable at exactly this one path on
   the fixed API port (`system.md`). It carries the run's platform events: `systemInfo` once a second
   (`actor-driver.md`), a one-off `aborting`-plus-`persistState` pair under `?gracefully=` (below), and a
@@ -251,9 +374,15 @@ This runtime emulates that observable experience on demand:
   `migrating` handler. Stops and restarts the run's container immediately (no warning frame), cancels an
   open migration window, and increments `stats.rebootCount`. A finished run is `403` `job-finished`; a
   non-terminal run with no container (`READY`, `ABORTING`) gets the count bump but no restart.
-- The run object's `stats` carries `migrationCount`, `rebootCount`, `restartCount`, and `resurrectCount`
-  (the latter two always `0` here), initialized to `0` at run creation like the platform.
+- The run object's `stats` carries `migrationCount`, `rebootCount`, `restartCount`, and
+  `resurrectCount`, initialized to `0` at run creation like the platform.
 - The run's log is cumulative across restarts, with a one-line marker between the incarnations' output.
+
+## Resurrecting a finished run
+
+- `POST /v2/actor-runs/:runId/resurrect` works as on the platform, except that `maxItems` is
+  not supported (`unsupported.md`) and the run keeps the pricing it was created
+  with, even when the Actor's pricing changed since.
 
 ## Upstream fallback (opt-in, off by default, all HTTP methods)
 
@@ -283,9 +412,9 @@ This runtime emulates that observable experience on demand:
     - `fallbackNotFoundEnabled` covers a request that reaches a route this runtime does serve, but
       whose specific record id doesn't exist locally (`record-not-found`, see "Response envelopes"
       above).
-    - Every other error type - `invalid-request`, `user-not-authenticated`,
-      `cannot-remove-running-run`, `deleting-unfinished-build`, any `dev-folder-*` type,
-      `internal-error` - is never relayed, regardless of either toggle's state.
+    - Every other error type - `invalid-request`, `invalid-input`, `invalid-input-schema`,
+      `user-not-authenticated`, `cannot-remove-running-run`, `deleting-unfinished-build`, any
+      `dev-folder-*` type, `internal-error` - is never relayed, regardless of either toggle's state.
 - **All HTTP methods are eligible for both toggles, writes included**: a `POST`/`PUT`/`DELETE` that
   would otherwise 404/501 locally is relayed exactly like a `GET` when its toggle is on - and, if the
   platform accepts it, becomes a real write against the caller's real account. This is a deliberate
@@ -304,6 +433,8 @@ This runtime emulates that observable experience on demand:
   different or runtime-internal credential, and never sent at all for a request this runtime didn't
   authenticate. Enabling either toggle therefore means the caller's own Apify token reaches the
   configured `upstreamBaseUrl` on every eligible request; this is the risk being opted into.
+- **Never splits one request between the two sources**: where one request resolves several records in
+  turn ("Last-run shortcuts" above), the first record decides where all of them come from.
 - **Never enriches a call that already succeeds locally**: a collection/list endpoint (e.g.
   `GET /v2/datasets`) that already returns `200` from local data never consults either toggle and never
   gains platform objects. Fallback only ever resolves an otherwise-failing request; it does not make a

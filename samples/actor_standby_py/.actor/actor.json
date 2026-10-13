@@ -1,0 +1,11 @@
+{
+	"$schema": "https://apify.com/schemas/v1/actor.ide.json",
+	"actorSpecification": 1,
+	"name": "my-standby-actor-py",
+	"title": "Python Standby sample actor for actor-runtime",
+	"description": "An Actor server: JSON endpoints, a request body echo, a Server-Sent Events stream and a websocket, all served in Standby mode.",
+	"version": "0.0",
+	"buildTag": "latest",
+	"usesStandbyMode": true,
+	"dockerfile": "../Dockerfile"
+}

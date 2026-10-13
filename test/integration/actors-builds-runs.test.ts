@@ -31,6 +31,9 @@ function availableDriverWithNoImage(): Driver {
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -82,6 +85,51 @@ describe('actors / versions / builds / runs (via real apify-client)', () => {
 		await actorClient.version('0.1').update({ buildTag: 'beta' } as never);
 		const updated = await actorClient.version('0.1').get();
 		expect(updated?.buildTag).toBe('beta');
+	});
+
+	it('POST on a version and on an env var are aliases of their PUTs (the spec\'s "(POST)" variants)', async () => {
+		const actor = await server.client.actors().create({ name: 'post-alias-actor' });
+		const actorClient = server.client.actor(actor.id);
+		await actorClient.versions().create({
+			versionNumber: '0.1',
+			buildTag: 'latest',
+			sourceType: 'SOURCE_FILES' as never,
+			sourceFiles: [],
+		} as never);
+		await actorClient.version('0.1').envVars().create({ name: 'MY_VAR', value: 'one' });
+		const headers = { Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json' };
+
+		const version = await fetch(`${server.baseUrl}/v2/actors/${actor.id}/versions/0.1`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ buildTag: 'beta' }),
+		});
+		expect(version.status).toBe(200);
+		expect(((await version.json()) as { data: { buildTag: string } }).data.buildTag).toBe('beta');
+		expect((await actorClient.version('0.1').get())?.buildTag).toBe('beta');
+
+		const envVar = await fetch(`${server.baseUrl}/v2/actors/${actor.id}/versions/0.1/env-vars/MY_VAR`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ name: 'MY_VAR', value: 'two', isSecret: false }),
+		});
+		expect(envVar.status).toBe(200);
+		expect((await actorClient.version('0.1').envVar('MY_VAR').get())?.value).toBe('two');
+
+		// Same misses as the PUTs: an unknown version or env var is 404 record-not-found, never a create.
+		const missingVersion = await fetch(`${server.baseUrl}/v2/actors/${actor.id}/versions/9.9`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ buildTag: 'beta' }),
+		});
+		expect(missingVersion.status).toBe(404);
+		const missingEnvVar = await fetch(`${server.baseUrl}/v2/actors/${actor.id}/versions/0.1/env-vars/NOPE`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ name: 'NOPE', value: 'x' }),
+		});
+		expect(missingEnvVar.status).toBe(404);
+		expect(await actorClient.version('0.1').envVar('NOPE').get()).toBeUndefined();
 	});
 
 	it('lists an Actor versions via the real apify-client, and gets a single version by number (field-shape drift is the risk `sendPaginated` here guards against)', async () => {

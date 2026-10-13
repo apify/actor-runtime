@@ -13,12 +13,21 @@ import { mountBuilds } from './routes/builds.js';
 import { mountRuns } from './routes/runs.js';
 import { mountLogs } from './routes/logs.js';
 import { mountRunStorageAliases } from './routes/run-storage-aliases.js';
+import { mountLastRun } from './routes/last-run.js';
+import { mountRunSync } from './routes/run-sync.js';
+import { mountTasks } from './routes/tasks.js';
+import { mountWebhooks } from './routes/webhooks.js';
+import { mountSchedules } from './routes/schedules.js';
 import { mountDevFolder } from './routes/dev-folder.js';
 import { mountDebugMode } from './routes/debug-mode.js';
 import { mountBrowserView } from './routes/browser-view.js';
 import { mountMigrate } from './routes/migrate.js';
 import { mountApiFallback } from './routes/api-fallback.js';
+import { mountLiveDevFolder } from './routes/live-dev-folder.js';
 import { mountSkill } from './routes/skill.js';
+import { mountSourceContext } from './routes/source-context.js';
+import { standbyProxy } from './standby-proxy.js';
+import { containerProxy } from './container-proxy.js';
 import { attemptFallback, type LocalError } from '../services/api-fallback.js';
 import type { Driver } from '../driver/types.js';
 
@@ -38,6 +47,10 @@ async function respondWithLocalError(req: Request, res: Response, localError: Lo
 export function createApiServer(deps: ApiServerDeps): Express {
 	const app = express();
 	app.disable('x-powered-by');
+	// Ahead of the body parser below: a request to a run's web server or to a standby Actor streams its
+	// body through to the Actor untouched.
+	app.use(containerProxy(deps.driver));
+	app.use(standbyProxy(deps.driver));
 	// Every body arrives as a raw Buffer regardless of Content-Type: KV records need byte-exact
 	// round-tripping, run/build inputs carry arbitrary content types, and everything else is JSON we
 	// parse ourselves (see `api/handler.ts`).
@@ -63,6 +76,8 @@ export function createApiServer(deps: ApiServerDeps): Express {
 	mountBrowserView(actorRuntime);
 	mountMigrate(actorRuntime, deps);
 	mountApiFallback(actorRuntime);
+	mountLiveDevFolder(actorRuntime);
+	mountSourceContext(actorRuntime);
 	app.use('/actor-runtime', actorRuntime);
 	// Also served at `/v2/actor-runtime/*` - the *same* router instance, no duplicated route logic - solely
 	// because `apify api`'s own URL-building hardcodes a `/v2`-suffixed base (`${baseUrl}/${endpoint}`,
@@ -83,13 +98,18 @@ export function createApiServer(deps: ApiServerDeps): Express {
 
 	mountUsers(v2);
 	mountActors(v2, deps);
+	mountTasks(v2, deps);
+	mountWebhooks(v2);
+	mountSchedules(v2);
+	mountRunSync(v2, deps);
 	mountBuilds(v2, deps);
 	mountRuns(v2, deps);
-	mountDatasets(v2);
+	mountDatasets(v2, deps);
 	mountKeyValueStores(v2);
 	mountRequestQueues(v2);
 	mountLogs(v2);
-	mountRunStorageAliases(v2);
+	mountRunStorageAliases(v2, deps);
+	mountLastRun(v2);
 
 	app.use('/v2', v2);
 

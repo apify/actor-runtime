@@ -7,7 +7,7 @@
  * `node_modules` must survive the mount (the anonymous-volume guarantee). Registration is itself an
  * `apify` command, so `requirements/test.md`'s CLI-only rule needs no exception here.
  *
- * Drives the loop against a throwaway copy of `sample_actor_ts` in a temp directory, never against the
+ * Drives the loop against a throwaway copy of `samples/actor_ts` in a temp directory, never against the
  * committed sample Actor itself - an interrupted run (Ctrl-C, an OOM, a crash between the edit and the
  * restore) must not risk leaving an edited marker line in tracked source.
  *
@@ -34,6 +34,7 @@ import {
 	apifyAllOutput,
 	apifyEnv,
 	createIsolatedApifyHome,
+	enableLiveDevFolder,
 	loginApifyCli,
 	removeIsolatedApifyHome,
 	type ApiEnvelope,
@@ -43,10 +44,10 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
-const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'sample_actor_ts');
+const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'samples', 'actor_ts');
 const CONTAINER_NAME = 'actor-runtime-e2e-devfolder';
 const IMAGE_TAG = 'actor-runtime:e2e-devfolder';
-// `sample_actor_ts/Dockerfile` sets no `WORKDIR` of its own, so it inherits the base image's - the
+// `samples/actor_ts/Dockerfile` sets no `WORKDIR` of its own, so it inherits the base image's - the
 // `apify/actor-node` image's own Dockerfile sets `WORKDIR /usr/src/app`. Asserted independently below
 // via the run's own log, not only assumed here - if the base image ever moves its
 // `WORKDIR`, that assertion (not the mount itself) is what will fail first and explain why.
@@ -62,6 +63,7 @@ interface DevFolderApiResult {
 }
 
 function registerDevFolder(actorId: string, path: string, env: NodeJS.ProcessEnv): DevFolderApiResult {
+	enableLiveDevFolder(actorId, REPO_ROOT, env);
 	// The exact CLI invocation `requirements/api.md`'s `/actor-runtime/*` section documents - the clean
 	// form, no `../`, which `apify api` resolves onto `/v2/actor-runtime/dev-folder/<actorId>` (the alias
 	// `server.ts` mounts solely for this ergonomics reason). `cwd: REPO_ROOT` matters here since
@@ -97,7 +99,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			loginApifyCli(REPO_ROOT, isolatedApifyHome);
 
 			// A throwaway copy of the sample Actor - this suite edits `src/main.ts` and runs local builds
-			// against it, and neither must ever touch the committed `sample_actor_ts` tree. `node_modules`/
+			// against it, and neither must ever touch the committed `samples/actor_ts` tree. `node_modules`/
 			// `dist` are excluded: they are gitignored and unnecessary to copy, since `npm install`/`npm run
 			// build` below regenerate both fresh inside the copy anyway.
 			actorDir = mkdtempSync(join(tmpdir(), 'actor-runtime-e2e-devfolder-actor-'));
@@ -225,7 +227,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(optedOutLog).toContain(`Skipping the registered local dev folder ${actorDir}`);
 			expect(optedOutLog).toContain(ORIGINAL_MARKER);
 			expect(optedOutLog).not.toContain(EDITED_MARKER);
-			expect(optedOutLog).not.toContain('Local Actor runtime');
+			expect(optedOutLog).not.toContain('Live dev folder');
 
 			// The registration survived.
 			const call = JSON.parse(
@@ -234,7 +236,6 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 			const callLog = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
 			expect(callLog).toContain(EDITED_MARKER);
-			expect(callLog).toContain('Local Actor runtime');
 			expect(callLog).toContain(`Live dev folder: ${actorDir}`);
 			expect(callLog).toContain('Live dev folder mode');
 			expect(callLog).toContain('apify call --no-dev-folder');
@@ -254,7 +255,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			// distinction is what the log assertions below rely on.
 			// `--force`: the previous test's successful build bumped this same remote Actor's
 			// `modifiedAt` (its build recording bumps `updateActor`) to after `actorDir`'s files' mtimes,
-			// which were fixed once when `beforeAll` copied `sample_actor_ts` into the temp dir. Without
+			// which were fixed once when `beforeAll` copied `samples/actor_ts` into the temp dir. Without
 			// `--force`, `apify push` refuses any push whose files are all older than the remote record -
 			// a deliberate staleness guard, not a bug - and this push's files never got newer.
 			const pushOutput = apify(['push', '--json', '--force'], { cwd: actorDir, env });
@@ -270,7 +271,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 
 			// Remove `node_modules` from the copied folder now, before registering it as the dev folder -
 			// this is what makes the run below actually discriminate the anonymous volume, rather than
-			// merely being consistent with it. `sample_actor_ts/package.json` lists `apify` and
+			// merely being consistent with it. `samples/actor_ts/package.json` lists `apify` and
 			// `@crawlee/cheerio` as regular dependencies, so a `node_modules` left in place here would let
 			// the Actor's imports resolve from the *host's* own install, and the `call` below would succeed
 			// whether or not the anonymous volume worked at all. With it gone, the only place those imports
@@ -343,7 +344,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			expect(call.run.status).toBe('SUCCEEDED');
 
 			const log = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
-			expect(log).not.toContain('Local Actor runtime');
+			expect(log).not.toContain('Live dev folder');
 		},
 		5 * 60 * 1000,
 	);

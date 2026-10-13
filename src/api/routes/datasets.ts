@@ -1,9 +1,10 @@
-import type { Request, Router } from 'express';
+import type { Request, Response, Router } from 'express';
 
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
-import { recordNotFound } from '../errors.js';
+import { invalidRequest, recordNotFound } from '../errors.js';
+import { resolveStorageParam } from '../resolve-reference.js';
 import {
 	h,
 	jsonBody,
@@ -15,26 +16,65 @@ import {
 	queryString,
 } from '../handler.js';
 import { openDataset } from '../../storage/open.js';
-import {
-	createStorage,
-	getOwnedStorage,
-	listOwnedStorages,
-	renameStorage,
-	dropStorage,
-	touchStorage,
-} from '../../services/storages.js';
+import { createStorage, listOwnedStorages, renameStorage, dropStorage, touchStorage } from '../../services/storages.js';
 import { applyDatasetProjection, type DatasetItem } from '../../services/dataset-projection.js';
 import { datasetDto } from '../dto/storages.js';
-import type { StorageRecord } from '../../storage/entities.js';
+import type { DatasetSchema, StorageRecord } from '../../storage/entities.js';
+import { findInvalidDatasetItems } from '../../services/dataset-schema.js';
+import { recordDefaultDatasetItems } from '../../services/charging.js';
+import type { ApiServerDeps } from '../server.js';
 
 type ResolveDataset = (req: Request) => Promise<StorageRecord | null>;
+
+/** Answers with a page of the dataset's items, honouring the items endpoint's query parameters. */
+export async function sendDatasetItems(
+	req: Request,
+	res: Response,
+	record: StorageRecord,
+	status: number,
+): Promise<void> {
+	await touchStorage(record.id);
+	const dataset = await openDataset(record.id);
+
+	const offset = queryNumber(req, 'offset') ?? 0;
+	const limit = queryNumber(req, 'limit');
+	const desc = queryBoolean(req, 'desc') ?? false;
+
+	const page = await dataset.getData({ offset, limit, desc });
+	const items = applyDatasetProjection(page.items as DatasetItem[], {
+		fields: queryList(req, 'fields'),
+		omit: queryList(req, 'omit'),
+		unwind: queryList(req, 'unwind')?.[0],
+		clean: queryBoolean(req, 'clean'),
+		skipHidden: queryBoolean(req, 'skipHidden'),
+		skipEmpty: queryBoolean(req, 'skipEmpty'),
+	});
+
+	// Unlike every other list endpoint, the real Apify API returns dataset items as a bare JSON
+	// array with pagination metadata in `x-apify-pagination-*` headers, not a `{data:{...}}`
+	// envelope - confirmed against apify-client-js's `_createPaginationList` (`dataset.ts`),
+	// which reads `response.data` directly as the items array and every count from headers.
+	res.set({
+		'x-apify-pagination-total': String(page.total),
+		'x-apify-pagination-offset': String(page.offset),
+		'x-apify-pagination-count': String(items.length),
+		'x-apify-pagination-limit': String(page.limit ?? items.length),
+		'x-apify-pagination-desc': String(desc),
+	});
+	res.status(status).json(items);
+}
 
 /**
  * The dataset operation surface, parameterised over how the dataset's storage record is resolved -
  * directly by `:datasetId`, or via a run's `defaultDatasetId` for the `actor-runs/:runId/dataset/*`
  * aliases. Both mount points get byte-identical behaviour.
  */
-export function mountDatasetOperations(router: Router, basePath: string, resolveDataset: ResolveDataset): void {
+export function mountDatasetOperations(
+	router: Router,
+	basePath: string,
+	resolveDataset: ResolveDataset,
+	deps: ApiServerDeps,
+): void {
 	async function requireDataset(req: Request): Promise<StorageRecord> {
 		const record = await resolveDataset(req);
 		if (!record) throw recordNotFound();
@@ -55,8 +95,23 @@ export function mountDatasetOperations(router: Router, basePath: string, resolve
 		h(async (req, res) => {
 			const record = await requireDataset(req);
 			const body = jsonBody<DatasetItem | DatasetItem[]>(req);
+			// All or nothing, as on the platform: one rejected item stores none of the batch.
+			const invalidItems = findInvalidDatasetItems(record.schema, Array.isArray(body) ? body : [body]);
+			if (invalidItems.length > 0) {
+				res.status(400).json({
+					error: {
+						type: 'schema-validation-error',
+						message: 'Schema validation failed',
+						data: { invalidItems },
+					},
+				});
+				return;
+			}
 			const dataset = await openDataset(record.id);
 			await dataset.pushData(body);
+			// The platform's synthetic per-item pay-per-event charge (`services/charging.ts`) - a no-op for
+			// every dataset that is not a pay-per-event run's default dataset.
+			await recordDefaultDatasetItems(deps.driver, record.id, Array.isArray(body) ? body.length : 1);
 			sendData(res, null, 201);
 		}),
 	);
@@ -65,35 +120,7 @@ export function mountDatasetOperations(router: Router, basePath: string, resolve
 		`${basePath}/items`,
 		h(async (req, res) => {
 			const record = await requireDataset(req);
-			await touchStorage(record.id);
-			const dataset = await openDataset(record.id);
-
-			const offset = queryNumber(req, 'offset') ?? 0;
-			const limit = queryNumber(req, 'limit');
-			const desc = queryBoolean(req, 'desc') ?? false;
-
-			const page = await dataset.getData({ offset, limit, desc });
-			const items = applyDatasetProjection(page.items as DatasetItem[], {
-				fields: queryList(req, 'fields'),
-				omit: queryList(req, 'omit'),
-				unwind: queryList(req, 'unwind')?.[0],
-				clean: queryBoolean(req, 'clean'),
-				skipHidden: queryBoolean(req, 'skipHidden'),
-				skipEmpty: queryBoolean(req, 'skipEmpty'),
-			});
-
-			// Unlike every other list endpoint, the real Apify API returns dataset items as a bare JSON
-			// array with pagination metadata in `x-apify-pagination-*` headers, not a `{data:{...}}`
-			// envelope - confirmed against apify-client-js's `_createPaginationList` (`dataset.ts`),
-			// which reads `response.data` directly as the items array and every count from headers.
-			res.set({
-				'x-apify-pagination-total': String(page.total),
-				'x-apify-pagination-offset': String(page.offset),
-				'x-apify-pagination-count': String(items.length),
-				'x-apify-pagination-limit': String(page.limit ?? items.length),
-				'x-apify-pagination-desc': String(desc),
-			});
-			res.status(200).json(items);
+			await sendDatasetItems(req, res, record, 200);
 		}),
 	);
 
@@ -106,11 +133,13 @@ export function mountDatasetOperations(router: Router, basePath: string, resolve
 	);
 }
 
-export function mountDatasets(router: Router): void {
+export function mountDatasets(router: Router, deps: ApiServerDeps): void {
 	router.get(
 		'/datasets',
 		h(async (req, res) => {
-			const records = await listOwnedStorages(requireUser(req).id, 'dataset');
+			const records = await listOwnedStorages(requireUser(req).id, 'dataset', {
+				includeUnnamed: queryBoolean(req, 'unnamed') ?? false,
+			});
 			const sorted = sortByTimestamp(records, (record) => record.createdAt);
 			const envelope = paginate(sorted, paginationParams(req));
 			const items = await Promise.all(
@@ -126,9 +155,13 @@ export function mountDatasets(router: Router): void {
 	router.post(
 		'/datasets',
 		h(async (req, res) => {
-			const body = optionalJsonBody<{ name?: string }>(req);
+			const body = optionalJsonBody<{ name?: string; schema?: unknown }>(req);
 			const name = queryString(req, 'name') ?? body?.name;
-			const record = await createStorage(requireUser(req).id, 'dataset', name);
+			const schema = body?.schema;
+			if (schema !== undefined && (schema === null || typeof schema !== 'object' || Array.isArray(schema))) {
+				throw invalidRequest('Dataset schema must be an object.');
+			}
+			const record = await createStorage(requireUser(req).id, 'dataset', name, schema as DatasetSchema);
 			const dataset = await openDataset(record.id);
 			sendData(res, datasetDto(record, await dataset.getInfo()), 201);
 		}),
@@ -137,7 +170,7 @@ export function mountDatasets(router: Router): void {
 	router.put(
 		'/datasets/:datasetId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset');
+			const record = await resolveStorageParam(req, 'datasetId', 'dataset');
 			if (!record) throw recordNotFound();
 			const body = jsonBody<{ name?: string }>(req);
 			const updated = body.name ? await renameStorage(record.id, body.name) : record;
@@ -149,7 +182,7 @@ export function mountDatasets(router: Router): void {
 	router.delete(
 		'/datasets/:datasetId',
 		h(async (req, res) => {
-			const record = await getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset');
+			const record = await resolveStorageParam(req, 'datasetId', 'dataset');
 			// Matches the real platform and this API's own documented contract (api.md's response
 			// envelopes section): a missing id 404s with `record-not-found`, the same as every other
 			// resource's DELETE - the public API answers `record-not-found` for a missing storage id on
@@ -160,7 +193,10 @@ export function mountDatasets(router: Router): void {
 		}),
 	);
 
-	mountDatasetOperations(router, '/datasets/:datasetId', async (req) =>
-		getOwnedStorage(requireUser(req).id, req.params.datasetId as string, 'dataset'),
+	mountDatasetOperations(
+		router,
+		'/datasets/:datasetId',
+		async (req) => resolveStorageParam(req, 'datasetId', 'dataset'),
+		deps,
 	);
 }

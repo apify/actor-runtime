@@ -1,16 +1,16 @@
 /**
- * Server-rendered console: list + detail views for Actors, builds, runs, logs, and the three
+ * Server-rendered console: list + detail views for Actors, tasks, webhooks, schedules, builds, runs, logs, and the three
  * user-storage types, each with exactly one inspection widget per storage type (`console.md`). Reads
  * through the same service layer as the API handlers, so ownership filtering (over on the API side) is
  * shared rather than reimplemented.
  *
  * The console itself has no login of its own - it is unauthenticated, and every route is a read except
- * four mutations (`console.md`): the dev-folder form and the debug-mode form, both on the Actor detail
- * view, the Migrate button on the run detail view, and the `/settings` form below. With multiple users
+ * six mutations (`console.md`): the pricing, dev-folder, debug-mode and browser-view forms on the Actor
+ * detail view, the Migrate button on the run detail view, and the `/settings` form below. With multiple users
  * it does not scope reads to any one of them: every list/detail route below reads through the
  * `listAll*`/`get*ById` cross-user service functions (see e.g. `services/actors.ts: listAllActors`),
  * never the API's own per-user `listOwned*`/`getOwned*`, and every list row and detail view shows the
- * object's owner `userId` (`console.md`: "Frontend shows for each object the owner (userId)"). The
+ * object's owner by username, or its Actor as `username~actorname` (`console.md`). The
  * dev-folder form, the debug-mode form, and the Migrate button all write cross-user the same way - a
  * deliberate deviation from the API's own strictly-owner-scoped writes, not an accident; the `/settings`
  * form is runtime-global by nature (`api.md`'s "Upstream fallback" section), so ownership doesn't apply
@@ -20,8 +20,10 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import express, { type Express, type Request } from 'express';
 
-import { getActorById, listAllActors } from '../services/actors.js';
-import type { ActorRecord } from '../storage/entities.js';
+import { getActorById, listAllActors, setActorPricingInfos } from '../services/actors.js';
+import { getRunTelemetry } from '../services/events-channel.js';
+import { computeRunUsage } from '../services/run-usage.js';
+import type { ActorRecord, LocalSourceContext, ScheduleAction, WebhookCondition } from '../storage/entities.js';
 import {
 	describeDevFolderFailure,
 	devFolderStatus,
@@ -30,8 +32,23 @@ import {
 } from '../services/dev-folder.js';
 import { debugStatus, setDebugMode } from '../services/debug-mode.js';
 import { browserViewStatus, setBrowserView } from '../services/browser-view.js';
+import { liveDevFolderStatus, setLiveDevFolder } from '../services/live-dev-folder.js';
 import { getBuildById, listAllBuilds } from '../services/builds.js';
 import { getRunById, listAllRuns } from '../services/runs.js';
+import { standbyUrl } from '../services/standby-config.js';
+import { containerUrl } from '../services/container-url.js';
+import { describeSourceContextOrigin } from '../services/source-context.js';
+import {
+	actorStandbyService,
+	standbyPoolSnapshot,
+	taskStandbyService,
+	type StandbyService,
+} from '../services/standby.js';
+import { getTaskById, listAllTasks } from '../services/tasks.js';
+import { getWebhookById, listAllWebhooks } from '../services/webhooks.js';
+import { getScheduleById, listAllSchedules } from '../services/schedules.js';
+import { getWebhookDispatchById, listAllWebhookDispatches } from '../services/webhook-dispatches.js';
+import { getUserById } from '../services/users.js';
 import { migrateRun } from '../services/migrations.js';
 import { isTerminalJobStatus } from '../services/job-status.js';
 import { isBrowserViewPending } from './browser-view-ws.js';
@@ -42,7 +59,8 @@ import { openDataset, openKeyValueStore, openRequestQueue } from '../storage/ope
 import { pageKeys } from '../services/kv-key-listing.js';
 import { applyDatasetProjection, type DatasetItem } from '../services/dataset-projection.js';
 import { ansiToHtml } from './ansi.js';
-import { newestFirst } from './order.js';
+import { createNameResolver } from './names.js';
+import { newestCreatedFirst, newestFirst } from './order.js';
 import {
 	apiFallbackWarning,
 	browserViewForm,
@@ -50,20 +68,32 @@ import {
 	debugModeForm,
 	definitionList,
 	devFolderForm,
+	liveDevFolderForm,
 	escapeHtml,
+	formatUsd,
 	layout,
 	migrateRunForm,
+	pricingSection,
 	settingsForm,
+	standbyLink,
 	table,
+	runDetailsColumns,
+	usageSection,
 	type LinkedCell,
 } from './templates.js';
+import { CONSOLE_CSS } from './styles.js';
 import { getApiFallbackState, setApiFallbackState } from '../services/api-fallback.js';
+import { isApifyProxyEnabled, setApifyProxyEnabled } from '../services/apify-proxy.js';
 import { upstreamApiBaseUrl } from '../services/identity-resolution.js';
 import type { Driver } from '../driver/types.js';
 
 /** A run's default-storage id rendered as a link to that storage's detail view instead of plain text. */
 function storageLink(prefix: '/datasets' | '/key-value-stores' | '/request-queues', id: string): LinkedCell {
 	return { text: id, href: `${prefix}/${encodeURIComponent(id)}` };
+}
+
+function dockerContextCell(context: LocalSourceContext): string {
+	return `${context.actorPath} (pushed ${context.uploadedAt}${describeSourceContextOrigin(context.git)})`;
 }
 
 /** Whether `req` carries positive evidence of being a cross-site form submission, for any of the
@@ -93,18 +123,22 @@ export interface ConsoleServerDeps {
 /** `@novnc/novnc`'s `exports` points at `core/rfb.js`; the package root is two levels up from it. */
 const NOVNC_ROOT = dirname(dirname(createRequire(import.meta.url).resolve('@novnc/novnc')));
 
-/** The dev-folder registration form + its one read-only status row, rendered on the Actor detail view
- * (`console.md`'s "Local dev-folder registration form" section). Deliberately shows only the registered
- * folder, never a build's working directory or a "mount will apply" claim - whether a mount actually
+/** The dev-folder registration form, rendered on the Actor detail view (`console.md`'s "Local dev-folder
+ * registration form" section). Deliberately shows only the registered folder, never a build's working directory or a "mount will apply" claim - whether a mount actually
  * applies depends on which build a given run resolves, which this Actor-level view has no way to know in
  * advance (`services/dev-folder.ts: devFolderStatus`'s doc comment). `errorMessage` is threaded through
  * from the POST handler's redirect query param below, since a redirect itself carries no state of its
  * own. */
-function devFolderSection(actorId: string, status: DevFolderStatus, errorMessage?: string): string {
+function devFolderSection(
+	actorId: string,
+	status: DevFolderStatus,
+	liveDevFolderEnabled: boolean,
+	errorMessage?: string,
+): string {
 	return (
 		'<h2>Local dev folder</h2>' +
-		definitionList([['localDevFolder', status.localDevFolder ?? '(none registered)']]) +
-		devFolderForm(actorId, status.localDevFolder ?? '', errorMessage)
+		devFolderForm(actorId, status.localDevFolder ?? '', errorMessage) +
+		liveDevFolderForm(actorId, liveDevFolderEnabled)
 	);
 }
 
@@ -115,12 +149,14 @@ function devFolderSection(actorId: string, status: DevFolderStatus, errorMessage
 function debugModeSection(actorId: string, localDebug: ActorRecord['localDebug'], errorMessage?: string): string {
 	const status = debugStatus({ localDebug });
 	return (
+		'<section id="debug-mode" data-live>' +
 		'<h2>Debug mode</h2>' +
 		definitionList([
 			['language', status.localDebug?.language ?? '(debug mode is off)'],
 			['port', status.localDebug?.port ?? ''],
 		]) +
-		debugModeForm(actorId, localDebug ?? null, errorMessage)
+		debugModeForm(actorId, localDebug ?? null, errorMessage) +
+		'</section>'
 	);
 }
 
@@ -131,6 +167,7 @@ function browserViewSection(
 ): string {
 	const status = browserViewStatus({ localBrowserView });
 	return (
+		'<section id="browser-view" data-live>' +
 		'<h2>Browser view</h2>' +
 		definitionList([
 			[
@@ -140,7 +177,8 @@ function browserViewSection(
 					: '(browser view is off)',
 			],
 		]) +
-		browserViewForm(actorId, localBrowserView ?? null, errorMessage)
+		browserViewForm(actorId, localBrowserView ?? null, errorMessage) +
+		'</section>'
 	);
 }
 
@@ -150,9 +188,16 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 	// The noVNC client for the browser-view page, served straight from the installed package.
 	app.use('/vendor/novnc/core', express.static(join(NOVNC_ROOT, 'core')));
 	app.use('/vendor/novnc/vendor', express.static(join(NOVNC_ROOT, 'vendor')));
-	// The dev-folder form, the debug-mode form, the run detail view's Migrate button, and the `/settings`
-	// form below are the console's only four writes - every other route is a plain `GET` (`console.md`'s
-	// "Every route is a read except..." list).
+	// The one stylesheet every page links (`console/styles.ts`). `no-cache` rather than a max-age: it
+	// revalidates on each page load, so a runtime upgrade is picked up immediately, while Express's own
+	// ETag still turns the repeat request into a 304 with no body.
+	app.get('/console.css', (_req, res) => {
+		res.set('Cache-Control', 'no-cache');
+		res.type('text/css').send(CONSOLE_CSS);
+	});
+	// The Actor detail view's four forms (pricing, dev folder, debug mode, browser view), the run detail
+	// view's Migrate button, and the `/settings` form below are the console's only six writes - every other
+	// route is a plain `GET` (`console.md`'s "Every route is a read except..." list).
 	app.use(express.urlencoded({ extended: false }));
 
 	app.get('/', async (_req, res) => {
@@ -161,18 +206,62 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 
 	app.get('/actors', async (_req, res) => {
 		const actors = await listAllActors();
-		const rows = actors.map((a) => [
-			a.id,
-			a.userId,
-			a.name,
-			a.title ?? '',
-			String(a.versions.length),
-			Object.keys(a.taggedBuilds).join(', '),
-		]);
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			actors.map(async (a) => [
+				a.id,
+				await names.userName(a.userId),
+				a.name,
+				a.title ?? '',
+				String(a.versions.length),
+				Object.keys(a.taggedBuilds).join(', '),
+			]),
+		);
 		res.send(
-			layout('Actors', table(['id', 'userId', 'name', 'title', 'versions', 'tagged builds'], rows, 0, '/actors')),
+			layout('Actors', table(['id', 'user', 'name', 'title', 'versions', 'tagged builds'], rows, 0, '/actors')),
 		);
 	});
+
+	/** Read-only: the settings are changed through the API, as on the platform. A task shows the settings
+	 * its runs use: its own over the Actor's. */
+	async function standbySection(service: StandbyService): Promise<string> {
+		const { config } = service;
+		if (!config) {
+			return '<h2>Actor Standby</h2><p class="empty">(Actor Standby is off)</p>';
+		}
+		const owner = await getUserById(service.actor.userId);
+		const url = owner ? standbyUrl(service.task ?? service.actor, owner.username) : '';
+		const pool = standbyPoolSnapshot(service);
+		return (
+			'<h2>Actor Standby</h2>' +
+			(owner
+				? "<p>Open or copy the standby URL with the owner's token already in it:</p>" +
+					standbyLink(url, owner.token)
+				: '') +
+			definitionList([
+				['standbyUrl', url],
+				['build', config.build],
+				['memoryMbytes', config.memoryMbytes],
+				['desiredRequestsPerActorRun', config.desiredRequestsPerActorRun],
+				['maxRequestsPerActorRun', config.maxRequestsPerActorRun],
+				['idleTimeoutSecs', config.idleTimeoutSecs],
+				['shouldPassActorInput', String(config.shouldPassActorInput)],
+			]) +
+			'<h3>Standby runs</h3>' +
+			(pool.length === 0
+				? '<p class="empty">(none running - the next request starts one)</p>'
+				: table(
+						['runId', 'open requests', 'ready'],
+						pool.map((entry) => [
+							entry.runId
+								? { text: entry.runId, href: `/runs/${encodeURIComponent(entry.runId)}` }
+								: '(starting)',
+							String(entry.openRequests),
+							entry.ready ? 'yes' : 'no',
+						]),
+					))
+		);
+	}
 
 	app.get('/actors/:id', async (req, res) => {
 		const actor = await getActorById(req.params.id);
@@ -184,10 +273,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const debugModeError = typeof req.query.debugModeError === 'string' ? req.query.debugModeError : undefined;
 		const browserViewError =
 			typeof req.query.browserViewError === 'string' ? req.query.browserViewError : undefined;
+		const pricingError = typeof req.query.pricingError === 'string' ? req.query.pricingError : undefined;
 		const body =
 			definitionList([
 				['id', actor.id],
-				['userId', actor.userId],
+				['user', await createNameResolver().userName(actor.userId)],
 				['name', actor.name],
 				['title', actor.title ?? ''],
 				['createdAt', actor.createdAt],
@@ -195,8 +285,13 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			]) +
 			'<h2>Versions</h2>' +
 			table(
-				['versionNumber', 'buildTag', 'files'],
-				actor.versions.map((v) => [v.versionNumber, v.buildTag, String(v.sourceFiles.length)]),
+				['versionNumber', 'buildTag', 'files', 'dockerContext'],
+				actor.versions.map((v) => [
+					v.versionNumber,
+					v.buildTag,
+					String(v.localSourceContext?.fileCount ?? v.sourceFiles.length),
+					v.localSourceContext ? dockerContextCell(v.localSourceContext) : '',
+				]),
 			) +
 			'<h2>Tagged builds</h2>' +
 			table(
@@ -205,10 +300,406 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				1,
 				'/builds',
 			) +
-			devFolderSection(actor.id, devFolderStatus(actor), devFolderError) +
+			pricingSection(actor.id, actor.pricingInfos, pricingError) +
+			devFolderSection(actor.id, devFolderStatus(actor), liveDevFolderStatus(actor).enabled, devFolderError) +
 			debugModeSection(actor.id, actor.localDebug, debugModeError) +
-			browserViewSection(actor.id, actor.localBrowserView, browserViewError);
+			browserViewSection(actor.id, actor.localBrowserView, browserViewError) +
+			(await standbySection(actorStandbyService(actor))) +
+			'<h2>Tasks</h2>' +
+			table(
+				['id', 'name', 'title'],
+				newestCreatedFirst((await listAllTasks()).filter((task) => task.actorId === actor.id)).map((task) => [
+					task.id,
+					task.name,
+					task.title,
+				]),
+				0,
+				'/tasks',
+			) +
+			(await webhooksSection('actorId', actor.id)) +
+			(await schedulesSection('actorId', actor.id));
 		res.send(layout(`Actor ${actor.name}`, body));
+	});
+
+	app.get('/tasks', async (_req, res) => {
+		const tasks = newestCreatedFirst(await listAllTasks());
+		const runs = await listAllRuns();
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			tasks.map(async (task) => [
+				task.id,
+				await names.userName(task.userId),
+				task.name,
+				task.title,
+				await names.actorLink(task.actorId),
+				String(runs.filter((run) => run.actorTaskId === task.id).length),
+			]),
+		);
+		res.send(layout('Tasks', table(['id', 'user', 'name', 'title', 'actor', 'runs'], rows, 0, '/tasks')));
+	});
+
+	app.get('/tasks/:id', async (req, res) => {
+		const task = await getTaskById(req.params.id);
+		if (!task) {
+			res.status(404).send(layout('Not found', '<p>Task not found.</p>'));
+			return;
+		}
+		const names = createNameResolver();
+		const actor = await getActorById(task.actorId);
+		const options = Object.entries(task.options ?? {});
+		const runs = newestFirst((await listAllRuns()).filter((run) => run.actorTaskId === task.id));
+		const body =
+			definitionList([
+				['id', task.id],
+				['user', await names.userName(task.userId)],
+				['name', task.name],
+				['title', task.title],
+				['description', task.description ?? ''],
+				['actor', await names.actorLink(task.actorId)],
+				['createdAt', task.createdAt],
+				['modifiedAt', task.modifiedAt],
+			]) +
+			'<h2>Run options</h2>' +
+			(options.length > 0
+				? definitionList(options)
+				: '<p class="empty">(none - runs use the Actor\'s default run options)</p>') +
+			'<h2>Input</h2><pre>' +
+			escapeHtml(JSON.stringify(task.input ?? {}, null, 2)) +
+			'</pre>' +
+			(actor ? await standbySection(taskStandbyService(actor, task)) : '') +
+			'<h2>Runs</h2>' +
+			table(
+				['id', 'status', 'origin', 'startedAt', 'usageTotalUsd'],
+				runs.map((r) => [
+					r.id,
+					r.status,
+					r.meta.origin,
+					r.startedAt,
+					formatUsd(computeRunUsage(r, getRunTelemetry(r.id)).usageTotalUsd),
+				]),
+				0,
+				'/runs',
+			) +
+			(await webhooksSection('actorTaskId', task.id)) +
+			(await schedulesSection('actorTaskId', task.id));
+		res.send(layout(`Task ${task.name}`, body));
+	});
+
+	/** The webhooks that fire for one Actor or task. */
+	async function webhooksSection(key: 'actorId' | 'actorTaskId', id: string): Promise<string> {
+		const webhooks = (await listAllWebhooks()).filter(
+			(webhook) => (webhook.condition as Record<string, string>)[key] === id,
+		);
+		return (
+			'<h2>Webhooks</h2>' +
+			table(
+				['id', 'event types', 'request URL', 'enabled'],
+				newestCreatedFirst(webhooks).map((webhook) => [
+					webhook.id,
+					webhook.eventTypes.join(', '),
+					webhook.requestUrl,
+					webhook.isEnabled ? 'yes' : 'no',
+				]),
+				0,
+				'/webhooks',
+			)
+		);
+	}
+
+	/** The Actor, task or run a webhook fires for, linked to its page. */
+	async function conditionCell(names: ReturnType<typeof createNameResolver>, condition: WebhookCondition) {
+		if ('actorId' in condition) return names.actorLink(condition.actorId);
+		if ('actorTaskId' in condition) return names.taskLink(condition.actorTaskId);
+		return { text: `run ${condition.actorRunId}`, href: `/runs/${encodeURIComponent(condition.actorRunId)}` };
+	}
+
+	app.get('/webhooks', async (_req, res) => {
+		const webhooks = newestCreatedFirst(await listAllWebhooks());
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			webhooks.map(async (webhook) => [
+				webhook.id,
+				await names.userName(webhook.userId),
+				await conditionCell(names, webhook.condition),
+				webhook.eventTypes.join(', '),
+				webhook.requestUrl,
+				webhook.isEnabled ? 'yes' : 'no',
+				String(webhook.stats.totalDispatches),
+				webhook.lastDispatch?.status ?? '',
+			]),
+		);
+		res.send(
+			layout(
+				'Webhooks',
+				table(
+					['id', 'user', 'fires for', 'event types', 'request URL', 'enabled', 'dispatches', 'last dispatch'],
+					rows,
+					0,
+					'/webhooks',
+				),
+			),
+		);
+	});
+
+	app.get('/webhooks/:id', async (req, res) => {
+		const webhook = await getWebhookById(req.params.id);
+		if (!webhook) {
+			res.status(404).send(layout('Not found', '<p>Webhook not found.</p>'));
+			return;
+		}
+		const names = createNameResolver();
+		const dispatches = newestCreatedFirst(
+			(await listAllWebhookDispatches()).filter((dispatch) => dispatch.webhookId === webhook.id),
+		);
+		const body =
+			definitionList([
+				['id', webhook.id],
+				['user', await names.userName(webhook.userId)],
+				['title', webhook.title ?? ''],
+				['description', webhook.description ?? ''],
+				['fires for', await conditionCell(names, webhook.condition)],
+				['event types', webhook.eventTypes.join(', ')],
+				['request URL', webhook.requestUrl],
+				['enabled', webhook.isEnabled ? 'yes' : 'no'],
+				['ad hoc', webhook.isAdHoc ? 'yes' : 'no'],
+				['retries', webhook.doNotRetry ? 'no' : 'yes'],
+				['ignore SSL errors', webhook.ignoreSslErrors ? 'yes' : 'no'],
+				['interpolate strings', webhook.shouldInterpolateStrings ? 'yes' : 'no'],
+				['createdAt', webhook.createdAt],
+				['modifiedAt', webhook.modifiedAt],
+			]) +
+			'<h2>Payload template</h2><pre>' +
+			escapeHtml(webhook.payloadTemplate) +
+			'</pre>' +
+			(webhook.headersTemplate
+				? `<h2>Headers template</h2><pre>${escapeHtml(webhook.headersTemplate)}</pre>`
+				: '') +
+			'<h2>Dispatches</h2>' +
+			table(
+				['id', 'event type', 'status', 'createdAt', 'calls'],
+				dispatches.map((dispatch) => [
+					dispatch.id,
+					dispatch.eventType,
+					dispatch.status,
+					dispatch.createdAt,
+					String(dispatch.calls.length),
+				]),
+				0,
+				'/webhook-dispatches',
+			);
+		res.send(layout(`Webhook ${webhook.title ?? webhook.id}`, body));
+	});
+
+	app.get('/webhook-dispatches/:id', async (req, res) => {
+		const dispatch = await getWebhookDispatchById(req.params.id);
+		if (!dispatch) {
+			res.status(404).send(layout('Not found', '<p>Webhook dispatch not found.</p>'));
+			return;
+		}
+		const names = createNameResolver();
+		const body =
+			definitionList([
+				['id', dispatch.id],
+				['user', await names.userName(dispatch.userId)],
+				['webhook', { text: dispatch.webhookId, href: `/webhooks/${encodeURIComponent(dispatch.webhookId)}` }],
+				['event type', dispatch.eventType],
+				['status', dispatch.status],
+				['request URL', dispatch.webhook.requestUrl],
+				['createdAt', dispatch.createdAt],
+				['finishedAt', dispatch.finishedAt ?? ''],
+				...(dispatch.status === 'ACTIVE'
+					? ([['next attempt', dispatch.callAt]] as Array<[string, string]>)
+					: []),
+			]) +
+			'<h2>Calls</h2>' +
+			table(
+				['startedAt', 'finishedAt', 'response status', 'error', 'response body'],
+				dispatch.calls.map((call) => [
+					call.startedAt,
+					call.finishedAt ?? '',
+					call.responseStatus === null ? '' : String(call.responseStatus),
+					call.errorMessage ?? '',
+					call.responseBody ?? '',
+				]),
+			) +
+			'<h2>Event data</h2><pre>' +
+			escapeHtml(JSON.stringify(dispatch.eventData, null, 2)) +
+			'</pre>';
+		res.send(layout(`Webhook dispatch ${dispatch.id}`, body));
+	});
+
+	/** The schedules with an action that runs one Actor or task. */
+	async function schedulesSection(key: 'actorId' | 'actorTaskId', id: string): Promise<string> {
+		const schedules = (await listAllSchedules()).filter((schedule) =>
+			schedule.actions.some((action) => (action as unknown as Record<string, string>)[key] === id),
+		);
+		return (
+			'<h2>Schedules</h2>' +
+			table(
+				['id', 'name', 'cron expression', 'enabled', 'nextRunAt'],
+				newestCreatedFirst(schedules).map((schedule) => [
+					schedule.id,
+					schedule.name,
+					schedule.cronExpression,
+					schedule.isEnabled ? 'yes' : 'no',
+					schedule.nextRunAt ?? '',
+				]),
+				0,
+				'/schedules',
+			)
+		);
+	}
+
+	/** What an action runs, linked to its page. */
+	async function actionTargetCell(names: ReturnType<typeof createNameResolver>, action: ScheduleAction) {
+		return action.type === 'RUN_ACTOR' ? names.actorLink(action.actorId) : names.taskLink(action.actorTaskId);
+	}
+
+	app.get('/schedules', async (_req, res) => {
+		const schedules = newestCreatedFirst(await listAllSchedules());
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			schedules.map(async (schedule) => [
+				schedule.id,
+				await names.userName(schedule.userId),
+				schedule.name,
+				schedule.cronExpression,
+				schedule.timezone,
+				schedule.isEnabled ? 'yes' : 'no',
+				String(schedule.actions.length),
+				schedule.nextRunAt ?? '',
+				schedule.lastRunAt ?? '',
+			]),
+		);
+		res.send(
+			layout(
+				'Schedules',
+				table(
+					[
+						'id',
+						'user',
+						'name',
+						'cron expression',
+						'timezone',
+						'enabled',
+						'actions',
+						'nextRunAt',
+						'lastRunAt',
+					],
+					rows,
+					0,
+					'/schedules',
+				),
+			),
+		);
+	});
+
+	app.get('/schedules/:id', async (req, res) => {
+		const schedule = await getScheduleById(req.params.id);
+		if (!schedule) {
+			res.status(404).send(layout('Not found', '<p>Schedule not found.</p>'));
+			return;
+		}
+		const names = createNameResolver();
+		const runs = newestFirst((await listAllRuns()).filter((run) => run.meta.scheduleId === schedule.id));
+		const actionRows = await Promise.all(
+			schedule.actions.map(async (action) => [
+				action.id,
+				action.type,
+				await actionTargetCell(names, action),
+				action.type === 'RUN_ACTOR'
+					? (action.runInput?.body ?? '')
+					: action.input
+						? JSON.stringify(action.input)
+						: '',
+				action.type === 'RUN_ACTOR' && action.runOptions ? JSON.stringify(action.runOptions) : '',
+			]),
+		);
+		const body =
+			definitionList([
+				['id', schedule.id],
+				['user', await names.userName(schedule.userId)],
+				['name', schedule.name],
+				['title', schedule.title],
+				['description', schedule.description ?? ''],
+				['cron expression', schedule.cronExpression],
+				['timezone', schedule.timezone],
+				['enabled', schedule.isEnabled ? 'yes' : 'no'],
+				['exclusive', schedule.isExclusive ? 'yes' : 'no'],
+				['nextRunAt', schedule.nextRunAt ?? ''],
+				['lastRunAt', schedule.lastRunAt ?? ''],
+				['createdAt', schedule.createdAt],
+				['modifiedAt', schedule.modifiedAt],
+			]) +
+			'<h2>Actions</h2>' +
+			table(['id', 'type', 'runs', 'input', 'run options'], actionRows) +
+			'<h2>Runs</h2>' +
+			table(
+				['id', 'actor', 'status', 'scheduledAt', 'startedAt', 'usageTotalUsd'],
+				await Promise.all(
+					runs.map(async (r) => [
+						r.id,
+						await names.actorLink(r.actorId),
+						r.status,
+						r.meta.scheduledAt ?? '',
+						r.startedAt,
+						formatUsd(computeRunUsage(r, getRunTelemetry(r.id)).usageTotalUsd),
+					]),
+				),
+				0,
+				'/runs',
+			) +
+			'<h2>Log</h2>' +
+			table(
+				['createdAt', 'level', 'message'],
+				[...schedule.log].reverse().map((entry) => [entry.createdAt, entry.level, entry.message]),
+			);
+		res.send(layout(`Schedule ${schedule.name}`, body));
+	});
+
+	/** Same `setActorPricingInfos` as the API, cross-user like the other Actor forms. Only the JSON parse
+	 * is this route's own; every other rejection comes from the shared validator. */
+	app.post('/actors/:id/pricing', async (req, res) => {
+		if (isCrossSiteWrite(req)) {
+			res.status(403).send('Cross-site form submissions are not allowed.');
+			return;
+		}
+		const actor = await getActorById(req.params.id);
+		if (!actor) {
+			res.status(404).send(layout('Not found', '<p>Actor not found.</p>'));
+			return;
+		}
+		const body = req.body as Record<string, unknown> | undefined;
+		const submitted = typeof body?.pricingInfos === 'string' ? body.pricingInfos.trim() : '';
+		let parsed: unknown;
+		try {
+			parsed = submitted === '' ? [] : JSON.parse(submitted);
+		} catch (error) {
+			const message = `Not valid JSON: ${error instanceof Error ? error.message : String(error)}`;
+			res.redirect(`/actors/${encodeURIComponent(actor.id)}?pricingError=${encodeURIComponent(message)}`);
+			return;
+		}
+		const result = await setActorPricingInfos(actor, parsed);
+		if (result.kind !== 'ok') {
+			res.redirect(`/actors/${encodeURIComponent(actor.id)}?pricingError=${encodeURIComponent(result.message)}`);
+			return;
+		}
+		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
+	});
+
+	app.post('/actors/:id/live-dev-folder', async (req, res) => {
+		if (isCrossSiteWrite(req)) {
+			res.status(403).send('Cross-site form submissions are not allowed.');
+			return;
+		}
+		const actor = await getActorById(req.params.id);
+		if (!actor) {
+			res.status(404).send(layout('Not found', '<p>Actor not found.</p>'));
+			return;
+		}
+		const body = req.body as Record<string, unknown> | undefined;
+		await setLiveDevFolder(actor, { enabled: body?.enabled === 'on' });
+		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
 	/** Same `setBrowserView` as the API endpoint, cross-user like the debug-mode form above. */
@@ -223,9 +714,10 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			return;
 		}
 		const body = req.body as Record<string, unknown> | undefined;
-		const enabled = body?.enabled === 'on';
+		const mode = typeof body?.mode === 'string' ? body.mode : 'off';
+		const enabled = mode !== 'off';
 		const requestBody: Record<string, unknown> = { enabled };
-		if (enabled) requestBody.interactive = body?.interactive === 'on';
+		if (enabled) requestBody.interactive = mode === 'interactive';
 
 		const result = await setBrowserView(actor, requestBody);
 		if (result.kind !== 'ok') {
@@ -237,7 +729,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
-	/** One of the console's four mutations - funnels through the same `setDevFolder` the API endpoint uses,
+	/** One of the console's six mutations - funnels through the same `setDevFolder` the API endpoint uses,
 	 * resolving the Actor cross-user by the id already in the page URL (no token) rather than through
 	 * `resolveOwnedActor`. A failure redirects back with `describeDevFolderFailure`'s message in a query
 	 * param, so it's surfaced inline rather than swallowed by the redirect. */
@@ -266,7 +758,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		res.redirect(`/actors/${encodeURIComponent(actor.id)}`);
 	});
 
-	/** One of the console's four mutations - funnels through the same `setDebugMode` the API endpoint
+	/** One of the console's six mutations - funnels through the same `setDebugMode` the API endpoint
 	 * uses, resolving the Actor cross-user by the id already in the page URL, like the dev-folder form
 	 * above. A failure redirects back with the classified message in a query param. */
 	app.post('/actors/:id/debug', async (req, res) => {
@@ -280,8 +772,8 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			return;
 		}
 		const body = req.body as Record<string, unknown> | undefined;
-		const enabled = body?.enabled === 'on';
-		const language = typeof body?.language === 'string' ? body.language : 'auto';
+		const language = typeof body?.language === 'string' ? body.language : 'off';
+		const enabled = language !== 'off';
 		const portRaw = typeof body?.port === 'string' ? body.port.trim() : '';
 		const requestBody: Record<string, unknown> = { enabled };
 		if (enabled) {
@@ -340,13 +832,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 
 	app.get('/builds', async (_req, res) => {
 		const builds = newestFirst(await listAllBuilds());
-		const rows = builds.map((b) => [b.id, b.userId, b.actorId, b.buildNumber, b.status, b.startedAt]);
-		res.send(
-			layout(
-				'Builds',
-				table(['id', 'userId', 'actorId', 'buildNumber', 'status', 'startedAt'], rows, 0, '/builds'),
-			),
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			builds.map(async (b) => [b.id, await names.actorLink(b.actorId), b.buildNumber, b.status, b.startedAt]),
 		);
+		res.send(layout('Builds', table(['id', 'actor', 'buildNumber', 'status', 'startedAt'], rows, 0, '/builds')));
 	});
 
 	app.get('/builds/:id', async (req, res) => {
@@ -359,8 +849,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const body =
 			definitionList([
 				['id', build.id],
-				['userId', build.userId],
-				['actorId', build.actorId],
+				['actor', await createNameResolver().actorLink(build.actorId)],
 				['versionNumber', build.versionNumber],
 				['buildNumber', build.buildNumber],
 				['tag', build.tag],
@@ -377,18 +866,21 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 
 	app.get('/runs', async (_req, res) => {
 		const runs = newestFirst(await listAllRuns());
-		const rows = runs.map((r) => [
-			r.id,
-			r.userId,
-			r.actorId,
-			r.status,
-			r.startedAt,
-			storageLink('/datasets', r.defaultDatasetId),
-		]);
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			runs.map(async (r) => [
+				r.id,
+				await names.actorLink(r.actorId),
+				r.status,
+				r.startedAt,
+				storageLink('/datasets', r.defaultDatasetId),
+				formatUsd(computeRunUsage(r, getRunTelemetry(r.id)).usageTotalUsd),
+			]),
+		);
 		res.send(
 			layout(
 				'Runs',
-				table(['id', 'userId', 'actorId', 'status', 'startedAt', 'defaultDatasetId'], rows, 0, '/runs'),
+				table(['id', 'actor', 'status', 'startedAt', 'defaultDatasetId', 'usageTotalUsd'], rows, 0, '/runs'),
 			),
 		);
 	});
@@ -413,17 +905,23 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				: `<p class="empty">Only a RUNNING run can be migrated (current status: ${escapeHtml(run.status)}).</p>`);
 		const rows: Array<[string, unknown]> = [
 			['id', run.id],
-			['userId', run.userId],
-			['actorId', run.actorId],
-			['buildId', run.buildId],
+			['actor', await createNameResolver().actorLink(run.actorId)],
+			...(run.actorTaskId
+				? ([['task', await createNameResolver().taskLink(run.actorTaskId)]] as Array<[string, unknown]>)
+				: []),
+			['build', { text: run.buildNumber, href: `/builds/${encodeURIComponent(run.buildId)}` }],
 			['status', run.status],
 			['startedAt', run.startedAt],
 			['finishedAt', run.finishedAt ?? ''],
+			['statusMessage', run.statusMessage ?? ''],
+			['origin', run.meta.origin],
+			...(run.meta.scheduleId
+				? ([['schedule', await createNameResolver().scheduleLink(run.meta.scheduleId)]] as Array<
+						[string, unknown]
+					>)
+				: []),
 			['migrationCount', run.stats?.migrationCount ?? 0],
 			['rebootCount', run.stats?.rebootCount ?? 0],
-			['defaultDatasetId', storageLink('/datasets', run.defaultDatasetId)],
-			['defaultKeyValueStoreId', storageLink('/key-value-stores', run.defaultKeyValueStoreId)],
-			['defaultRequestQueueId', storageLink('/request-queues', run.defaultRequestQueueId)],
 		];
 		// Only present for a run that resolved a debug plan; never on the emulated `/v2` run object.
 		if (run.localDebug) {
@@ -438,8 +936,13 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 				},
 			]);
 		}
+		// Every run has one, as on the platform (`actor-driver.md`'s "Web server (live view)").
+		const url = containerUrl(run.id);
+		rows.push(['containerUrl (live view)', { text: url, href: url }]);
+		const usage = computeRunUsage(run, getRunTelemetry(run.id));
 		const body =
-			definitionList(rows) +
+			runDetailsColumns(run, rows) +
+			usageSection(run, usage) +
 			migrateSection +
 			'<h2>Log</h2><pre>' +
 			(log ? ansiToHtml(log) : '(empty)') +
@@ -502,7 +1005,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		);
 	});
 
-	/** One of the console's four writes (`console.md`) - the same `migrateRun` as the API endpoint, cross-user
+	/** One of the console's six writes (`console.md`) - the same `migrateRun` as the API endpoint, cross-user
 	 * like the dev-folder form. */
 	app.post('/runs/:id/migrate', async (req, res) => {
 		if (isCrossSiteWrite(req)) {
@@ -531,21 +1034,24 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const entries = newestFirst([
 			...builds.map((b) => ({
 				id: b.id,
-				userId: b.userId,
+				actorId: b.actorId,
 				kind: 'build' as const,
 				status: b.status,
 				startedAt: b.startedAt,
 			})),
 			...runs.map((r) => ({
 				id: r.id,
-				userId: r.userId,
+				actorId: r.actorId,
 				kind: 'run' as const,
 				status: r.status,
 				startedAt: r.startedAt,
 			})),
 		]);
-		const rows = entries.map((e) => [e.id, e.userId, e.kind, e.status]);
-		res.send(layout('Logs', table(['id', 'userId', 'kind', 'status'], rows, 0, '/logs')));
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			entries.map(async (e) => [e.id, await names.actorLink(e.actorId), e.kind, e.status]),
+		);
+		res.send(layout('Logs', table(['id', 'actor', 'kind', 'status'], rows, 0, '/logs')));
 	});
 
 	app.get('/logs/:id', async (req, res) => {
@@ -566,8 +1072,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 
 	app.get('/datasets', async (_req, res) => {
 		const records = await listAllStorages('dataset');
-		const rows = records.map((r) => [r.id, r.userId, r.name ?? '', r.createdAt]);
-		res.send(layout('Datasets', table(['id', 'userId', 'name', 'createdAt'], rows, 0, '/datasets')));
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			records.map(async (r) => [r.id, await names.userName(r.userId), r.name ?? '', r.createdAt]),
+		);
+		res.send(layout('Datasets', table(['id', 'user', 'name', 'createdAt'], rows, 0, '/datasets')));
 	});
 
 	app.get('/datasets/:id', async (req, res) => {
@@ -583,7 +1092,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const body =
 			definitionList([
 				['id', record.id],
-				['userId', record.userId],
+				['user', await createNameResolver().userName(record.userId)],
 				['name', record.name ?? ''],
 				['itemCount', info.itemCount],
 				['createdAt', info.createdAt.toISOString()],
@@ -597,10 +1106,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 
 	app.get('/key-value-stores', async (_req, res) => {
 		const records = await listAllStorages('keyValueStore');
-		const rows = records.map((r) => [r.id, r.userId, r.name ?? '', r.createdAt]);
-		res.send(
-			layout('Key-value stores', table(['id', 'userId', 'name', 'createdAt'], rows, 0, '/key-value-stores')),
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			records.map(async (r) => [r.id, await names.userName(r.userId), r.name ?? '', r.createdAt]),
 		);
+		res.send(layout('Key-value stores', table(['id', 'user', 'name', 'createdAt'], rows, 0, '/key-value-stores')));
 	});
 
 	app.get('/key-value-stores/:id', async (req, res) => {
@@ -618,7 +1128,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const body =
 			definitionList([
 				['id', record.id],
-				['userId', record.userId],
+				['user', await createNameResolver().userName(record.userId)],
 				['name', record.name ?? ''],
 				['createdAt', record.createdAt],
 				['keyCount', allKeys.length],
@@ -633,8 +1143,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 
 	app.get('/request-queues', async (_req, res) => {
 		const records = await listAllStorages('requestQueue');
-		const rows = records.map((r) => [r.id, r.userId, r.name ?? '', r.createdAt]);
-		res.send(layout('Request queues', table(['id', 'userId', 'name', 'createdAt'], rows, 0, '/request-queues')));
+		const names = createNameResolver();
+		const rows = await Promise.all(
+			records.map(async (r) => [r.id, await names.userName(r.userId), r.name ?? '', r.createdAt]),
+		);
+		res.send(layout('Request queues', table(['id', 'user', 'name', 'createdAt'], rows, 0, '/request-queues')));
 	});
 
 	app.get('/request-queues/:id', async (req, res) => {
@@ -654,7 +1167,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const body =
 			definitionList([
 				['id', record.id],
-				['userId', record.userId],
+				['user', await createNameResolver().userName(record.userId)],
 				['name', record.name ?? ''],
 				['totalRequestCount', info.totalRequestCount],
 				['handledRequestCount', info.handledRequestCount],
@@ -678,13 +1191,16 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const state = getApiFallbackState();
 		const body =
 			apiFallbackWarning() +
+			'<section id="settings" data-live>' +
 			definitionList([
 				['fallbackUnimplementedEnabled', state.fallbackUnimplementedEnabled],
 				['fallbackNotFoundEnabled', state.fallbackNotFoundEnabled],
 				['upstreamBaseUrl', upstreamApiBaseUrl()],
+				['apifyProxyEnabled', isApifyProxyEnabled()],
 			]) +
 			'<h2>Change settings</h2>' +
-			settingsForm(state);
+			settingsForm(state, isApifyProxyEnabled()) +
+			'</section>';
 		res.send(layout('Settings', body));
 	});
 
@@ -703,6 +1219,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 			fallbackUnimplementedEnabled: body?.fallbackUnimplementedEnabled === 'on',
 			fallbackNotFoundEnabled: body?.fallbackNotFoundEnabled === 'on',
 		});
+		setApifyProxyEnabled(body?.apifyProxyEnabled === 'on');
 		res.redirect('/settings');
 	});
 

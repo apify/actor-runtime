@@ -1,13 +1,13 @@
 ---
 name: apify-actor-runtime
-description: Drive the local Apify Actor runtime - a self-contained local Apify platform that emulates the Apify API and console so Actors can be developed, run and debugged without the cloud. Covers pointing the Apify CLI at it, the no-rebuild dev-folder loop, IDE debugging, watching a Playwright/Puppeteer browser, migration testing, and relaying unimplemented calls to the real platform.
+description: Drive the local Apify Actor runtime - a self-contained local Apify platform that emulates the Apify API and console so Actors can be developed, run and debugged without the cloud. Covers pointing the Apify CLI at it, the no-rebuild dev-folder loop, IDE debugging, watching a Playwright/Puppeteer browser, an Actor's web server (live view), Actor Standby servers, migration testing, pay-per-event pricing and run cost estimates, and relaying unimplemented calls to the real platform.
 ---
 
 # Local Apify Actor runtime
 
 These are the operating instructions for the Actor runtime the reader is talking to: a local Apify
 platform serving an Apify-compatible API on `http://localhost:3333` and a console UI on
-`http://localhost:3000`. It emulates the subset of the Apify API needed to develop, run and debug
+`http://localhost:3000` (the defaults - see "Other ports" below). It emulates the subset of the Apify API needed to develop, run and debug
 Actors locally, so no change needs a rebuild on the real platform to be tried out.
 
 It is not the Apify platform. Actors, builds, runs and storages created here exist only in this
@@ -35,6 +35,14 @@ Any non-empty token authenticates - `apify login --token local-dev-token` is eno
 `APIFY_DISABLE_KEYRING=1` first in a sandbox with no OS keyring. To act as a second user, pass a
 different token on a single call: `apify api v2/datasets -H '{"authorization": "Bearer OTHER"}'`.
 
+### Other ports
+
+When 3333 or 3000 is taken on this machine, start the runtime on other ports:
+`apify runtime start --api-port 4333 --console-port 4000`. The CLI remembers them for later starts and
+for `apify runtime connect`; with a hand-started container, set `-e ACTOR_RUNTIME_API_PORT=4333
+-e ACTOR_RUNTIME_CONSOLE_PORT=4000` and publish the same numbers (`-p 4333:4333 -p 4000:4000`). Every URL
+in this document then uses those ports instead, `apify-api:3333` included.
+
 ## The normal loop
 
 ```sh
@@ -53,13 +61,156 @@ both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - a
 those is retried for `linux/amd64`, the architecture the Apify platform builds and runs on, with the
 reason in the build log. The engine emulates it (Rosetta on Apple Silicon), so it works, just slower.
 
+## Monorepo Actors (`dockerContextDir`)
+
+Push from the Actor's own folder; it builds as the platform builds it from Git with that folder selected:
+
+```sh
+cd monorepo/actors/my-actor
+apify push
+apify call
+```
+
+- The push sends your local working copy, uncommitted changes included, with a warning: the platform
+  builds only what is committed and pushed. `.actorignore` does not apply, as for Git builds.
+- No Git access or credentials are needed; check out the branch you want, then push.
+- `apify push` of such an Actor to the Apify platform stops with an error: it is not supported there yet
+  (https://github.com/apify/apify-core/issues/28685). Build it from the Git repository instead.
+
+## Dataset schema validation
+
+A dataset schema in `.actor/actor.json` is enforced as on the platform. It comes from the **build**, so
+an edited schema takes effect only after `apify push`.
+
+## Input schema: defaults and validation
+
+If the Actor declares an input schema - the `input` field of `.actor/actor.json`, or
+`.actor/INPUT_SCHEMA.json`, or `INPUT_SCHEMA.json` at its root - the runtime uses it the way the
+platform does:
+
+```sh
+apify call                                  # no input: the run gets the schema's defaults
+apify call --input '{"maxPages":0}'         # rejected before anything starts, if the schema forbids it
+```
+
+- Every field left out of `--input` is filled from the schema's `default`, and that filled-in input is
+  what the run reads back as `INPUT`.
+- An input the schema rejects fails the call with the same message the real API gives (`Input is not
+valid: Field input.maxPages must be >= 1`); no run is created and no container starts.
+- The schema comes from the **build**, so a locally edited `INPUT_SCHEMA.json` needs an `apify push` to
+  take effect - unlike a source edit under a registered dev folder.
+- A schema the Apify input-schema meta-schema rejects fails the **build**, with the defect in the build
+  log, instead of being silently ignored.
+- Secret input fields (`isSecret`) are stored encrypted in the run's `INPUT`, as on the platform; the
+  SDK's `Actor.getInput()` returns them decrypted, while reading the `INPUT` record directly shows
+  `ENCRYPTED_VALUE:...`.
+- One local difference: Apify Proxy groups are not checked (any `apifyProxyGroups` selection is
+  accepted).
+- Apify Proxy is **real**: when a proxy password is known (the runtime's `APIFY_PROXY_PASSWORD`, or the
+  real account behind the token), runs get it, so the Actor can use the real proxy, billed to that Apify
+  account; the run log carries a warning saying so. Unchecking "Use Apify Proxy" on the console's
+  Settings page (on by default) sets `APIFY_PROXY_PASSWORD` to an empty string instead.
+
+## Saved inputs (tasks)
+
+Tasks work as on the platform, for your own Actors: save an input and run options once, then run from
+them.
+
+```sh
+apify api POST v2/actor-tasks --body '{"actId": "my-actor", "name": "small-crawl", "input": {"maxPages": 3}, "options": {"memoryMbytes": 2048}}'
+apify api POST v2/actor-tasks/~small-crawl/runs                       # runs my-actor with the saved input
+apify api POST v2/actor-tasks/~small-crawl/runs --body '{"maxPages": 5}'  # merged over the saved input
+apify api GET v2/actor-tasks/~small-crawl/runs/last/dataset/items
+```
+
+- The SDKs' and `apify-client`'s task calls (`client.task(id).call()`, `getInput()`, `updateInput()`)
+  work against it, `run-sync` included. A task run's `actorTaskId`, and `ACTOR_TASK_ID` in its
+  container, name the task.
+- The saved input is validated against the input schema of the build the task runs, as on the platform.
+- A task of a Standby Actor has its own `standbyUrl` (see "Run an Actor server").
+- The console's Tasks page shows each task's input, run options, standby URL and runs.
+- Tasks cannot be published here.
+
+## Webhooks
+
+Webhooks work as on the platform, including `apify-client`'s webhook calls and `Actor.addWebhook()`.
+
+```sh
+apify api POST v2/webhooks --body '{"eventTypes": ["ACTOR.RUN.SUCCEEDED"], "condition": {"actorId": "<actorId>"}, "requestUrl": "https://example.com/hook"}'
+apify api GET v2/webhooks/<webhookId>/dispatches  # each delivery, with every attempt's status and answer
+```
+
+- Requests are sent from the runtime, where `localhost` is the runtime itself: reach a server on your
+  machine through `host.docker.internal` (Docker Desktop) or `host.containers.internal` (Podman).
+- A URL naming the runtime's own API (`http://localhost:3333/v2/...`) is authenticated as you unless it
+  has a `token`, so a webhook can start another local Actor.
+- Only HTTP request webhooks: Slack, email, Drive and GitHub actions are refused.
+
+## Schedules
+
+Schedules work as on the platform, including `apify-client`'s schedule calls, while the runtime is running.
+
+```sh
+apify api POST v2/schedules --body '{"cronExpression": "0 2 * * *", "isEnabled": true, "actions": [{"type": "RUN_ACTOR", "actorId": "<actorId>"}]}'
+apify api POST v2/schedules/<scheduleId>/invoke   # run its actions now
+apify api GET v2/schedules/<scheduleId>/log
+```
+
+- A run time that passed while the runtime was down is skipped, not made up.
+- No email is sent when a run fails to start; the schedule's log says so instead.
+
+## Run memory
+
+With no `-m`/`--memory`, a run gets `defaultMemoryMbytes` from `.actor/actor.json` - a number or a
+memory expression over the input, evaluated as the platform does - or the Actor's default run memory.
+Any memory, explicit or not, is then clamped to the Actor's `minMemoryMbytes` / `maxMemoryMbytes`, and
+the run log says so. An expression that fails falls back to the default run memory with a warning in
+the run log. The fields come from the
+build, so changing them needs an `apify push`.
+
+## Environment variables and secrets
+
+Declared in `.actor/actor.json` and sent by `apify push`, as on the platform:
+
+```sh
+apify secrets add myApiKey 'sk-...'   # stored by the CLI on your machine
+# .actor/actor.json: "environmentVariables": { "MODE": "dev", "API_KEY": "@myApiKey" }
+apify push
+```
+
+- Every run gets the version's env vars; the runtime's own `APIFY_*`/`ACTOR_*` vars always win over one
+  with the same name.
+- A secret's value is never returned by the API (a short `valueHash` changes when it is set again). It is
+  stored encrypted with a key pair of its own Actor, but that key pair sits in the same data directory:
+  a simplified scheme that stops accidental reads, not someone with access to that directory.
+- As on the platform, the run log shows `*********` for the exact value of a secret env var or of the
+  run's `APIFY_TOKEN`. Anything else is printed as is, secret input fields included, so do not log
+  secrets in any other form either.
+- Every run gets its Actor's private key as `APIFY_INPUT_SECRETS_PRIVATE_KEY_FILE` and
+  `APIFY_INPUT_SECRETS_PRIVATE_KEY_PASSPHRASE`, which the SDKs' `getInput()` uses to decrypt secret input
+  fields.
+- They reach the **build** only with `applyEnvVarsToBuild` on, as Docker build arguments, secrets
+  included; the Dockerfile reads each with `ARG NAME`:
+  `apify api PUT v2/actors/<actorId>/versions/0.0 --body '{"applyEnvVarsToBuild": true}'`. A later
+  `apify push` keeps the setting; with no local edits since, it needs `--force`.
+- `v2/actors/<actorId>/versions/<version>/env-vars` manages them one at a time. A change applies to the
+  next run, or to the next build for build arguments.
+
 ## Iterate without rebuilding (dev folder)
 
 After that first `apify push`, the runtime registers the pushed directory as the Actor's **dev
-folder** and bind-mounts it into every later run. Edit locally, recompile locally (`tsc`, or the
-language equivalent), and `apify call` again - no `apify push`, no rebuild:
+folder**. The live dev folder is **off by default**; once it is enabled for the Actor, the runtime
+bind-mounts that folder into every later run (the build log's `Registered live dev folder` line
+confirms it). Edit locally, recompile locally (`tsc`, or the language equivalent), and `apify call`
+again - no `apify push`, no rebuild.
+
+It pays off most for plain Python or JavaScript Actors whose source runs as-is, with no compile or
+other build step. For Actors that compile, generate files at build time, or use a non-standard image
+layout, the mounted folder has to match what the image expects at run time, which is easy to get
+wrong - there, `apify push` after each change is often the more reliable loop.
 
 ```sh
+apify api POST /actor-runtime/live-dev-folder/<actorId> --body '{"enabled": true}'   # once per Actor
 # edit src/main.ts
 npm run build
 apify call --input '{"maxPages":3}'   # picks up the new dist/
@@ -68,6 +219,8 @@ apify call --input '{"maxPages":3}'   # picks up the new dist/
 - A local recompile is picked up by the **next** run's container start, not by a run already going.
 - `node_modules` still comes from the built image, so a new dependency in `package.json` does need a
   real `apify push`. Only source edits skip the rebuild.
+- Disable it with `--body '{"enabled": false}'`; the Actor's console page has the same checkbox. While
+  it is off, each run's log says the registered folder is not mounted.
 - `apify call --no-dev-folder` runs once from the built image alone, leaving the registration alone.
 - Register a different folder by hand with
   `apify api POST /actor-runtime/dev-folder/<actorId> --body '"/abs/path/to/src"'`; clear it with
@@ -107,6 +260,111 @@ the display the Actor's browser draws on. Add `"interactive": true` to also send
 input. The browser must run **headful** to show anything; Apify's templates default to headless,
 which shows as a black display. Disable with `{"enabled": false}`.
 
+## See the web page an Actor serves (live view)
+
+A run's web server (`ACTOR_WEB_SERVER_PORT`) and `containerUrl` work as on the platform; the run log and
+the run's console page name the URL. Local differences:
+
+- The URL is `http://<runid>.runs.localhost:3333` (the run owns `/`), or
+  `http://localhost:3333/actor-runtime/container/<runId>` for clients that do not resolve `*.localhost`;
+  from another Actor's container, `http://apify-api:3333/actor-runtime/container/<runId>`.
+- Under rootless Podman 3.x the runtime container needs `--network slirp4netns:allow_host_loopback=true`
+  (`apify runtime start` adds it); without it only a standby run's server is reachable, and the run log
+  says so.
+- `samples/actor_ts` serves a progress page to try it with.
+
+## Test pay-per-event pricing and see what a run costs
+
+Give the Actor a pricing exactly the way the platform stores it - the `pricingInfos` array on the Actor
+object, which only an update takes, never the call that creates the Actor. Only `FREE` and
+`PAY_PER_EVENT` are emulated:
+
+```sh
+apify api PUT /v2/actors/<actorId> --body '{"pricingInfos":[{"pricingModel":"PAY_PER_EVENT",
+  "pricingPerEvent":{"actorChargeEvents":{
+    "page-scraped":{"eventTitle":"Page scraped","eventPriceUsd":0.002},
+    "apify-actor-start":{"eventTitle":"Actor start","eventPriceUsd":0.005,"isOneTimeEvent":true}}}}]}'
+```
+
+Both bundled samples already charge `page-scraped` per page and `crawl-finished` once at the end, and
+carry the matching pricing in `pricing.json` - including both synthetic events, so one run shows all
+four being charged: `apify api PUT /v2/actors/<actorId> --body "$(cat samples/actor_ts/pricing.json)"`
+prices one in a single call.
+
+From then on every run of the Actor is a pay-per-event run: the SDKs read `pricingInfo` and
+`chargedEventCounts` off the run object exactly as on the platform, and `Actor.charge()` (or
+`apify actor charge`) posts to `POST /v2/actor-runs/<runId>/charge`. Do not set
+`ACTOR_TEST_PAY_PER_EVENT` - the runtime already looks like the platform to the SDK, which refuses that
+variable together with `APIFY_IS_AT_HOME`. The synthetic events work too: `apify-actor-start` is charged
+at run start (once per GB of memory) and `apify-default-dataset-item` once per item pushed to the run's
+default dataset, when the pricing defines them. The start pre-charge scales with the run's memory and
+its count is written to the run log, so `-m 8192` charges eight start events, not one; a memory the
+platform would refuse (anything but a power of two between 128 MB and 32 GB) is warned about in the log
+and then used anyway. Tiered event prices resolve to the `BRONZE` (Starter) tier. The array is append-only, as on the platform: send the entries the Actor already has, unchanged,
+plus at most one new one starting after all of them - so making the Actor free again means appending a
+`{"pricingModel":"FREE"}` entry, not sending `[]`. Re-sending a file that was already applied is refused
+for the same reason (`pricingInfos[0] differs ...`): the stored entries carry timestamps the file does
+not, so append its entry to what `GET /v2/actors/<actorId>` returns rather than sending the file again.
+The same form is on the Actor's console page.
+
+Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?maxTotalChargeUsd=0.5'`
+(there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,
+its status message and log say so, and `chargingStoppedAt` is set on the run. An SDK with budget left
+for the next event stops charging by itself below the cap, so the abort only fires on a charge that
+crosses it - the JavaScript SDK's deliberate one-event overshoot does, the Python SDK never does.
+
+Read the outcome off the run object, `apify api GET actor-runs/<runId>`, or the run's console page:
+
+- `chargedEventCounts` and `eventUsage` - what was charged and what it adds up to per event.
+- `stats.computeUnits`, `usage`, `usageUsd` - the compute units (memory times run time) priced at the
+  lowest paid tier ($0.20 per unit), plus the sampled CPU and memory figures.
+- `usageTotalUsd` - compute units plus events. An estimate, never a bill: storage operations, data
+  transfer and proxy are not metered. On the platform a user of a pay-per-event Actor pays only the
+  events unless the pricing sets `isPPEPlatformUsagePaidByUser`.
+
+## Run an Actor server (Actor Standby)
+
+An Actor with Standby enabled is served over HTTP, as on the platform. `"usesStandbyMode": true` in
+`.actor/actor.json` makes `apify push` enable it; `apify api GET v2/actors/<actorId>` then shows the
+`actorStandby` settings and the Actor's `standbyUrl`:
+
+```sh
+apify push
+# The standby URL, as on the platform (<username>--<actor-name>.apify.actor); open it in a browser too:
+curl "http://<username>--<actor-name>.localhost:3333/some/path?token=<token>"
+# The same Actor, for clients that do not resolve *.localhost (older curl, many Node/Python clients):
+curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/path?token=<token>"
+```
+
+- The Actor's console page has the `*.localhost` standby URL with your token already in it (masked on screen), as a link
+  to click and a Copy link button - the quickest way to try it in a browser.
+- The first request starts a standby run (origin `STANDBY`, no timeout, the standby build and memory) and
+  waits until its server answers on `ACTOR_STANDBY_PORT` (4321); later requests reuse it. More runs start
+  once concurrent requests exceed `desiredRequestsPerActorRun` / `maxRequestsPerActorRun`.
+- Everything after the standby URL - path, query, headers, body, websockets - reaches the Actor unchanged.
+  The token (`?token=`, `Authorization: Bearer`) is required, and only the Actor's owner is served.
+  The Actor owns `/` of the `*.localhost` URL, as on the platform, so an Actor's web UI with root-relative
+  links (`fetch('/api/...')`) works; under the path form it would not. The Actor id can stand in for
+  `<username>--<actor-name>` in every form.
+- From another Actor's container use `http://apify-api:3333/actor-runtime/standby/<username>--<actor-name>`;
+  the Actor object read from inside a container already carries that as its `standbyUrl`.
+- A run idle for `idleTimeoutSecs` (300 by default) gets the `aborting` event, is stopped 15 s later and
+  ends `SUCCEEDED`. Shorten it while developing:
+  `apify api PUT v2/actors/<actorId> --body '{"actorStandby":{"idleTimeoutSecs":10}}'`.
+- After `apify push` the next request is served by a run of the new build; older runs finish once idle. A
+  dev-folder edit reaches only the next standby run - abort the current one (`apify runs abort <runId>`)
+  to pick it up sooner.
+- A request that cannot be served says why: `standby-not-enabled`, `standby-run-finished` (the run
+  crashed before its server came up - read its log), `standby-run-not-ready` (nothing listened on the port
+  within 180 s).
+- A task of the Actor is served the same way at its own `standbyUrl` (`<username>--<task-name>`), by its
+  own standby runs, with the task's `actorStandby` settings over the Actor's and, with
+  `shouldPassActorInput`, the task's input.
+- `apify call` still starts an ordinary `API` run of the same Actor. `samples/actor_standby_ts` and
+  `samples/actor_standby_py` are complete Actor servers (JSON, request body, Server-Sent Events, websocket,
+  graceful shutdown) to start from; `samples/actor_standby_web` serves a web page and, in an ordinary run,
+  calls a standby Actor from its container. Multi-tenant Standby is not emulated.
+
 ## Test how an Actor handles a platform migration
 
 While a run is `RUNNING`:
@@ -118,7 +376,7 @@ apify api POST /actor-runtime/migrate/<runId>
 The run gets the real migration experience: a `migrating` event, its container stopped a few seconds
 later, then a fresh container for the same run - same run id, env vars and storages, in-memory state
 gone. The Migrate button on the run's console page does the same.
-`POST /v2/actor-runs/<runId>/reboot` is also implemented.
+`POST /v2/actor-runs/<runId>/reboot` and `POST /v2/actor-runs/<runId>/resurrect` are also implemented.
 
 ## When this runtime does not implement something
 
@@ -133,24 +391,43 @@ apify api GET /actor-runtime/api-fallback     # read the current state
 
 Either field alone is accepted. Both default off and reset to off on every restart.
 
+Named storages follow the same path: a `username~name` reference the runtime has no local storage for
+is a not-found miss, so with `fallbackNotFoundEnabled` on, `apify api GET v2/datasets/apify~some-public-dataset/items`
+reads that dataset from the real platform, and your own `~name` that exists only on the platform
+resolves there too. A name that does exist locally is always served locally.
+
 **This writes to a real Apify account.** Enabling either forwards the token the failing call carried
 to the real platform, and every HTTP method is eligible - so a locally-missing `POST`/`PUT`/`DELETE`
 becomes a real write. Only turn it on with a token whose account you are willing to change, and say
 so before enabling it on someone's behalf. A relayed response carries `x-actor-runtime-fallback`
 (which platform served it) and `x-actor-runtime-fallback-trigger` (which toggle let it through).
 
+A `runs/last` call is never split between the two: an Actor that exists here is answered here, even when
+a later step misses. Only a call naming an Actor this runtime does not know is relayed.
+
 ## Inspecting state directly
 
 - `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
   The `v2/` prefix and the leading slash are both optional.
+- A named Actor, task, dataset, key-value store or request queue can stand in for its id as `~name` (your
+  own), `username~name` or `userId~name`, like on the platform:
+  `apify api GET v2/datasets/~my-results/items`. Names match case-insensitively. A bare name without
+  `~` is an id, except for an Actor, where it is also tried as a name. Another user's resource is not
+  found here - the runtime only ever shows your own.
 - Or unauthenticated by URL: `http://localhost:3333/v2/datasets?token=TOKEN`.
-- The console at `http://localhost:3000` shows the same objects, plus the dev-folder form, the
-  Migrate button and the browser view.
+- The `runs/last` shortcuts address an Actor's newest run without knowing its id:
+  `apify api GET v2/actors/<actorId>/runs/last`, and the same under `/log`, `/dataset/items`,
+  `/key-value-store/records/OUTPUT`, `/request-queue`, `/abort`. Add `?status=SUCCEEDED` to skip
+  failed runs. `client.actor(id).lastRun()` in the SDKs uses these; `v2/actor-tasks/<taskId>/runs/last`
+  does the same for a task.
+- The console at `http://localhost:3000` shows the same objects, plus the pricing and dev-folder forms,
+  each run's usage and cost, the Migrate button, the browser view, each run's `containerUrl` and an
+  Actor's standby runs.
 - The runtime's data directory holds every storage, build and run record on disk. Read it freely;
   write to it only through the API, never by editing the files.
 
 ## Reading the runtime's own output
 
 In a build or run log, everything the runtime itself says - dev-folder notices, the debug attach
-line, the browser-view URL, migration markers, a run that could not start - opens with a blue
+line, the container and browser-view URLs, migration markers, a run that could not start - opens with a blue
 `[actor-runtime]` prefix. The Actor's own output is passed through byte for byte.

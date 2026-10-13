@@ -16,7 +16,7 @@ function actorJson(spec: Record<string, unknown> | string): SourceFile {
 }
 
 describe('resolveDockerfileLocation', () => {
-	it('A: resolves the "dockerfile" field to .actor/Dockerfile (sample_actor_crawler layout)', () => {
+	it('A: resolves the "dockerfile" field to .actor/Dockerfile (samples/actor_crawler layout)', () => {
 		const result = resolveDockerfileLocation([
 			actorJson({ dockerfile: './Dockerfile' }),
 			text('.actor/Dockerfile', 'FROM python:3.11-slim\n'),
@@ -32,7 +32,7 @@ describe('resolveDockerfileLocation', () => {
 		]);
 	});
 
-	it('B: resolves "../Dockerfile" to the root Dockerfile (sample_actor_ts/py layout) - byte-identical to today\'s implicit default', () => {
+	it('B: resolves "../Dockerfile" to the root Dockerfile (samples/actor_ts/py layout) - byte-identical to today\'s implicit default', () => {
 		const result = resolveDockerfileLocation([
 			actorJson({ dockerfile: '../Dockerfile' }),
 			text('Dockerfile', 'FROM node:20\n'),
@@ -292,6 +292,49 @@ describe('resolveDockerfileLocation', () => {
 			expect(result.outcome).toBe('resolved');
 			if (result.outcome !== 'resolved') return;
 			expect(result.dockerfilePath).toBe('.actor/Dockerfile');
+		});
+	});
+});
+
+describe('resolveDockerfileLocation for an Actor in a subfolder of the pushed files', () => {
+	const ACTOR_PATH = 'actors/a';
+
+	it('resolves the "dockerfile" field relative to the Actor\'s .actor/, even outside the Actor\'s folder', () => {
+		const result = resolveDockerfileLocation(
+			[
+				text(`${ACTOR_PATH}/.actor/actor.json`, JSON.stringify({ dockerfile: '../../../shared/Dockerfile' })),
+				text('shared/Dockerfile', 'FROM node:20\n'),
+			],
+			ACTOR_PATH,
+		);
+
+		expect(result).toMatchObject({ outcome: 'resolved', dockerfilePath: 'shared/Dockerfile' });
+	});
+
+	it("looks for the default locations in the Actor's folder, not at the context root", () => {
+		const result = resolveDockerfileLocation(
+			[
+				text(`${ACTOR_PATH}/.actor/actor.json`, '{}'),
+				text('Dockerfile', 'FROM root\n'),
+				text(`${ACTOR_PATH}/Dockerfile`, 'FROM actor\n'),
+			],
+			ACTOR_PATH,
+		);
+
+		expect(result).toMatchObject({ outcome: 'resolved', dockerfilePath: `${ACTOR_PATH}/Dockerfile` });
+	});
+
+	it('fails a "dockerfile" field that leaves the pushed files, the platform\'s Actor root directory', () => {
+		const result = resolveDockerfileLocation(
+			[text(`${ACTOR_PATH}/.actor/actor.json`, JSON.stringify({ dockerfile: '../../../../Dockerfile' }))],
+			ACTOR_PATH,
+		);
+
+		expect(result).toEqual({
+			outcome: 'failure',
+			reason: 'escapes-actor-root',
+			message:
+				'Dockerfile path "../../../../Dockerfile" in .actor/actor.json points outside the Actor root directory.',
 		});
 	});
 });

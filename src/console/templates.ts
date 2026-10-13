@@ -1,7 +1,10 @@
 /** Minimal server-rendered HTML helpers. No SPA, no bundler, no build step (`console.md`). */
 
 import { getApiFallbackState, type ApiFallbackState } from '../services/api-fallback.js';
-import type { ActorLocalBrowserView, ActorLocalDebug, RunRecord } from '../storage/entities.js';
+import type { ActorLocalBrowserView, ActorLocalDebug, ActorPricingInfoRecord, RunRecord } from '../storage/entities.js';
+import { effectivePricingInfo, RESOLVED_PRICING_TIER } from '../services/pricing.js';
+import { STARTER_PLAN_COMPUTE_UNIT_PRICE_USD, type RunUsage } from '../services/run-usage.js';
+import { runStorageIds } from '../services/actor-storages.js';
 
 export function escapeHtml(value: unknown): string {
 	return String(value ?? '')
@@ -13,6 +16,9 @@ export function escapeHtml(value: unknown): string {
 
 const NAV = [
 	['/actors', 'Actors'],
+	['/tasks', 'Tasks'],
+	['/webhooks', 'Webhooks'],
+	['/schedules', 'Schedules'],
 	['/builds', 'Builds'],
 	['/runs', 'Runs'],
 	['/logs', 'Logs'],
@@ -36,36 +42,71 @@ function fallbackNavEntry(): string {
 	return `<a href="/settings">${label}</a>`;
 }
 
+/**
+ * Saves `form[data-autosave]` in the background - on any field's change, or a submit - through the
+ * same POST route a plain submit would hit, then swaps each `[data-live]` element (matched by id) for the
+ * version in the page the route redirects to, so status rows and inline errors stay server-rendered.
+ * Submissions of one form are serialized, and only the latest one's page is applied, so rapid clicks
+ * cannot land out of order. Any failure falls back to a plain submit.
+ */
+const AUTOSAVE_SCRIPT = `
+const inFlight = new WeakMap();
+async function save(form) {
+	const state = inFlight.get(form);
+	if (state) { state.again = true; return; }
+	inFlight.set(form, { again: false });
+	let page;
+	try {
+		do {
+			inFlight.get(form).again = false;
+			const res = await fetch(form.action, { method: 'POST', body: new URLSearchParams(new FormData(form)) });
+			if (!res.ok) throw new Error(res.statusText);
+			page = await res.text();
+		} while (inFlight.get(form).again);
+	} catch {
+		inFlight.delete(form);
+		form.submit();
+		return;
+	}
+	inFlight.delete(form);
+	const focused = document.activeElement?.name;
+	const fresh = new DOMParser().parseFromString(page, 'text/html');
+	for (const el of fresh.querySelectorAll('[data-live][id]')) document.getElementById(el.id)?.replaceWith(el);
+	if (focused) document.querySelector('#' + form.closest('[data-live]')?.id + ' [name="' + focused + '"]')?.focus();
+}
+document.addEventListener('change', (e) => {
+	const form = e.target.closest('form[data-autosave]');
+	if (form) save(form);
+});
+document.addEventListener('submit', (e) => {
+	if (!e.target.matches('form[data-autosave]')) return;
+	e.preventDefault();
+	save(e.target);
+});
+`;
+
 export function layout(title: string, body: string): string {
-	const nav = [...NAV.map(([href, label]) => `<a href="${href}">${label}</a>`), fallbackNavEntry()].join(' | ');
+	const nav = [...NAV.map(([href, label]) => `<a href="${href}">${label}</a>`), fallbackNavEntry()].join('');
 	return `<!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)} - actor-runtime console</title>
-<style>
-	body { font-family: -apple-system, sans-serif; margin: 2rem; color: #1a1a1a; }
-	nav { margin-bottom: 1.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid #ccc; }
-	nav a { margin-right: 0.5rem; text-decoration: none; color: #0b5fff; }
-	table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-	th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.9rem; }
-	th { background: #f5f5f5; }
-	dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
-	dt { font-weight: 600; }
-	pre { background: #f5f5f5; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
-	.empty { color: #777; font-style: italic; }
-	.error { color: #b00020; }
-	.warning { color: #94600b; }
-	.wide-input { width: 28rem; }
-	h1 { margin-top: 0; }
-	.browser-view-screen { width: 100%; height: 75vh; background: #222; }
-	.browser-view-screen canvas { outline: none; }
-</style>
+<link rel="stylesheet" href="/console.css">
 </head>
 <body>
-<nav>${nav}</nav>
+<header class="topbar">
+<div class="topbar-inner">
+<span class="brand">Apify <span>actor-runtime</span></span>
+<nav id="nav" data-live>${nav}</nav>
+</div>
+</header>
+<main>
 <h1>${escapeHtml(title)}</h1>
 ${body}
+</main>
+<script>${AUTOSAVE_SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -123,8 +164,23 @@ export function devFolderForm(actorId: string, currentValue: string, errorMessag
 	);
 }
 
-/** The debug-mode toggle form on the Actor detail view - full parity with the API body's three fields
- * (`enabled`/`language`/`port`), submitted together, never a partial-merge PATCH.
+export function liveDevFolderForm(actorId: string, enabled: boolean): string {
+	return (
+		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/live-dev-folder" data-autosave>` +
+		`<label><input type="checkbox" name="enabled"${enabled ? ' checked' : ''}> Use live dev folder ` +
+		'(runs mount the registered dev folder over the built image)</label>' +
+		'</form>'
+	);
+}
+
+function selectOptions(selected: string, options: Array<[string, string]>): string {
+	return options
+		.map(([value, label]) => `<option value="${value}"${selected === value ? ' selected' : ''}>${label}</option>`)
+		.join('');
+}
+
+/** The debug-mode form on the Actor detail view: one select (`off` or the API's `language`) plus the
+ * API's `port`, submitted together, never a partial-merge PATCH.
  *
  * `current` must be the *raw stored* `ActorLocalDebug`, not `debugStatus`'s display-computed value:
  * rendering the computed default port would pre-fill the port input, so an unrelated resubmission would
@@ -135,45 +191,48 @@ export function debugModeForm(
 	errorMessage?: string,
 ): string {
 	const errorHtml = errorMessage ? `<p class="error"><strong>Error:</strong> ${escapeHtml(errorMessage)}</p>` : '';
-	const language = current?.language ?? 'auto';
+	const language = current ? (current.language ?? 'auto') : 'off';
 	const portValue = current?.port !== undefined ? String(current.port) : '';
-	const option = (value: string, label: string) =>
-		`<option value="${value}"${language === value ? ' selected' : ''}>${label}</option>`;
 	return (
 		errorHtml +
-		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/debug">` +
-		`<label><input type="checkbox" name="enabled"${current ? ' checked' : ''}> enabled</label> ` +
-		`<label>language: <select name="language">` +
-		option('auto', 'auto') +
-		option('node', 'node') +
-		option('python', 'python') +
+		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/debug" data-autosave>` +
+		'<label>debug: <select name="language">' +
+		selectOptions(language, [
+			['off', 'No'],
+			['auto', 'Auto'],
+			['node', 'Node'],
+			['python', 'Python'],
+		]) +
 		'</select></label> ' +
 		`<label>port: <input type="number" name="port" value="${escapeHtml(portValue)}" min="1024" max="65535" ` +
-		'placeholder="(default)"></label> ' +
-		'<button type="submit">Save</button>' +
+		`placeholder="(default)"${current ? '' : ' disabled'}></label>` +
 		'</form>' +
-		'<p class="empty">Uncheck "enabled" and submit to turn debug mode off. Leave "port" blank to use the ' +
+		'<p class="empty">Leave "port" blank to use the ' +
 		"resolved language's own default port (5678 Python / 9229 Node) at run start.</p>"
 	);
 }
 
-/** The browser-view toggle form; both API fields, submitted together like `debugModeForm`. */
+/** The browser-view form; one select covering both API fields, submitted together like `debugModeForm`. */
 export function browserViewForm(
 	actorId: string,
 	current: ActorLocalBrowserView | null | undefined,
 	errorMessage?: string,
 ): string {
 	const errorHtml = errorMessage ? `<p class="error"><strong>Error:</strong> ${escapeHtml(errorMessage)}</p>` : '';
+	const mode = current ? (current.interactive ? 'interactive' : 'passive') : 'off';
 	return (
 		errorHtml +
-		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/browser-view">` +
-		`<label><input type="checkbox" name="enabled"${current ? ' checked' : ''}> enabled</label> ` +
-		`<label><input type="checkbox" name="interactive"${current?.interactive ? ' checked' : ''}> interactive ` +
-		'(deliver mouse/keyboard input from the viewer)</label> ' +
-		'<button type="submit">Save</button>' +
+		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/browser-view" data-autosave>` +
+		'<label>browser view: <select name="mode">' +
+		selectOptions(mode, [
+			['off', 'No'],
+			['passive', 'Passive'],
+			['interactive', 'Interactive'],
+		]) +
+		'</select></label>' +
 		'</form>' +
 		'<p class="empty">When on, every run of this Actor gets a live mirror of its display, linked from the ' +
-		"run's page. The browser must run headful to show anything (Crawlee JS: <code>headless: false</code>, " +
+		"run's page; Interactive also delivers mouse/keyboard input from the viewer. The browser must run headful to show anything (Crawlee JS: <code>headless: false</code>, " +
 		'Python: <code>headless=False</code>).</p>'
 	);
 }
@@ -230,6 +289,135 @@ connect();
 	);
 }
 
+/** Six decimals at most, trailing zeros trimmed, never exponent notation. */
+export function formatUsd(value: number): string {
+	return `$${Number(value.toFixed(6)).toString()}`;
+}
+
+/** The pricing in effect plus a form carrying the whole array, the same value the API takes
+ * (`console.md`). Tiered prices are shown resolved, since that is what a local run would be charged. */
+export function pricingSection(
+	actorId: string,
+	pricingInfos: ActorPricingInfoRecord[] | undefined,
+	errorMessage?: string,
+): string {
+	const effective = effectivePricingInfo(pricingInfos);
+	let summary: string;
+	if (!effective) {
+		summary = '<p class="empty">No pricing - the Actor is free. Runs report platform usage only.</p>';
+	} else if (effective.pricingModel !== 'PAY_PER_EVENT' || !effective.pricingPerEvent) {
+		summary = definitionList([
+			['pricingModel', effective.pricingModel],
+			['startedAt', effective.startedAt],
+		]);
+	} else {
+		const rows = Object.entries(effective.pricingPerEvent.actorChargeEvents).map(([eventName, event]) => [
+			eventName,
+			event.eventTitle,
+			event.eventPriceUsd !== undefined
+				? formatUsd(event.eventPriceUsd)
+				: `${formatUsd(event.eventTieredPricingUsd?.[RESOLVED_PRICING_TIER]?.tieredEventPriceUsd ?? 0)} (${RESOLVED_PRICING_TIER} tier)`,
+			event.isOneTimeEvent ? 'yes' : '',
+		]);
+		summary =
+			definitionList([
+				['pricingModel', effective.pricingModel],
+				['startedAt', effective.startedAt],
+			]) + table(['event', 'title', 'price per event', 'one-time'], rows);
+	}
+	const errorHtml = errorMessage ? `<p class="error"><strong>Error:</strong> ${escapeHtml(errorMessage)}</p>` : '';
+	const currentJson = JSON.stringify(pricingInfos ?? [], null, 2);
+	return (
+		'<h2>Pricing</h2>' +
+		summary +
+		errorHtml +
+		`<form method="post" action="/actors/${encodeURIComponent(actorId)}/pricing">` +
+		`<textarea name="pricingInfos" class="json-input" rows="12" spellcheck="false">${escapeHtml(currentJson)}</textarea>` +
+		'<button type="submit">Save</button>' +
+		'</form>' +
+		'<p class="empty">The whole <code>pricingInfos</code> array, as <code>PUT /v2/actors/:actorId</code> takes it - ' +
+		'only <code>FREE</code> and <code>PAY_PER_EVENT</code> are emulated. The array is append-only: keep the entries ' +
+		'already in the box and add at most one below them, starting after all of them. An entry with ' +
+		'<code>"pricingModel":"FREE"</code> makes the Actor free again. ' +
+		`Example: <code>[{"pricingModel":"PAY_PER_EVENT","pricingPerEvent":{"actorChargeEvents":{"page-scraped":{"eventTitle":"Page scraped","eventPriceUsd":0.002}}}}]</code></p>`
+	);
+}
+
+/** The run object's own estimate, with the compute and event components split and the assumptions named
+ * (`console.md`) - the figures are easy to mistake for a bill otherwise. */
+/** The run's own fields beside its storages, which wrap below them on a narrow screen. */
+export function runDetailsColumns(run: RunRecord, fields: Array<[string, unknown]>): string {
+	const { datasets, keyValueStores, requestQueues } = runStorageIds(run);
+	const groups: Array<[string, string, Record<string, string>]> = [
+		['dataset', '/datasets', datasets],
+		['key-value store', '/key-value-stores', keyValueStores],
+		['request queue', '/request-queues', requestQueues],
+	];
+	const storages = groups.flatMap(([type, prefix, byAlias]) =>
+		Object.entries(byAlias).map(([alias, id]): [string, LinkedCell] => [
+			`${type} (${alias})`,
+			{ text: id, href: `${prefix}/${encodeURIComponent(id)}` },
+		]),
+	);
+	return `<div class="columns">${definitionList(fields)}${definitionList(storages, 'Storages')}</div>`;
+}
+
+export function usageSection(run: RunRecord, usage: RunUsage): string {
+	const { stats } = usage;
+	const megabytes = (bytes: number | undefined) =>
+		bytes === undefined ? '' : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	const percent = (value: number | undefined) => (value === undefined ? '' : `${value.toFixed(1)} %`);
+	const rows: Array<[string, unknown]> = [
+		['run time', `${stats.runTimeSecs.toFixed(1)} s`],
+		[
+			'compute units',
+			`${stats.computeUnits.toFixed(6)} (${run.options.memoryMbytes} MB for ${stats.runTimeSecs.toFixed(1)} s)`,
+		],
+		[
+			'platform usage',
+			`${formatUsd(usage.platformUsageUsd)} (compute units at ${formatUsd(STARTER_PLAN_COMPUTE_UNIT_PRICE_USD)} each)`,
+		],
+		[
+			'memory avg / max / current',
+			[stats.memAvgBytes, stats.memMaxBytes, stats.memCurrentBytes].map(megabytes).join(' / '),
+		],
+		[
+			'CPU avg / max / current (of one core)',
+			[stats.cpuAvgUsage, stats.cpuMaxUsage, stats.cpuCurrentUsage].map(percent).join(' / '),
+		],
+	];
+	let events = '';
+	if (usage.eventUsage) {
+		rows.push(['pay-per-event charges', formatUsd(usage.eventsUsd)]);
+		rows.push([
+			'maxTotalChargeUsd',
+			run.options.maxTotalChargeUsd !== undefined && run.options.maxTotalChargeUsd > 0
+				? formatUsd(run.options.maxTotalChargeUsd) +
+					(run.chargingStoppedAt ? ` - reached at ${run.chargingStoppedAt}` : '')
+				: '(no cap)',
+		]);
+		const eventRows = Object.entries(usage.eventUsage).map(([eventName, event]) => [
+			eventName,
+			event.eventTitle,
+			String(run.chargedEventCounts?.[eventName] ?? 0),
+			formatUsd(run.pricingInfo?.pricingPerEvent?.actorChargeEvents[eventName]?.eventPriceUsd ?? 0),
+			formatUsd(event.eventTotalUsd),
+		]);
+		events =
+			'<h3>Charged events</h3>' + table(['event', 'title', 'charged', 'price per event', 'total'], eventRows);
+	}
+	rows.push(['usageTotalUsd', formatUsd(usage.usageTotalUsd)]);
+	return (
+		'<h2>Usage and cost</h2>' +
+		definitionList(rows) +
+		events +
+		`<p class="empty">An estimate, not a bill: compute units are the run's memory times its wall-clock time, priced at the ` +
+		`lowest paid subscription tier (${RESOLVED_PRICING_TIER}). Storage operations, data transfer and proxy usage are not counted. ` +
+		'<code>usageTotalUsd</code> is the platform usage plus the pay-per-event charges; on the platform a user of a ' +
+		'pay-per-event Actor pays only the events unless the pricing says otherwise.</p>'
+	);
+}
+
 /** Rendered only for a `RUNNING` run (`console.md`, "Migrate button"). */
 export function migrateRunForm(runId: string): string {
 	return (
@@ -249,26 +437,63 @@ export function apiFallbackWarning(): string {
 	return '<p class="warning">Enabling either option below forwards the caller\'s own Apify token to the upstream API shown above.</p>';
 }
 
-/** The `/settings` page's one form (`console.md`): two checkboxes, one submit, always submitting both
+/** The `/settings` page's one form (`console.md`): three checkboxes, always submitting all
  * checkboxes' current state together - an unchecked box is simply absent from the submitted body, which
  * the POST route (`console/server.ts`) reads as `false` for that field, never as "leave unchanged" (the
  * console form's own single-submit contract, unlike the API route's genuinely partial `POST`). */
-export function settingsForm(state: ApiFallbackState): string {
+export function settingsForm(state: ApiFallbackState, apifyProxyEnabled: boolean): string {
 	const checkedAttr = (enabled: boolean) => (enabled ? ' checked' : '');
 	return (
-		'<form method="post" action="/settings">' +
+		'<form method="post" action="/settings" data-autosave>' +
 		'<p><label><input type="checkbox" name="fallbackUnimplementedEnabled"' +
 		checkedAttr(state.fallbackUnimplementedEnabled) +
 		'> Fall back for unimplemented endpoints</label></p>' +
 		'<p><label><input type="checkbox" name="fallbackNotFoundEnabled"' +
 		checkedAttr(state.fallbackNotFoundEnabled) +
 		'> Fall back for not-found records</label></p>' +
-		'<button type="submit">Save</button>' +
+		'<p><label><input type="checkbox" name="apifyProxyEnabled"' +
+		checkedAttr(apifyProxyEnabled) +
+		'> Use Apify Proxy (gives Actors the real proxy password; their proxy traffic is billed to your Apify account)</label></p>' +
 		'</form>'
 	);
 }
 
-export function definitionList(fields: Array<[string, unknown]>): string {
+/** `title` heads the list in a first row spanning both columns. */
+export function definitionList(fields: Array<[string, unknown]>, title?: string): string {
 	const rows = fields.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${renderValue(value)}</dd>`).join('');
-	return `<dl>${rows}</dl>`;
+	const heading = title ? `<div class="dl-title" role="heading" aria-level="2">${escapeHtml(title)}</div>` : '';
+	return `<dl>${heading}${rows}</dl>`;
+}
+
+/**
+ * The standby URL with the owner's token in it, ready to open or copy. The token is masked on screen
+ * only, so it does not end up in a screenshot or a screen share; the link and the copied text carry it.
+ */
+export function standbyLink(standbyUrl: string, token: string): string {
+	const full = `${standbyUrl}/?token=${encodeURIComponent(token)}`;
+	return (
+		'<p class="standby-link">' +
+		`<a href="${escapeHtml(full)}" target="_blank" rel="noopener">${escapeHtml(standbyUrl)}/?token=••••••••</a> ` +
+		`<button type="button" data-copy="${escapeHtml(full)}">Copy link</button>` +
+		'</p>' +
+		`<script>
+for (const button of document.querySelectorAll('button[data-copy]')) {
+	button.addEventListener('click', async () => {
+		const text = button.dataset.copy;
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			// No clipboard API outside a secure context (the console opened by a non-localhost address).
+			const field = Object.assign(document.createElement('textarea'), { value: text });
+			document.body.append(field);
+			field.select();
+			document.execCommand('copy');
+			field.remove();
+		}
+		button.textContent = 'Copied';
+		setTimeout(() => (button.textContent = 'Copy link'), 1500);
+	});
+}
+</script>`
+	);
 }

@@ -1,4 +1,11 @@
-import type { ActorRecord, BuildRecord, RunRecord } from '../../storage/entities.js';
+import type { ActorRecord, ActorVersionRecord, BuildRecord, RunRecord } from '../../storage/entities.js';
+import { publicEnvVar } from '../../services/env-vars.js';
+import { getRunTelemetry } from '../../services/events-channel.js';
+import { runStorageIds } from '../../services/actor-storages.js';
+import { computeRunUsage } from '../../services/run-usage.js';
+import { standbyUrl, type StandbyUrlAudience } from '../../services/standby-config.js';
+import { containerUrl } from '../../services/container-url.js';
+import { defaultRunOptionsOf } from '../../services/default-run-options.js';
 
 /** Matches `services/actors.ts`'s `DEFAULT_BUILD_TAG` - backfilled here only for run records that
  * predate `options.build` (directly-seeded test fixtures); every real run always has it set already. */
@@ -7,7 +14,18 @@ const DEFAULT_RUN_BUILD_TAG = 'latest';
  * that predate `options.diskMbytes`; every real run always has it set already. */
 const DISK_MBYTES_PER_MEMORY_MBYTE = 2;
 
-export function actorDto(actor: ActorRecord, username: string) {
+/** Every version the API returns goes through here: secrets stay masked, `local*` fields stay off `/v2`. */
+export function versionDto(version: ActorVersionRecord) {
+	const publicVersion: Omit<ActorVersionRecord, 'localSourceContext'> & { localSourceContext?: unknown } = {
+		...version,
+	};
+	delete publicVersion.localSourceContext;
+	return publicVersion.envVars
+		? { ...publicVersion, envVars: publicVersion.envVars.map((envVar) => publicEnvVar(envVar, true)) }
+		: publicVersion;
+}
+
+export function actorDto(actor: ActorRecord, username: string, audience: StandbyUrlAudience = 'host') {
 	return {
 		id: actor.id,
 		userId: actor.userId,
@@ -18,9 +36,12 @@ export function actorDto(actor: ActorRecord, username: string) {
 		createdAt: actor.createdAt,
 		modifiedAt: actor.modifiedAt,
 		stats: { totalRuns: 0, totalUsers: 1 },
-		versions: actor.versions,
-		defaultRunOptions: { build: 'latest', timeoutSecs: 300, memoryMbytes: 1024 },
+		versions: actor.versions.map(versionDto),
+		defaultRunOptions: defaultRunOptionsOf(actor),
 		deploymentKey: actor.id,
+		pricingInfos: actor.pricingInfos ?? [],
+		...(actor.actorStandby ? { actorStandby: actor.actorStandby } : {}),
+		standbyUrl: actor.actorStandby?.isEnabled ? standbyUrl(actor, username, audience) : null,
 		taggedBuilds: Object.fromEntries(
 			Object.entries(actor.taggedBuilds).map(([tag, info]) => [
 				tag,
@@ -49,13 +70,17 @@ export function buildDto(build: BuildRecord) {
 	};
 }
 
-export function runDto(run: RunRecord) {
+export function runDto(run: RunRecord, audience: StandbyUrlAudience = 'host') {
+	// The accumulators outlive the run, and a run turns terminal a moment before they are copied onto its
+	// record, so reading them for a finished run too is what keeps its figures from briefly disappearing.
+	// Only a run whose figures were accumulated by an earlier process falls back to the record.
+	const usage = computeRunUsage(run, getRunTelemetry(run.id));
 	return {
 		id: run.id,
 		userId: run.userId,
 		actId: run.actorId,
 		actorId: run.actorId,
-		actorTaskId: undefined,
+		actorTaskId: run.actorTaskId,
 		status: run.status,
 		startedAt: run.startedAt,
 		finishedAt: run.finishedAt,
@@ -65,6 +90,7 @@ export function runDto(run: RunRecord) {
 		defaultDatasetId: run.defaultDatasetId,
 		defaultKeyValueStoreId: run.defaultKeyValueStoreId,
 		defaultRequestQueueId: run.defaultRequestQueueId,
+		storageIds: runStorageIds(run),
 		// `build`/`diskMbytes` and top-level `generalAccess` are required by the real Apify API contract
 		// (`apify-client`'s `RunOptions`/`Run` pydantic models have no default for any of the three) -
 		// every real run already has them (`services/runs.ts`'s `startRun`); the fallbacks here only cover
@@ -74,17 +100,26 @@ export function runDto(run: RunRecord) {
 			memoryMbytes: run.options.memoryMbytes,
 			timeoutSecs: run.options.timeoutSecs,
 			diskMbytes: run.options.diskMbytes ?? run.options.memoryMbytes * DISK_MBYTES_PER_MEMORY_MBYTE,
+			...(run.options.maxTotalChargeUsd !== undefined
+				? { maxTotalChargeUsd: run.options.maxTotalChargeUsd }
+				: {}),
+			...(run.options.restartOnError !== undefined ? { restartOnError: run.options.restartOnError } : {}),
 		},
 		generalAccess: run.generalAccess ?? 'FOLLOW_USER_SETTING',
 		meta: run.meta,
-		// The platform's restart-bookkeeping stats (see `RunRecord.stats`); zeros backfill old fixtures.
-		stats: {
-			migrationCount: run.stats?.migrationCount ?? 0,
-			rebootCount: run.stats?.rebootCount ?? 0,
-			restartCount: run.stats?.restartCount ?? 0,
-			resurrectCount: run.stats?.resurrectCount ?? 0,
-		},
+		...(run.meta.origin === 'STANDBY' ? { standby: { deployment: 'SINGLE_TENANT' } } : {}),
+		stats: usage.stats,
+		usage: usage.usage,
+		usageUsd: usage.usageUsd,
+		usageTotalUsd: usage.usageTotalUsd,
+		...(usage.eventUsage ? { eventUsage: usage.eventUsage } : {}),
+		// Omitted, not nulled, on a run without pricing - the SDKs key their "is this pay-per-event" check
+		// off the field's presence.
+		...(run.pricingInfo ? { pricingInfo: run.pricingInfo } : {}),
+		...(run.chargedEventCounts ? { chargedEventCounts: run.chargedEventCounts } : {}),
+		...(run.chargingStoppedAt ? { chargingStoppedAt: run.chargingStoppedAt } : {}),
 		statusMessage: run.statusMessage,
-		containerUrl: undefined,
+		...(run.isStatusMessageTerminal ? { isStatusMessageTerminal: true } : {}),
+		containerUrl: containerUrl(run.id, audience),
 	};
 }

@@ -37,7 +37,89 @@ export function isDockerAvailable(): boolean {
 	}
 }
 
+/** The engine the suite drives, as far as the runtime container's command depends on it (`runtimeRunArgs`). */
+export interface EngineInfo {
+	cli: 'docker' | 'podman';
+	rootless: boolean;
+	/** Podman only. */
+	podmanMajorVersion?: number;
+	/** Podman only: SELinux enforcing on the engine's host (Fedora; the Fedora-based VM of Podman Desktop /
+	 * `podman machine` on macOS and Windows, and of Lima's Podman template the macOS CI leg uses). */
+	selinux?: boolean;
+}
+
+export function detectEngine(): EngineInfo {
+	if (CONTAINER_CLI !== 'podman') return { cli: 'docker', rootless: false };
+	try {
+		const output = execFileSync(
+			CONTAINER_CLI,
+			['info', '--format', '{{.Host.Security.Rootless}} {{.Host.Security.SELinuxEnabled}} {{.Version.Version}}'],
+			{ encoding: 'utf8' },
+		).trim();
+		const [rootless, selinux, version] = output.split(/\s+/);
+		const major = Number(version?.match(/^(\d+)\./)?.[1]);
+		return {
+			cli: 'podman',
+			rootless: rootless === 'true',
+			podmanMajorVersion: Number.isInteger(major) ? major : undefined,
+			selinux: selinux === 'true',
+		};
+	} catch {
+		return { cli: 'podman', rootless: false };
+	}
+}
+
+export interface RuntimeRunArgsOptions {
+	image: string;
+	containerName: string;
+	hostSocketPath: string;
+	/** Mounted as the runtime's `/data`: a host directory, as the CLI mounts, or a named volume. */
+	dataMount: string;
+	/** Arguments the CLI's command does not have, placed right before the image - the suite's own
+	 * additions for the host it runs on (`engineSecurityOptions`). Empty by default, so the pinned
+	 * CLI-verbatim command is unchanged. */
+	extraRunArgs?: string[];
+}
+
+/**
+ * The command `apify runtime start --detach` runs, as apify-cli's `buildRuntimeRunArgs` builds it (the
+ * container name and the data mount aside), so the suite starts the runtime exactly the way the CLI
+ * does on every engine - including the host-loopback network mode rootless Podman 3.x needs
+ * (`actor-driver.md`'s "Web server (live view)"). `test/unit/e2e-runtime-command.test.ts` pins it.
+ */
+export function runtimeRunArgs(engine: EngineInfo, options: RuntimeRunArgsOptions): string[] {
+	const hostLoopback = engine.cli === 'podman' && engine.rootless && engine.podmanMajorVersion === 3;
+	return [
+		'run',
+		'--rm',
+		'--init',
+		'--name',
+		options.containerName,
+		'--detach',
+		...(hostLoopback ? ['--network', 'slirp4netns:allow_host_loopback=true'] : []),
+		'-p',
+		'3333:3333',
+		'-p',
+		'3000:3000',
+		'-v',
+		`${options.hostSocketPath}:${RUNTIME_SOCKET_PATH}`,
+		'-v',
+		`${options.dataMount}:/data`,
+		...(options.extraRunArgs ?? []),
+		options.image,
+	];
+}
+
+/** Set to an already built runtime image to test that instead of building one from this checkout - for
+ * a machine whose container builds cannot reach the package registries the runtime's Dockerfile needs. */
+const PREBUILT_RUNTIME_IMAGE_ENV_VAR = 'ACTOR_RUNTIME_E2E_IMAGE';
+
 export function buildRuntimeImage(repoRoot: string, tag: string): void {
+	const prebuilt = process.env[PREBUILT_RUNTIME_IMAGE_ENV_VAR];
+	if (prebuilt) {
+		execFileSync(CONTAINER_CLI, ['tag', prebuilt, tag], { stdio: 'inherit' });
+		return;
+	}
 	execFileSync(CONTAINER_CLI, ['build', '-t', tag, repoRoot], { stdio: 'inherit' });
 }
 
@@ -55,17 +137,17 @@ export function pullBaseImages(): void {
 	}
 }
 
-/** `sample_actor_playwright/Dockerfile`'s base image - pulled only by its own e2e file, not by
+/** `samples/actor_playwright/Dockerfile`'s base image - pulled only by its own e2e file, not by
  * `pullBaseImages`, since it is large and no other file builds against it. */
 export const PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-node-playwright-chrome:24-1.61.1';
 
-/** `sample_actor_nonstandard`'s base image, pulled only by `nonstandard-actor.test.ts`. */
+/** `samples/actor_nonstandard`'s base image, pulled only by `nonstandard-actor.test.ts`. */
 export const NONSTANDARD_ACTOR_BASE_IMAGE = 'docker.io/library/python:3.11-slim';
 
 /** Base image of the no-`WORKDIR` Actor `nonstandard-actor.test.ts` builds inline. */
 export const NO_WORKDIR_ACTOR_BASE_IMAGE = 'docker.io/library/busybox';
 
-/** `sample_actor_playwright_py/Dockerfile`'s base image. */
+/** `samples/actor_playwright_py/Dockerfile`'s base image. */
 export const PYTHON_PLAYWRIGHT_BASE_IMAGE = 'docker.io/apify/actor-python-playwright:3.14-1.61.0';
 
 /** Pre-pull one base image, with the same fallback the runtime's builds have (`build-platform.ts`):
@@ -92,19 +174,10 @@ export function pullImage(image: string): void {
  * (Fedora; the Fedora-based VM of Podman Desktop / `podman machine` on macOS and Windows): without it,
  * SELinux keeps the container from the engine's socket bind-mounted into it - README's "Running with
  * Podman" documents the same flag for users. Docker hosts and Podman hosts without SELinux get nothing
- * extra, so the suite there runs the documented command verbatim, as before.
+ * extra, so the suite there runs `apify runtime start`'s own command verbatim (`runtimeRunArgs`).
  */
-function engineSecurityOptions(): string[] {
-	if (CONTAINER_CLI !== 'podman') return [];
-	try {
-		const enabled = execFileSync(CONTAINER_CLI, ['info', '--format', '{{.Host.Security.SELinuxEnabled}}'], {
-			encoding: 'utf8',
-			stdio: ['ignore', 'pipe', 'ignore'],
-		}).trim();
-		return enabled === 'true' ? ['--security-opt', 'label=disable'] : [];
-	} catch {
-		return [];
-	}
+function engineSecurityOptions(engine: EngineInfo): string[] {
+	return engine.cli === 'podman' && engine.selinux ? ['--security-opt', 'label=disable'] : [];
 }
 
 export function startRuntimeContainer(tag: string, containerName: string): void {
@@ -113,34 +186,23 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 	// below, in place; `docker run` would then fail with "name is already in use" / "port is already
 	// allocated". The name is this suite's own, so removing whatever holds it is always the right call.
 	removeContainerAndDataVolume(containerName);
-	execFileSync(
-		CONTAINER_CLI,
-		[
-			'run',
-			'-d',
-			'--name',
-			containerName,
-			// Host ports are fixed, not derived from `containerName` - only one runtime container can ever
-			// be bound to 3333/3000 at a time. `package.json`'s `test:e2e` script therefore runs
-			// `vitest run test/e2e --no-file-parallelism`: if a second e2e file's `beforeAll` ever raced
-			// this one, the loser's `docker run` would fail with "port is already allocated" and take that
-			// file's whole suite down with it. Adding an e2e file is safe as long as the suite stays
-			// serialized on one daemon - do not drop `--no-file-parallelism` without also parameterizing
-			// these two ports per container. CI parallelizes by running each file in its own job instead
-			// (`.github/workflows/ci.yml`).
-			'-p',
-			'3333:3333',
-			'-p',
-			'3000:3000',
-			'-v',
-			`${hostEngineSocketPath()}:${RUNTIME_SOCKET_PATH}`,
-			'-v',
-			`${containerName}-data:/data`,
-			...engineSecurityOptions(),
-			tag,
-		],
-		{ stdio: 'inherit' },
-	);
+	// Host ports are fixed, not derived from `containerName` - only one runtime container can ever be
+	// bound to 3333/3000 at a time. `package.json`'s `test:e2e` script therefore runs
+	// `vitest run test/e2e --no-file-parallelism`: if a second e2e file's `beforeAll` ever raced this
+	// one, the loser's `docker run` would fail with "port is already allocated" and take that file's
+	// whole suite down with it. Adding an e2e file is safe as long as the suite stays serialized on one
+	// daemon - do not drop `--no-file-parallelism` without also parameterizing these two ports per
+	// container. CI parallelizes by running each file in its own job instead (`.github/workflows/ci.yml`).
+	const engine = detectEngine();
+	const args = runtimeRunArgs(engine, {
+		image: tag,
+		containerName,
+		hostSocketPath: hostEngineSocketPath(),
+		dataMount: `${containerName}-data`,
+		extraRunArgs: engineSecurityOptions(engine),
+	});
+	process.stdout.write(`${CONTAINER_CLI} ${args.join(' ')}\n`);
+	execFileSync(CONTAINER_CLI, args, { stdio: 'inherit' });
 }
 
 export function stopRuntimeContainer(containerName: string): void {

@@ -21,6 +21,7 @@ import {
 	apify,
 	apifyAllOutput,
 	apifyEnv,
+	apifyExpectingFailure,
 	createIsolatedApifyHome,
 	loginApifyCli,
 	removeIsolatedApifyHome,
@@ -69,8 +70,8 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 	});
 
 	const cases = [
-		{ actorDir: join(REPO_ROOT, 'sample_actor_ts'), label: 'TypeScript sample actor' },
-		{ actorDir: join(REPO_ROOT, 'sample_actor_py'), label: 'Python sample actor' },
+		{ actorDir: join(REPO_ROOT, 'samples', 'actor_ts'), label: 'TypeScript sample actor' },
+		{ actorDir: join(REPO_ROOT, 'samples', 'actor_py'), label: 'Python sample actor' },
 	];
 
 	for (const { actorDir, label } of cases) {
@@ -106,12 +107,37 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 		);
 	}
 
+	it('Python sample actor fills the extra datasets its .actor/actor.json declares', () => {
+		const env = apifyEnv(isolatedApifyHome);
+		const actorDir = join(REPO_ROOT, 'samples', 'actor_py');
+		const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 2 }), '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		const call = JSON.parse(callOutput) as CallResult;
+		expect(call.run.status).toBe('SUCCEEDED');
+
+		const runApiOutput = apify(['api', 'GET', `actor-runs/${call.run.id}`], { cwd: REPO_ROOT, env });
+		const { datasets } = (
+			JSON.parse(runApiOutput) as ApiEnvelope<{ storageIds: { datasets: Record<string, string> } }>
+		).data.storageIds;
+		expect(datasets.default).toBe(call.storage.defaultDatasetId);
+
+		const itemCountOf = (datasetId: string | undefined): number => {
+			expect(datasetId).toBeTruthy();
+			const infoOutput = apify(['datasets', 'info', datasetId!, '--json'], { cwd: actorDir, env });
+			return (JSON.parse(infoOutput) as DatasetInfoResult).itemCount;
+		};
+		expect(itemCountOf(datasets.pageLinks)).toBe(2);
+		expect(itemCountOf(datasets.summary)).toBe(1);
+	});
+
 	it(
-		'sample_actor_crawler: push -> build succeeds (build-only - its Dockerfile lives at .actor/Dockerfile, ' +
+		'samples/actor_crawler: push -> build succeeds (build-only - its Dockerfile lives at .actor/Dockerfile, ' +
 			'the layout that used to fail with a daemon-side "Cannot locate specified Dockerfile" error)',
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
-			const actorDir = join(REPO_ROOT, 'sample_actor_crawler');
+			const actorDir = join(REPO_ROOT, 'samples', 'actor_crawler');
 
 			const pushOutput = apify(['push', '--json'], { cwd: actorDir, env });
 			const push = JSON.parse(pushOutput) as PushResult;
@@ -124,7 +150,7 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 	it('the run log contains the crawler per-page lines', () => {
 		const env = apifyEnv(isolatedApifyHome);
 		const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-			cwd: join(REPO_ROOT, 'sample_actor_ts'),
+			cwd: join(REPO_ROOT, 'samples', 'actor_ts'),
 			env,
 		});
 		const call = JSON.parse(callOutput) as CallResult;
@@ -133,10 +159,49 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 		expect(log).toMatch(/Processing/);
 	});
 
+	it("a call with no input at all runs on the input schema's defaults, and one the schema rejects never starts", () => {
+		const env = apifyEnv(isolatedApifyHome);
+		const actorDir = join(REPO_ROOT, 'samples', 'actor_ts');
+
+		const callOutput = apify(['call', '--json'], { cwd: actorDir, env });
+		const call = JSON.parse(callOutput) as CallResult;
+		expect(call.run.status).toBe('SUCCEEDED');
+
+		// The run's own INPUT record, which only the runtime ever writes: every field of the schema, at
+		// its default. This is what distinguishes the schema's defaults from the Actor's own internal
+		// fallback for a missing field - the item count alone cannot tell the two apart.
+		const storedInput = apify(['key-value-stores', 'get-value', call.storage.defaultKeyValueStoreId, 'INPUT'], {
+			cwd: actorDir,
+			env,
+		});
+		expect(JSON.parse(storedInput) as Record<string, unknown>).toEqual({
+			startUrl: 'https://crawlee.dev/',
+			maxPages: 10,
+		});
+
+		const infoOutput = apify(['datasets', 'info', call.storage.defaultDatasetId, '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		// A 10-page crawl of crawlee.dev can drain its queue a page short of `maxPages` (seen: 9), so the
+		// count only has to rule out the old default of 2; the INPUT check above pins the defaults.
+		const { itemCount } = JSON.parse(infoOutput) as DatasetInfoResult;
+		expect(itemCount).toBeGreaterThan(2);
+		expect(itemCount).toBeLessThanOrEqual(10);
+
+		// `maxPages` has `minimum: 1` - the run is refused before any container starts, and the CLI
+		// surfaces the runtime's validation message.
+		const rejected = apifyExpectingFailure(['call', '--input', JSON.stringify({ maxPages: 0 }), '--json'], {
+			cwd: actorDir,
+			env,
+		});
+		expect(rejected).toMatch(/maxPages/);
+	});
+
 	it('apify api reads back the run and its default dataset (requirements/cli.md: `apify api`)', () => {
 		const env = apifyEnv(isolatedApifyHome);
 		const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-			cwd: join(REPO_ROOT, 'sample_actor_ts'),
+			cwd: join(REPO_ROOT, 'samples', 'actor_ts'),
 			env,
 		});
 		const call = JSON.parse(callOutput) as CallResult;

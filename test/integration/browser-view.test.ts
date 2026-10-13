@@ -64,6 +64,9 @@ function viewerCapturingDriver(
 		async stopBrowserViewer(runId) {
 			events.push(`stopBrowserViewer:${runId}`);
 		},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			return { env: {} };
 		},
@@ -212,22 +215,18 @@ describe('console: browser-view form on the Actor detail view', () => {
 
 		const detail = await axios.get(`${consoleBaseUrl}/actors/${actor.id}`);
 		expect(detail.data).toContain('(browser view is off)');
-		expect(detail.data).toContain(`<form method="post" action="/actors/${actor.id}/browser-view">`);
+		expect(detail.data).toContain(`<form method="post" action="/actors/${actor.id}/browser-view" data-autosave>`);
 	});
 
-	it('submitting enabled+interactive persists the same state the API would, and shows it', async () => {
+	it('submitting interactive persists the same state the API would, and shows it', async () => {
 		await setUpConsole();
 		const actor = await server.client.actors().create({ name: 'bv-console-submit-actor' });
 
-		const submit = await axios.post(
-			`${consoleBaseUrl}/actors/${actor.id}/browser-view`,
-			'enabled=on&interactive=on',
-			{
-				headers: formHeaders,
-				maxRedirects: 0,
-				validateStatus: () => true,
-			},
-		);
+		const submit = await axios.post(`${consoleBaseUrl}/actors/${actor.id}/browser-view`, 'mode=interactive', {
+			headers: formHeaders,
+			maxRedirects: 0,
+			validateStatus: () => true,
+		});
 		expect(submit.status).toBe(302);
 		expect(submit.headers.location).toBe(`/actors/${actor.id}`);
 		expect((await getRegistries().actors.get(actor.id))?.localBrowserView).toEqual({ interactive: true });
@@ -236,12 +235,25 @@ describe('console: browser-view form on the Actor detail view', () => {
 		expect(detail.data).toContain('on, interactive');
 	});
 
-	it('submitting with "enabled" unchecked clears the toggle even with interactive checked', async () => {
+	it('submitting passive persists a view-only toggle', async () => {
+		await setUpConsole();
+		const actor = await server.client.actors().create({ name: 'bv-console-passive-actor' });
+
+		const submit = await axios.post(`${consoleBaseUrl}/actors/${actor.id}/browser-view`, 'mode=passive', {
+			headers: formHeaders,
+			maxRedirects: 0,
+			validateStatus: () => true,
+		});
+		expect(submit.status).toBe(302);
+		expect((await getRegistries().actors.get(actor.id))?.localBrowserView).toEqual({ interactive: false });
+	});
+
+	it('submitting "No" clears the toggle', async () => {
 		await setUpConsole();
 		const actor = await server.client.actors().create({ name: 'bv-console-clear-actor' });
 		await post(server.baseUrl, actor.id, { enabled: true, interactive: true }, server.token);
 
-		const submit = await axios.post(`${consoleBaseUrl}/actors/${actor.id}/browser-view`, 'interactive=on', {
+		const submit = await axios.post(`${consoleBaseUrl}/actors/${actor.id}/browser-view`, 'mode=off', {
 			headers: formHeaders,
 			maxRedirects: 0,
 			validateStatus: () => true,
@@ -254,7 +266,7 @@ describe('console: browser-view form on the Actor detail view', () => {
 		await setUpConsole();
 		const actor = await server.client.actors().create({ name: 'bv-console-cross-site-actor' });
 
-		const submit = await axios.post(`${consoleBaseUrl}/actors/${actor.id}/browser-view`, 'enabled=on', {
+		const submit = await axios.post(`${consoleBaseUrl}/actors/${actor.id}/browser-view`, 'mode=passive', {
 			headers: { ...formHeaders, 'Sec-Fetch-Site': 'cross-site' },
 			validateStatus: () => true,
 		});
@@ -264,7 +276,7 @@ describe('console: browser-view form on the Actor detail view', () => {
 
 	it('a 404 for a nonexistent Actor id renders Not found, not a 500', async () => {
 		await setUpConsole();
-		const res = await axios.post(`${consoleBaseUrl}/actors/totally-made-up-id/browser-view`, 'enabled=on', {
+		const res = await axios.post(`${consoleBaseUrl}/actors/totally-made-up-id/browser-view`, 'mode=passive', {
 			headers: formHeaders,
 			validateStatus: () => true,
 		});
@@ -305,7 +317,11 @@ describe('run lifecycle with browser view (services/runs.ts, through the real st
 		const ctx = capturing.startRunContexts[0]!;
 		expect(ctx.x11SocketVolume).toBe('vol-x');
 		// The container's environment is exactly an ordinary run's - nothing browser-view-specific leaks in.
-		expect(Object.keys(ctx.env).some((key) => /BROWSER|VIEW|DISPLAY|HEADLESS/i.test(key))).toBe(false);
+		// `APIFY_HEADLESS` is the platform's own, always `1`: the viewer mirrors the display, it does not
+		// turn headless mode off.
+		const envKeys = Object.keys(ctx.env).filter((key) => key !== 'APIFY_HEADLESS');
+		expect(envKeys.some((key) => /BROWSER|VIEW|DISPLAY|HEADLESS/i.test(key))).toBe(false);
+		expect(ctx.env.APIFY_HEADLESS).toBe('1');
 
 		const stored = await getRegistries().runs.get(run.id);
 		expect(stored?.localBrowserView).toEqual({ interactive: true, vncHost: '172.18.0.5', vncPort: 5900 });

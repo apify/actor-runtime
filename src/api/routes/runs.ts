@@ -3,12 +3,35 @@ import type { Router } from 'express';
 import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
-import { cannotRemoveRunningRun, jobAlreadyFinished, recordNotFound } from '../errors.js';
-import { h, paginationParams, queryBoolean } from '../handler.js';
-import { abortRun, deleteRun, getOwnedRun, listOwnedRuns } from '../../services/runs.js';
+import {
+	cannotChargeApifyEvent,
+	cannotChargeNonPayPerEventActor,
+	cannotRemoveRunningRun,
+	cannotResurrectUnfinishedRun,
+	cannotSetIsStatusMessageTerminal,
+	invalidRequest,
+	jobAlreadyFinished,
+	parametersMismatched,
+	recordNotFound,
+} from '../errors.js';
+import { h, jsonBody, paginationParams, queryBoolean, queryNumber, queryString } from '../handler.js';
+import {
+	abortRun,
+	deleteRun,
+	getOwnedRun,
+	listOwnedRuns,
+	resurrectRun,
+	setRunStatusMessage,
+} from '../../services/runs.js';
 import { rebootRun } from '../../services/migrations.js';
+import { chargeEvent, MAX_CHARGE_COUNT } from '../../services/charging.js';
 import { isTerminalJobStatus } from '../../services/job-status.js';
+import { getOwnedActor } from '../../services/actors.js';
+import { resolveProxyPassword } from '../../services/users.js';
+import { standbyUrl } from '../../services/standby-config.js';
+import { CONTAINER_API_BASE_URL } from '../../config.js';
 import { runDto } from '../dto/actors.js';
+import { standbyUrlAudienceOf } from '../../services/standby-config.js';
 import type { ApiServerDeps } from '../server.js';
 import { serveLog } from './logs.js';
 
@@ -19,7 +42,8 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 			const runs = await listOwnedRuns(requireUser(req).id);
 			const sorted = sortByTimestamp(runs, (run) => run.startedAt);
 			const envelope = paginate(sorted, paginationParams(req));
-			sendData(res, { ...envelope, items: envelope.items.map(runDto) });
+			const audience = standbyUrlAudienceOf(req.headers.host);
+			sendData(res, { ...envelope, items: envelope.items.map((run) => runDto(run, audience)) });
 		}),
 	);
 
@@ -28,7 +52,35 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
 			if (!run) throw recordNotFound();
-			sendData(res, runDto(run));
+			sendData(res, runDto(run, standbyUrlAudienceOf(req.headers.host)));
+		}),
+	);
+
+	// What the SDKs' `Actor.setStatusMessage()` and `Actor.exit()`/`fail()` with a message call.
+	router.put(
+		'/actor-runs/:runId',
+		h(async (req, res) => {
+			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
+			if (!run) throw recordNotFound();
+
+			const body = jsonBody<{ statusMessage?: unknown; isStatusMessageTerminal?: unknown }>(req);
+			const { statusMessage, isStatusMessageTerminal } = body;
+			if (statusMessage !== undefined && statusMessage !== null && typeof statusMessage !== 'string') {
+				throw invalidRequest('"statusMessage" must be a string');
+			}
+			if (
+				isStatusMessageTerminal !== undefined &&
+				isStatusMessageTerminal !== null &&
+				typeof isStatusMessageTerminal !== 'boolean'
+			) {
+				throw invalidRequest('"isStatusMessageTerminal" must be a boolean');
+			}
+			const message = typeof statusMessage === 'string' ? truncateStatusMessage(statusMessage) : undefined;
+			if (isStatusMessageTerminal === true && !message) throw cannotSetIsStatusMessageTerminal();
+
+			const updated = await setRunStatusMessage(run.id, message, isStatusMessageTerminal === true);
+			if (!updated) throw recordNotFound();
+			sendData(res, runDto(updated));
 		}),
 	);
 
@@ -58,7 +110,7 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 			// (`services/runs.ts: abortRun`'s doc comment).
 			const gracefully = queryBoolean(req, 'gracefully') ?? false;
 			const updated = await abortRun(deps.driver, run, gracefully);
-			sendData(res, runDto(updated ?? run));
+			sendData(res, runDto(updated ?? run, standbyUrlAudienceOf(req.headers.host)));
 		}),
 	);
 
@@ -71,7 +123,52 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 			// default `migrating` handler.
 			if (isTerminalJobStatus(run.status)) throw jobAlreadyFinished();
 			const updated = await rebootRun(deps.driver, run);
-			sendData(res, runDto(updated ?? run));
+			sendData(res, runDto(updated ?? run, standbyUrlAudienceOf(req.headers.host)));
+		}),
+	);
+
+	router.post(
+		'/actor-runs/:runId/resurrect',
+		h(async (req, res) => {
+			const user = requireUser(req);
+			const run = await getOwnedRun(user.id, req.params.runId as string);
+			if (!run) throw recordNotFound();
+			const timeoutSecs = queryNumber(req, 'timeout');
+			if (timeoutSecs !== undefined && timeoutSecs < 0) throw invalidRequest('"timeout" must be a number >= 0');
+			const memoryMbytes = queryNumber(req, 'memory');
+			if (memoryMbytes !== undefined && memoryMbytes <= 0) throw invalidRequest('"memory" must be a number > 0');
+			const maxTotalChargeUsd = queryNumber(req, 'maxTotalChargeUsd');
+			if (maxTotalChargeUsd !== undefined && maxTotalChargeUsd < 0) {
+				throw invalidRequest('"maxTotalChargeUsd" must be a number >= 0');
+			}
+			const actor = await getOwnedActor(user.id, run.actorId);
+			if (!actor) throw recordNotFound('Actor associated with the given run');
+
+			const result = await resurrectRun(deps.driver, actor, run, {
+				build: queryString(req, 'build'),
+				timeoutSecs,
+				memoryMbytes,
+				maxTotalChargeUsd,
+				restartOnError: queryBoolean(req, 'restartOnError'),
+				// The same runtime-only extension run start takes (`api.md`).
+				devFolder: queryBoolean(req, 'devFolder'),
+				standbyUrl: standbyUrl(actor, user.username),
+				proxyPassword: resolveProxyPassword(user),
+				apiBaseUrl: CONTAINER_API_BASE_URL,
+				token: user.token,
+			});
+			switch (result.kind) {
+				case 'not-finished':
+					throw cannotResurrectUnfinishedRun(result.status);
+				case 'gone':
+					throw recordNotFound();
+				case 'no-such-build':
+					throw recordNotFound(result.message);
+				case 'cost-limit-decreased':
+					throw parametersMismatched('Maximum cost per run cannot be decreased when resurrecting run');
+				case 'resurrected':
+					sendData(res, runDto(result.run, standbyUrlAudienceOf(req.headers.host)));
+			}
 		}),
 	);
 
@@ -79,4 +176,48 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 		'/actor-runs/:runId/log',
 		h(async (req, res) => serveLog(req, res, req.params.runId as string)),
 	);
+
+	// Owner-scoped like every other run route. The platform additionally insists on the run's own scoped
+	// token, which has no local equivalent - every run here shares its owner's token.
+	router.post(
+		'/actor-runs/:runId/charge',
+		h(async (req, res) => {
+			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
+			if (!run) throw recordNotFound();
+
+			const body = jsonBody<{ eventName?: unknown; count?: unknown }>(req);
+			if (typeof body.eventName !== 'string' || body.eventName === '') {
+				throw invalidRequest('"eventName" must be a non-empty string');
+			}
+			const count = body.count ?? 1;
+			if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > MAX_CHARGE_COUNT) {
+				throw invalidRequest(`"count" must be an integer between 1 and ${MAX_CHARGE_COUNT}`);
+			}
+			const idempotencyKey = req.header('idempotency-key');
+			if (!idempotencyKey) throw invalidRequest('The "idempotency-key" header is required');
+
+			const result = await chargeEvent(deps.driver, run, { eventName: body.eventName, count, idempotencyKey });
+			switch (result.kind) {
+				case 'apify-event':
+					throw cannotChargeApifyEvent(body.eventName);
+				case 'not-pay-per-event':
+					throw cannotChargeNonPayPerEventActor();
+				case 'unknown-event':
+					throw recordNotFound(`Pricing for the event ${body.eventName}`);
+				case 'charged':
+				case 'replayed':
+					// A bare `{}`, not the `{ data }` envelope every other route uses (`api.md`).
+					res.status(result.status).json({});
+			}
+		}),
+	);
+}
+
+/** The platform's cap. A longer message is truncated rather than rejected, so it never fails the run. */
+const STATUS_MESSAGE_MAX_LENGTH = 500;
+
+function truncateStatusMessage(message: string): string {
+	return message.length > STATUS_MESSAGE_MAX_LENGTH
+		? `${message.slice(0, STATUS_MESSAGE_MAX_LENGTH - 3)}...`
+		: message;
 }

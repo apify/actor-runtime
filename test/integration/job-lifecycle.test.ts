@@ -133,6 +133,9 @@ function neverStartDriver(): Driver & { abortRunCalls: string[]; abortBuildCalls
 			throw new Error('not used by this stub');
 		},
 		async stopBrowserViewer() {},
+		async containerServerAddress() {
+			return undefined;
+		},
 		async inspectDebugTarget() {
 			throw new Error('not used by this stub');
 		},
@@ -379,7 +382,12 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 				{
 					name: '.actor/actor.json',
 					format: 'TEXT',
-					content: JSON.stringify({ dockerfile: '../../evil/Dockerfile' }),
+					content: JSON.stringify({
+						actorSpecification: 1,
+						name: 'dockerfile-failure-actor',
+						version: '0.0',
+						dockerfile: '../../evil/Dockerfile',
+					}),
 				},
 			];
 			const version: ActorVersionRecord = { ...VERSION, sourceFiles: escapingSourceFiles };
@@ -815,6 +823,9 @@ describe('reconcileOrphanedJobs (startup reconciliation)', () => {
 				throw new Error('not used by this stub');
 			},
 			async stopBrowserViewer() {},
+			async containerServerAddress() {
+				return undefined;
+			},
 			async inspectDebugTarget() {
 				throw new Error('not used by this stub');
 			},
@@ -1014,5 +1025,60 @@ describe('startRun (public entry point) still creates a normal READY record the 
 
 		driver.resolveRun({ exitCode: 0, timedOut: false });
 		await waitForRunFinish(record.id, 5);
+	});
+});
+
+describe('build log: the registered live dev folder', () => {
+	let server: TestServerHandle;
+
+	afterEach(async () => {
+		await server.close();
+	});
+
+	async function buildWith(
+		localDevFolder: string | undefined,
+		imageWorkingDirectory: string | undefined,
+		liveDevFolderEnabled = true,
+	) {
+		server = await startTestServer(fixedBuildOutcomeDriver({ imageId: 'x', imageWorkingDirectory }));
+		const seeded = await seedActor(server, 'dev-folder-build-log-actor');
+		// Registered after the caller's snapshot, like `apify push` does right before starting the build.
+		await getRegistries().actors.update(seeded.id, (current) =>
+			current
+				? { ...current, localDevFolder, localDevFolderEnabled: liveDevFolderEnabled || undefined }
+				: current,
+		);
+		const record: BuildRecord = {
+			id: generateId(),
+			userId: seeded.userId,
+			actorId: seeded.id,
+			versionNumber: '0.0',
+			buildNumber: '0.0.1',
+			tag: 'latest',
+			status: 'READY',
+			startedAt: new Date().toISOString(),
+		};
+		await getRegistries().builds.set(record.id, record);
+		await runBuildInBackground(server.driver, seeded, VERSION, record, { tag: 'latest', useCache: true });
+		return getFullLog(record.id);
+	}
+
+	it('a successful build announces the registered folder as a runtime line', async () => {
+		const log = await buildWith('/home/me/actor', '/usr/src/app');
+		const line = log.split('\n').find((l) => l.includes('Registered live dev folder'));
+		expect(line).toContain('[actor-runtime]');
+		expect(line).toContain('/home/me/actor');
+		expect(line).toContain('/usr/src/app');
+		expect(line).toContain('apify call --no-dev-folder');
+	});
+
+	it('says nothing without a registration, or without a working directory to mount over', async () => {
+		expect(await buildWith(undefined, '/usr/src/app')).not.toContain('Registered live dev folder');
+		await server.close();
+		expect(await buildWith('/home/me/actor', undefined)).not.toContain('Registered live dev folder');
+	});
+
+	it('says nothing while the live dev folder is off for the Actor', async () => {
+		expect(await buildWith('/home/me/actor', '/usr/src/app', false)).not.toContain('Registered live dev folder');
 	});
 });

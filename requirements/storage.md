@@ -3,7 +3,8 @@
 - All storage contents live on disk under the mounted data directory and survive a runtime restart (`system.md`).
 - **Nothing is ever purged**: opening or reusing a dataset, key-value store, or request queue never deletes existing data, and no environment variable - whether set on the runtime itself or inside an Actor container - can enable purging.
 - **A restart releases dangling request hand-outs immediately**: after a crash-and-restart, requests that were handed out and never resolved become available again at once, with no wall-clock lock expiry to wait out.
-- Every runtime resource id is a 17-character Apify-style id. A storage's human-facing display `name` is metadata, settable via `PUT`, and independent of the id the storage is addressed by.
+- Every runtime resource id is a 17-character Apify-style id. A storage's display `name` is metadata, settable via `PUT`, and independent of its id - but a named storage is also addressable by that name (`api.md`'s "Resource id encoding").
+- A run's default storages name their run (`actId`, `actRunId`), as on the platform.
 
 ## Request queues
 
@@ -11,6 +12,13 @@
 - `POST /head/lock` hands requests out; a handed-out request stays unavailable until it is marked handled, reclaimed, or unlocked.
 - Requests are also addressable by id (`GET /requests/:requestId`), with the same best-effort, this-process-only visibility as the `GET /requests` listing (see "Known differences" below).
 - Peeks and hand-outs never corrupt the queue's ordering, deduplication, in-progress/handled state, or counts.
+
+## Dataset schema validation
+
+- Dataset schemas work as on the Apify platform: each of a run's datasets, the default one and every
+  extra one the Actor declares, rejects items its schema does not accept.
+- **Difference**: a schema the platform would silently not enforce is reported as a warning in the
+  build log.
 
 # Storage objects
 
@@ -61,6 +69,8 @@
           Same rules as `localDebug`: set only through its endpoint or console form, never bumping `modifiedAt`.
         - Neither `localDevFolder`, `localDebug`, `localBrowserView`, nor any build's
           `imageWorkingDirectory` is ever exposed on the public `/v2` API.
+        - `pricingInfos` - **optional**, the Actor's pricing (`actor-driver.md`); exposed on `/v2`.
+        - A version pushed as a monorepo keeps its pushed repository in `__FILES__`; never exposed on `/v2`.
 - The system stores Actor runs in dedicated key-value store called `__RUNS__`:
     - `key` is the id of the Actor run `runId`
     - `value` is the metadata of the Actor
@@ -74,6 +84,7 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
           Never exposed on the emulated `/v2` run object.
         - `localBrowserView` - **optional**, specific to this one run: `{ interactive, vncHost, vncPort }`,
           the run's browser view once it is up. Absent otherwise. Never exposed on the emulated `/v2` run object.
+        - the run's pricing, its charges and its usage figures (`actor-driver.md`); all exposed on `/v2`.
 - The system stores Actor builds in dedicated key-value store called `__BUILDS__`:
     - `key` is the id of the Actor build (`buildId`)
     - `value` is the metadata of the Actor
@@ -84,6 +95,18 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
           particular build succeeded and its own image's working directory could be captured (also
           absent when the captured value was empty or `/`) - never on any other build, and never derived
           from, or copied onto, the Actor record (see `localDevFolder`'s entry above).
+- The system stores tasks in dedicated key-value store called `__TASKS__`:
+    - `key` is the id of the task (`actorTaskId`)
+    - `value` is the task: owner (`userId`), Actor (`actorId`), name, saved input and run options
+- The system stores webhooks in dedicated key-value store called `__WEBHOOKS__`:
+    - `key` is the id of the webhook (`webhookId`)
+    - `value` is the webhook
+- The system stores webhook dispatches in dedicated key-value store called `__WEBHOOK_DISPATCHES__`:
+    - `key` is the id of the dispatch (`dispatchId`)
+    - `value` is the dispatch, with every delivery attempt
+- The system stores schedules in dedicated key-value store called `__SCHEDULES__`:
+    - `key` is the id of the schedule (`scheduleId`)
+    - `value` is the schedule, with its actions and log
 - The system stores logs in dedicated key-value store called `__LOGS__`:
     - `key` is the id of the Actor build (`logId`)
     - `value` is the metadata of the Actor
@@ -120,4 +143,5 @@ number }`, both already resolved (never `"auto"`, never absent-meaning-default).
 5. **`hadMultipleClients` is always `false`; `stats` fields are zeroed** on every storage type.
    Dataset options `fields`/`omit`/`clean`/`skipHidden`/`skipEmpty`/`unwind` are applied after paging,
    so `total` always counts unfiltered items.
-6. One runtime process per data directory; no usage/billing fields.
+6. One runtime process per data directory. A run's usage fields are an estimate
+   (`actor-driver.md`'s "Run usage estimate"); nothing is ever billed.

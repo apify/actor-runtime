@@ -1,5 +1,5 @@
 /**
- * One run with debug mode, a live dev folder and browser view all on. `sample_actor_playwright` is the
+ * One run with debug mode, a live dev folder and browser view all on. `samples/actor_playwright` is the
  * only sample that can carry all three - headful for the view, `CMD ["node", ...]` for debug mode.
  * Started via `apify api`, never `apify call`, which a paused run would block indefinitely.
  */
@@ -21,13 +21,14 @@ import {
 	waitForHttpOk,
 } from './helpers/docker.js';
 import { CRAWL_START_URL } from './helpers/browser-view-suite.js';
-import { CONSOLE_URL, readMirrorGreeting } from './helpers/console-view.js';
+import { CONSOLE_URL, fetchConsole, readMirrorGreeting } from './helpers/console-view.js';
 import { withRunLogOnFailure } from './helpers/run-log.js';
 import { waitFor } from './helpers/wait.js';
 import {
 	apify,
 	apifyEnv,
 	createIsolatedApifyHome,
+	enableLiveDevFolder,
 	loginApifyCli,
 	removeIsolatedApifyHome,
 	type ApiEnvelope,
@@ -37,7 +38,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
-const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'sample_actor_playwright');
+const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'samples', 'actor_playwright');
 const CONTAINER_NAME = 'actor-runtime-e2e-all-modes';
 const IMAGE_TAG = 'actor-runtime:e2e-all-modes';
 
@@ -219,6 +220,7 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 				{ cwd: REPO_ROOT, env },
 			);
 			expect(JSON.parse(devFolder).data.localDevFolder).toBe(actorDir);
+			enableLiveDevFolder(actorId, REPO_ROOT, env);
 			const debug = apify(['api', 'POST', `/actor-runtime/debug/${actorId}`, '--body', '{"enabled": true}'], {
 				cwd: REPO_ROOT,
 				env,
@@ -311,7 +313,7 @@ describe('all advanced modes at once: debug + live dev folder + browser view on 
 			expect(finalLog).toContain(EDITED_MARKER);
 			expect(finalLog).not.toContain(ORIGINAL_MARKER);
 
-			const endedPage = await fetch(`${CONSOLE_URL}/runs/${run.id}/browser`);
+			const endedPage = await fetchConsole(`/runs/${run.id}/browser`);
 			expect(await endedPage.text()).toContain('This run has ended');
 			await expect(readMirrorGreeting(run.id, 10_000)).rejects.toThrow(/1008/);
 		},

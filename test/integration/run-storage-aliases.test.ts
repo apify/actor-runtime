@@ -57,6 +57,19 @@ describe('actor-runs/:runId default-storage aliases', () => {
 		expect(record?.value).toEqual({ done: true });
 	});
 
+	it('POST on a key-value-store alias record stores it like PUT', async () => {
+		const run = await seedRun(server);
+
+		const res = await fetch(`${server.baseUrl}/v2/actor-runs/${run.id}/key-value-store/records/OUTPUT`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ via: 'post' }),
+		});
+		expect(res.status).toBe(201);
+		const record = await server.client.keyValueStore(run.defaultKeyValueStoreId).getRecord('OUTPUT');
+		expect(record?.value).toEqual({ via: 'post' });
+	});
+
 	it('request-queue alias reaches the run default queue', async () => {
 		const run = await seedRun(server);
 		const runClient = server.client.run(run.id);

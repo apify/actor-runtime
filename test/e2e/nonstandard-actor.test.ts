@@ -1,6 +1,6 @@
 /**
  * E2E coverage for Actors unlike anything an Apify template produces, driven through
- * `sample_actor_nonstandard`: unusual base image, custom entry point, unusual working directory - plus
+ * `samples/actor_nonstandard`: unusual base image, custom entry point, unusual working directory - plus
  * an image with no working directory at all. The runtime must read all of it off the built image.
  *
  * `apify` commands only, except the debug-port TCP connect no CLI command can express
@@ -27,6 +27,7 @@ import {
 	apify,
 	apifyEnv,
 	createIsolatedApifyHome,
+	enableLiveDevFolder,
 	loginApifyCli,
 	removeIsolatedApifyHome,
 	type ApiEnvelope,
@@ -37,7 +38,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
-const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'sample_actor_nonstandard');
+const SAMPLE_ACTOR_DIR = join(REPO_ROOT, 'samples', 'actor_nonstandard');
 const CONTAINER_NAME = 'actor-runtime-e2e-nonstandard';
 const IMAGE_TAG = 'actor-runtime:e2e-nonstandard';
 
@@ -72,6 +73,7 @@ function callWith(input: object, env: NodeJS.ProcessEnv, cwd = SAMPLE_ACTOR_DIR)
 }
 
 function registerDevFolder(id: string, path: string, env: NodeJS.ProcessEnv): { localDevFolder: string | null } {
+	enableLiveDevFolder(id, REPO_ROOT, env);
 	const output = apify(['api', 'POST', `/actor-runtime/dev-folder/${id}`, '--body', JSON.stringify(path)], {
 		cwd: REPO_ROOT,
 		env,

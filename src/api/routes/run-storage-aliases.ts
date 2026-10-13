@@ -8,6 +8,7 @@ import type { StorageRecord } from '../../storage/entities.js';
 import { mountDatasetOperations } from './datasets.js';
 import { mountKeyValueStoreOperations } from './key-value-stores.js';
 import { mountRequestQueueOperations } from './request-queues.js';
+import type { ApiServerDeps } from '../server.js';
 
 async function resolveRunStorage(
 	req: Request,
@@ -20,9 +21,12 @@ async function resolveRunStorage(
 }
 
 /** The `actor-runs/:runId/{dataset,key-value-store,request-queue}/*` default-storage aliases. */
-export function mountRunStorageAliases(router: Router): void {
-	mountDatasetOperations(router, '/actor-runs/:runId/dataset', (req) =>
-		resolveRunStorage(req, 'defaultDatasetId', 'dataset'),
+export function mountRunStorageAliases(router: Router, deps: ApiServerDeps): void {
+	mountDatasetOperations(
+		router,
+		'/actor-runs/:runId/dataset',
+		(req) => resolveRunStorage(req, 'defaultDatasetId', 'dataset'),
+		deps,
 	);
 	mountKeyValueStoreOperations(router, '/actor-runs/:runId/key-value-store', (req) =>
 		resolveRunStorage(req, 'defaultKeyValueStoreId', 'keyValueStore'),

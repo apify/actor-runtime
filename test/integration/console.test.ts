@@ -53,6 +53,129 @@ describe('console pages (HTTP fetch)', () => {
 		});
 	}
 
+	it('tasks: listed next to Actors, with a detail view, on their Actor, and on their runs', async () => {
+		const actor = await server.client.actors().create({ name: 'console-task-actor' });
+		const buildId = generateId();
+		await getRegistries().builds.set(buildId, {
+			id: buildId,
+			userId: actor.userId,
+			actorId: actor.id,
+			versionNumber: '0.0',
+			buildNumber: '0.0.1',
+			tag: 'latest',
+			status: 'SUCCEEDED',
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			imageId: 'fake-image',
+		});
+		await updateActor(actor.id, (current) => recordTaggedBuild(current, 'latest', buildId, '0.0.1'));
+		const task = await server.client.tasks().create({
+			actId: actor.id,
+			name: 'console-task',
+			input: { query: 'saved' },
+			options: { memoryMbytes: 2048 },
+		} as never);
+		const runId = generateId();
+		await getRegistries().runs.set(runId, {
+			id: runId,
+			userId: actor.userId,
+			actorId: actor.id,
+			actorTaskId: task.id,
+			buildId,
+			buildNumber: '0.0.1',
+			status: 'SUCCEEDED',
+			startedAt: new Date().toISOString(),
+			defaultDatasetId: 'd',
+			defaultKeyValueStoreId: 'k',
+			defaultRequestQueueId: 'q',
+			options: { memoryMbytes: 2048, timeoutSecs: 300 },
+			meta: { origin: 'API' },
+		});
+		const qualified = `${(await server.client.user('me').get()).username}~console-task`;
+
+		const nav = (await axios.get(`${consoleBaseUrl}/`)).data as string;
+		expect(nav).toMatch(/<a href="\/actors">Actors<\/a><a href="\/tasks">Tasks<\/a>/);
+
+		const list = (await axios.get(`${consoleBaseUrl}/tasks`)).data as string;
+		expect(list).toContain(`<a href="/tasks/${task.id}">${task.id}</a>`);
+		expect(list).toContain(`<a href="/actors/${actor.id}">`);
+
+		const detail = (await axios.get(`${consoleBaseUrl}/tasks/${task.id}`)).data as string;
+		expect(detail).toContain('console-task');
+		expect(detail).toContain('2048');
+		expect(detail).toContain('&quot;query&quot;: &quot;saved&quot;');
+		expect(detail).toContain(`<a href="/runs/${runId}">${runId}</a>`);
+		expect(detail).toContain('(Actor Standby is off)');
+
+		const actorDetail = (await axios.get(`${consoleBaseUrl}/actors/${actor.id}`)).data as string;
+		expect(actorDetail).toContain(`<a href="/tasks/${task.id}">${task.id}</a>`);
+
+		const runDetail = (await axios.get(`${consoleBaseUrl}/runs/${runId}`)).data as string;
+		expect(runDetail).toContain(`<a href="/tasks/${task.id}">${qualified}</a>`);
+
+		expect((await axios.get(`${consoleBaseUrl}/tasks/nope`, { validateStatus: () => true })).status).toBe(404);
+	});
+
+	it('webhooks: listed next to tasks, with a detail view, their dispatches, and on their Actor', async () => {
+		const actor = await server.client.actors().create({ name: 'console-webhook-actor' });
+		const webhook = await server.client.webhooks().create({
+			eventTypes: ['ACTOR.RUN.SUCCEEDED'],
+			condition: { actorId: actor.id },
+			requestUrl: 'http://127.0.0.1:9/unreachable',
+			doNotRetry: true,
+		} as never);
+		const dispatch = await server.client.webhook(webhook.id).test();
+
+		const nav = (await axios.get(`${consoleBaseUrl}/`)).data as string;
+		expect(nav).toMatch(/<a href="\/tasks">Tasks<\/a><a href="\/webhooks">Webhooks<\/a>/);
+
+		const list = (await axios.get(`${consoleBaseUrl}/webhooks`)).data as string;
+		expect(list).toContain(`<a href="/webhooks/${webhook.id}">${webhook.id}</a>`);
+		expect(list).toContain(`<a href="/actors/${actor.id}">`);
+
+		const detail = (await axios.get(`${consoleBaseUrl}/webhooks/${webhook.id}`)).data as string;
+		expect(detail).toContain('ACTOR.RUN.SUCCEEDED');
+		expect(detail).toContain(`<a href="/webhook-dispatches/${dispatch!.id}">${dispatch!.id}</a>`);
+
+		const dispatchDetail = (await axios.get(`${consoleBaseUrl}/webhook-dispatches/${dispatch!.id}`)).data as string;
+		expect(dispatchDetail).toContain(`<a href="/webhooks/${webhook.id}">${webhook.id}</a>`);
+		expect(dispatchDetail).toContain('TEST');
+
+		const actorDetail = (await axios.get(`${consoleBaseUrl}/actors/${actor.id}`)).data as string;
+		expect(actorDetail).toContain(`<a href="/webhooks/${webhook.id}">${webhook.id}</a>`);
+
+		expect((await axios.get(`${consoleBaseUrl}/webhooks/nope`, { validateStatus: () => true })).status).toBe(404);
+		const missingDispatch = await axios.get(`${consoleBaseUrl}/webhook-dispatches/nope`, {
+			validateStatus: () => true,
+		});
+		expect(missingDispatch.status).toBe(404);
+	});
+
+	it('schedules: listed next to webhooks, with a detail view, and on their Actor and task', async () => {
+		const actor = await server.client.actors().create({ name: 'console-schedule-actor' });
+		const schedule = await server.client.schedules().create({
+			name: 'console-schedule',
+			actions: [{ type: 'RUN_ACTOR', actorId: actor.id }],
+		} as never);
+
+		const nav = (await axios.get(`${consoleBaseUrl}/`)).data as string;
+		expect(nav).toMatch(/<a href="\/webhooks">Webhooks<\/a><a href="\/schedules">Schedules<\/a>/);
+
+		const list = (await axios.get(`${consoleBaseUrl}/schedules`)).data as string;
+		expect(list).toContain(`<a href="/schedules/${schedule.id}">${schedule.id}</a>`);
+		expect(list).toContain('@daily');
+
+		const detail = (await axios.get(`${consoleBaseUrl}/schedules/${schedule.id}`)).data as string;
+		expect(detail).toContain('console-schedule');
+		expect(detail).toContain(`<a href="/actors/${actor.id}">`);
+		expect(detail).toContain('RUN_ACTOR');
+
+		const actorDetail = (await axios.get(`${consoleBaseUrl}/actors/${actor.id}`)).data as string;
+		expect(actorDetail).toContain(`<a href="/schedules/${schedule.id}">${schedule.id}</a>`);
+
+		expect((await axios.get(`${consoleBaseUrl}/schedules/nope`, { validateStatus: () => true })).status).toBe(404);
+	});
+
 	it('builds and runs list+detail views render (even with no Docker)', async () => {
 		const actor = await server.client.actors().create({ name: 'console-build-actor' });
 		await server.client
@@ -242,6 +365,7 @@ describe('console pages (HTTP fetch)', () => {
 		const dataset = await server.client.datasets().getOrCreate();
 		const store = await server.client.keyValueStores().getOrCreate();
 		const queue = await server.client.requestQueues().getOrCreate();
+		const extraDataset = await server.client.datasets().getOrCreate();
 
 		const run: RunRecord = {
 			id: generateId(),
@@ -255,12 +379,25 @@ describe('console pages (HTTP fetch)', () => {
 			defaultDatasetId: dataset.id,
 			defaultKeyValueStoreId: store.id,
 			defaultRequestQueueId: queue.id,
+			storageIds: {
+				datasets: { default: dataset.id, categories: extraDataset.id },
+				keyValueStores: { default: store.id },
+				requestQueues: { default: queue.id },
+			},
 			options: { memoryMbytes: 1024, timeoutSecs: 300 },
 			meta: { origin: 'API' },
 		};
 		await getRegistries().runs.set(run.id, run);
 
 		const detail = (await axios.get(`${consoleBaseUrl}/runs/${run.id}`)).data as string;
+		// A second column of the run's details, listing every storage by alias.
+		expect(detail).toContain('<div class="columns">');
+		expect(detail).toContain(
+			'<dl><div class="dl-title" role="heading" aria-level="2">Storages</div><dt>dataset (default)</dt>',
+		);
+		expect(detail).toContain(
+			`<dt>dataset (categories)</dt><dd><a href="/datasets/${extraDataset.id}">${extraDataset.id}</a></dd>`,
+		);
 		expect(detail).toContain(`<a href="/datasets/${dataset.id}">${dataset.id}</a>`);
 		expect(detail).toContain(`<a href="/key-value-stores/${store.id}">${store.id}</a>`);
 		expect(detail).toContain(`<a href="/request-queues/${queue.id}">${queue.id}</a>`);
@@ -421,23 +558,59 @@ describe('console pages (HTTP fetch)', () => {
 		expect(res.status).toBe(404);
 	});
 
-	it('shows the owner userId on every list page and every detail view (console.md: "Frontend shows for each object the owner (userId)")', async () => {
+	it('shows the owner by username, and the Actor as username~actorname, instead of raw ids', async () => {
 		const actor = await server.client.actors().create({ name: 'owner-display-actor' });
 		const dataset = await server.client.datasets().getOrCreate('owner-display-dataset');
 		const me = await server.client.user('me').get();
+		const qualified = `${me.username}~owner-display-actor`;
+		const { builds, runs } = getRegistries();
+		const startedAt = '2024-01-01T00:00:00.000Z';
+		const build: BuildRecord = {
+			id: generateId(),
+			userId: me.id,
+			actorId: actor.id,
+			versionNumber: '0.0',
+			buildNumber: '0.0.7',
+			tag: 'latest',
+			status: 'SUCCEEDED',
+			startedAt,
+			finishedAt: startedAt,
+			imageId: 'fake-image:latest',
+		};
+		await builds.set(build.id, build);
+		const run: RunRecord = {
+			id: generateId(),
+			userId: me.id,
+			actorId: actor.id,
+			buildId: build.id,
+			buildNumber: build.buildNumber,
+			status: 'SUCCEEDED',
+			startedAt,
+			finishedAt: startedAt,
+			defaultDatasetId: 'd',
+			defaultKeyValueStoreId: 'k',
+			defaultRequestQueueId: 'r',
+			options: { memoryMbytes: 1024, timeoutSecs: 300 },
+			meta: { origin: 'API' },
+		};
+		await runs.set(run.id, run);
 
-		const actorsList = await axios.get(`${consoleBaseUrl}/actors`);
-		expect(actorsList.data).toContain('userId');
-		expect(actorsList.data).toContain(me.id);
+		const userPages = ['/actors', `/actors/${actor.id}`, '/datasets', `/datasets/${dataset.id}`];
+		for (const path of userPages) {
+			const page = (await axios.get(`${consoleBaseUrl}${path}`)).data as string;
+			expect(page, path).toContain(me.username);
+			expect(page, path).not.toContain(me.id);
+		}
 
-		const actorDetail = await axios.get(`${consoleBaseUrl}/actors/${actor.id}`);
-		expect(actorDetail.data).toContain(me.id);
+		const actorPages = ['/builds', `/builds/${build.id}`, '/runs', `/runs/${run.id}`, '/logs'];
+		for (const path of actorPages) {
+			const page = (await axios.get(`${consoleBaseUrl}${path}`)).data as string;
+			expect(page, path).toContain(`<a href="/actors/${actor.id}">${qualified}</a>`);
+			expect(page, path).not.toContain(me.id);
+		}
 
-		const datasetsList = await axios.get(`${consoleBaseUrl}/datasets`);
-		expect(datasetsList.data).toContain('userId');
-
-		const datasetDetail = await axios.get(`${consoleBaseUrl}/datasets/${dataset.id}`);
-		expect(datasetDetail.data).toContain(me.id);
+		const runDetail = (await axios.get(`${consoleBaseUrl}/runs/${run.id}`)).data as string;
+		expect(runDetail).toContain(`<a href="/builds/${build.id}">0.0.7</a>`);
 	});
 
 	it('lists objects across ALL users, not just one (view-only local dev console, no login of its own)', async () => {
@@ -449,20 +622,20 @@ describe('console pages (HTTP fetch)', () => {
 
 		const actorMine = await server.client.actors().create({ name: 'console-cross-user-mine' });
 		const actorOther = await otherClient.actors().create({ name: 'console-cross-user-other' });
-		const meId = (await server.client.user('me').get()).id;
-		const otherId = (await otherClient.user('me').get()).id;
-		expect(meId).not.toBe(otherId);
+		const meName = (await server.client.user('me').get()).username;
+		const otherName = (await otherClient.user('me').get()).username;
+		expect(meName).not.toBe(otherName);
 
 		const actorsList = await axios.get(`${consoleBaseUrl}/actors`);
 		expect(actorsList.data).toContain(actorMine.id);
 		expect(actorsList.data).toContain(actorOther.id);
-		expect(actorsList.data).toContain(meId);
-		expect(actorsList.data).toContain(otherId);
+		expect(actorsList.data).toContain(meName);
+		expect(actorsList.data).toContain(otherName);
 
 		// The other user's actor detail page renders too - the console has no per-user scoping of its own.
 		const otherDetail = await axios.get(`${consoleBaseUrl}/actors/${actorOther.id}`);
 		expect(otherDetail.status).toBe(200);
-		expect(otherDetail.data).toContain(otherId);
+		expect(otherDetail.data).toContain(otherName);
 
 		const datasetMine = await server.client.datasets().getOrCreate('console-cross-user-dataset-mine');
 		const datasetOther = await otherClient.datasets().getOrCreate('console-cross-user-dataset-other');
@@ -489,6 +662,28 @@ describe('console pages (HTTP fetch)', () => {
 			});
 			expect(redirect.status).toBe(302);
 			expect(redirect.headers.location).toBe(to);
+		}
+	});
+
+	/** One stylesheet, served by the console itself and linked by every page - never inlined, never remote. */
+	it('stylesheet: served at /console.css and linked by every page, with no external resources', async () => {
+		const css = await axios.get(`${consoleBaseUrl}/console.css`);
+		expect(css.status).toBe(200);
+		expect(css.headers['content-type']).toContain('text/css');
+		// The Apify tokens the stylesheet is built on, under their upstream `@apify/ui-library` names.
+		expect(css.data).toContain('--color-primary-action: #246dff;');
+		expect(css.data).toContain('@media (prefers-color-scheme: dark)');
+		// The `1rem = 10px` scale every copied token value assumes.
+		expect(css.data).toContain('font-size: 62.5%;');
+
+		const pages = ['/', '/actors', '/runs', '/datasets', '/settings'];
+		for (const path of pages) {
+			const page = await axios.get(`${consoleBaseUrl}${path}`);
+			expect(page.data).toContain('<link rel="stylesheet" href="/console.css">');
+			// Offline-safe: nothing is fetched from anywhere but this server, and no page inlines CSS
+			// of its own.
+			expect(page.data).not.toContain('<style');
+			expect(page.data).not.toMatch(/(?:href|src)="https?:\/\//);
 		}
 	});
 });

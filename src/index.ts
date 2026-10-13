@@ -4,9 +4,15 @@ import { reconcileOrphanedJobs } from './services/runs.js';
 import { createDriver } from './driver/index.js';
 import { createApiServer } from './api/server.js';
 import { attachEventsWebSocket } from './api/events-ws.js';
+import { handleStandbyUpgrade } from './api/standby-proxy.js';
+import { handleContainerUpgrade } from './api/container-proxy.js';
+import { closeProxiedUpgrades } from './api/http-proxy.js';
 import { createConsoleServer } from './console/server.js';
 import { attachBrowserViewWebSocket } from './console/browser-view-ws.js';
 import { startLogFlusher } from './services/logs.js';
+import { startWebhookDispatcher } from './services/webhook-dispatches.js';
+import { startScheduler } from './services/scheduler.js';
+import { buildDto, runDto } from './api/dto/actors.js';
 import { gracefulShutdown } from './shutdown.js';
 import { API_PORT, CONSOLE_PORT, DEFAULT_DATA_DIR } from './config.js';
 
@@ -19,17 +25,25 @@ async function main(): Promise<void> {
 	startLogFlusher();
 
 	const driver = await createDriver();
+	// Ahead of the reconciliation, so the runs and builds it aborts fire their webhooks.
+	await startWebhookDispatcher({ apiPort: API_PORT, runResource: (run) => runDto(run), buildResource: buildDto });
 	await reconcileOrphanedJobs(driver);
+	// After it, so a schedule due at start sees its previous run already aborted.
+	await startScheduler({ driver });
 
 	const apiApp = createApiServer({ driver });
 	const consoleApp = createConsoleServer({ driver });
 
 	const apiServer = apiApp.listen(API_PORT);
 	const consoleServer = consoleApp.listen(CONSOLE_PORT);
-	// Upgrades on the same API server/port - no second port (`system.md`'s fixed-ports contract); see
+	// Upgrades on the same API server/port - no second port (`system.md`); see
 	// `api/events-ws.ts`'s own doc comment for why this attaches here rather than inside `createApiServer`
 	// (Express never sees an `upgrade` event, so this needs the actual `http.Server` `listen()` returned).
-	const eventsWebSocketServer = attachEventsWebSocket(apiServer);
+	const eventsWebSocketServer = attachEventsWebSocket(
+		apiServer,
+		(req, socket, head) =>
+			handleContainerUpgrade(driver, req, socket, head) || handleStandbyUpgrade(driver, req, socket, head),
+	);
 	const browserViewWebSocketServer = attachBrowserViewWebSocket(consoleServer);
 
 	console.log(`actor-runtime API listening on port ${API_PORT}`);
@@ -45,6 +59,7 @@ async function main(): Promise<void> {
 	}
 
 	const shutdown = async () => {
+		closeProxiedUpgrades();
 		await gracefulShutdown({ apiServer, consoleServer, eventsWebSocketServer, browserViewWebSocketServer });
 		process.exit(0);
 	};

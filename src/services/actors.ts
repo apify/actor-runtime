@@ -1,6 +1,15 @@
 import { generateId } from '../storage/ids.js';
-import type { ActorRecord, ActorVersionRecord } from '../storage/entities.js';
+import type {
+	ActorDefaultRunOptionsRecord,
+	ActorRecord,
+	ActorStandbyRecord,
+	ActorVersionRecord,
+	UserRecord,
+} from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
+import { validatePricingInfosUpdate, type InvalidPricingInfos } from './pricing.js';
+import { isCallerOwner, normalizeName, type ResolvableReference } from './resource-reference.js';
+import { ensureSecretKeys, generateSecretKeys, sealActorSecrets } from './secrets.js';
 
 /** The tag a build/run resolves to when the caller names none. `api/routes/actors.ts` and
  * `services/runs.ts` both import this instead of declaring their own `'latest'` literal. */
@@ -10,11 +19,13 @@ export interface CreateActorInput {
 	name: string;
 	title?: string;
 	versions?: ActorVersionRecord[];
+	actorStandby?: ActorStandbyRecord;
+	defaultRunOptions?: ActorDefaultRunOptionsRecord;
 }
 
 export async function createActor(userId: string, input: CreateActorInput): Promise<ActorRecord> {
 	const now = new Date().toISOString();
-	const record: ActorRecord = {
+	const record: ActorRecord = sealActorSecrets({
 		id: generateId(),
 		userId,
 		name: input.name,
@@ -23,7 +34,10 @@ export async function createActor(userId: string, input: CreateActorInput): Prom
 		modifiedAt: now,
 		versions: input.versions ?? [],
 		taggedBuilds: {},
-	};
+		...(input.actorStandby ? { actorStandby: input.actorStandby } : {}),
+		...(input.defaultRunOptions ? { defaultRunOptions: input.defaultRunOptions } : {}),
+		secretKeys: await generateSecretKeys(),
+	});
 	await getRegistries().actors.set(record.id, record);
 	return record;
 }
@@ -56,40 +70,36 @@ export async function getActorById(id: string): Promise<ActorRecord | null> {
 	return getRegistries().actors.get(id);
 }
 
+/** Case-insensitive, like the platform (`normalizeName`). */
+export async function findOwnedActorByName(userId: string, name: string): Promise<ActorRecord | null> {
+	const wanted = normalizeName(name);
+	const owned = await listOwnedActors(userId);
+	return owned.find((actor) => normalizeName(actor.name) === wanted) ?? null;
+}
+
 /**
- * Resolves the CLI-friendly identifiers real Apify accepts as `:actorId`: the actual id, the plain
- * Actor `name`, or the `username~name` form (`storage.md`/`api.md` amendment) - useful for
- * `apify push`'s "does this Actor already exist" probe, which looks the Actor up by name before an id
- * has ever been minted.
+ * The one rule Actors do not share with storages: a bare segment is tried as an id and then as a name,
+ * because the platform accepts a plain Actor name there too - that is how `apify push` finds an
+ * existing Actor before an id has ever been minted.
  */
-export async function resolveOwnedActor(
-	userId: string,
-	idOrName: string,
-	username: string,
-): Promise<ActorRecord | null> {
-	const byId = await getOwnedActor(userId, idOrName);
-	if (byId) return byId;
-
-	// Single-user POC: a `username~name` reference is only ever this bootstrap user's own username,
-	// so a mismatched prefix can never resolve - same outcome as a real multi-user platform would give
-	// for someone else's username.
-	if (idOrName.includes('~')) {
-		const [prefix, ...rest] = idOrName.split('~');
-		if (prefix !== username) return null;
-		return resolveOwnedActor(userId, rest.join('~'), username);
+export async function resolveOwnedActor(user: UserRecord, reference: ResolvableReference): Promise<ActorRecord | null> {
+	if (reference.kind === 'id') {
+		return (await getOwnedActor(user.id, reference.id)) ?? findOwnedActorByName(user.id, reference.id);
 	}
-
-	const all = await listOwnedActors(userId);
-	return all.find((actor) => actor.name === idOrName) ?? null;
+	if (!isCallerOwner(user, reference.owner)) return null;
+	return findOwnedActorByName(user.id, reference.name);
 }
 
 export async function updateActor(
 	id: string,
 	mutator: (current: ActorRecord) => ActorRecord,
 ): Promise<ActorRecord | null> {
+	// Outside the update's lock: generating a key pair is asynchronous, the update itself is not.
+	const existing = await getRegistries().actors.get(id);
+	if (existing && !existing.secretKeys) await ensureSecretKeys(existing);
 	return getRegistries().actors.update(id, (current) => {
 		if (!current) return null;
-		return { ...mutator(current), modifiedAt: new Date().toISOString() };
+		return sealActorSecrets({ ...mutator(current), modifiedAt: new Date().toISOString() });
 	});
 }
 
@@ -110,4 +120,17 @@ export function findVersion(actor: ActorRecord, versionNumber: string): ActorVer
 /** Record a successful build against its tag - stock `apify push` polls `taggedBuilds[<tag>]`. */
 export function recordTaggedBuild(actor: ActorRecord, tag: string, buildId: string, buildNumber: string): ActorRecord {
 	return { ...actor, taggedBuilds: { ...actor.taggedBuilds, [tag]: { buildId, buildNumber } } };
+}
+
+export type SetActorPricingResult = { kind: 'ok'; actor: ActorRecord } | InvalidPricingInfos;
+
+/**
+ * Shared by the API and the console's form, so the two cannot drift apart. Unlike the `local*` toggles
+ * this goes through `updateActor`: pricing is a real Actor field, so bumping `modifiedAt` is right.
+ */
+export async function setActorPricingInfos(actor: ActorRecord, raw: unknown): Promise<SetActorPricingResult> {
+	const result = validatePricingInfosUpdate(raw, actor.pricingInfos);
+	if (result.kind === 'invalid') return result;
+	const updated = await updateActor(actor.id, (current) => ({ ...current, pricingInfos: result.pricingInfos }));
+	return { kind: 'ok', actor: updated ?? { ...actor, pricingInfos: result.pricingInfos } };
 }

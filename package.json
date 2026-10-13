@@ -1,6 +1,6 @@
 {
 	"name": "actor-runtime",
-	"version": "0.1.0",
+	"version": "0.1.2",
 	"description": "A minimal, self-contained local Apify platform in a single Docker image.",
 	"type": "module",
 	"private": true,
@@ -26,9 +26,16 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
+		"@apify/actor-memory-expression": "^1.0.1",
+		"@apify/input_schema": "^3.29.2",
+		"@apify/input_secrets": "^1.2.60",
+		"@apify/json_schemas": "^1.0.1",
+		"@apify/utilities": "^2.35.11",
 		"@crawlee/core": "4.0.0-beta.145",
 		"@crawlee/fs-storage": "4.0.0-beta.145",
 		"@novnc/novnc": "1.7.0",
+		"ajv": "^8.20.0",
+		"cron-parser": "^5.10.2",
 		"dockerode": "^4.0.5",
 		"express": "^5.1.0",
 		"json5": "^2.2.3",

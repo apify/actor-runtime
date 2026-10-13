@@ -8,6 +8,8 @@ export interface BuildContext {
 	timeoutSecs: number;
 	/** Tar-relative path to the Dockerfile to build, passed as dockerode's `dockerfile` build option. */
 	dockerfilePath: string;
+	/** Docker build arguments (`ARG` in the Dockerfile); absent means none. */
+	buildArgs?: Record<string, string>;
 }
 
 /** Host folder + image working directory, carried together so "both or neither" is enforced by the
@@ -32,7 +34,15 @@ export interface RunContext {
 	imageId: string;
 	env: Record<string, string>;
 	memoryMbytes: number;
+	/** `0` means no timeout. */
 	timeoutSecs: number;
+	/** The port the Actor's HTTP server listens on (`ACTOR_WEB_SERVER_PORT`), which the runtime reaches to
+	 * serve the run's `containerUrl`. */
+	containerServerPort?: number;
+	/** Set for a standby run, whose server must be reachable: an engine that cannot route to it any
+	 * other way has the container share this process's network namespace. An ordinary run's server stays
+	 * unreachable there instead - a run's own networking is never changed for its optional web server. */
+	containerServerRequired?: boolean;
 	devMount?: DevFolderMount;
 	debug?: DebugRunTarget;
 	/** Volume from `BrowserViewerHandle`, mounted over the Actor container's `/tmp/.X11-unix`. */
@@ -114,6 +124,12 @@ export interface RunOutcome {
 	 * this to the `TIMED-OUT` status instead of `FAILED`.
 	 */
 	timedOut: boolean;
+}
+
+/** Where this process reaches a run's HTTP server. */
+export interface ContainerServerAddress {
+	host: string;
+	port: number;
 }
 
 /**
@@ -207,4 +223,9 @@ export interface Driver {
 
 	/** Removes the run's sidecar and volume. Idempotent; never rejects. */
 	stopBrowserViewer(runId: string): Promise<void>;
+
+	/** Where the run's current container serves `RunContext.containerServerPort`, or `undefined` while
+	 * the run has no started container, or its server cannot be reached on this engine. Changes when a
+	 * migration restarts the container. */
+	containerServerAddress(runId: string): Promise<ContainerServerAddress | undefined>;
 }
