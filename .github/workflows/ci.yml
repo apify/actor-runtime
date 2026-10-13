@@ -172,14 +172,16 @@ jobs:
         name: e2e all files (apify-cli + ${{ matrix.engine }} on macOS arm64, self-hosted)
         # The leg on the platform most developers run the runtime on: an Apple Silicon Mac, with the
         # engine in a Linux VM, the host's `$HOME` shared into it, and the socket the runtime container
-        # gets mounted being the VM's, not a kernel socket of the host. The runner is a clean Mac - no
-        # Docker, Podman or OrbStack - so each job brings its own engine (user space, no sudo;
-        # `.github/scripts/macos-container-engine.sh`) and removes it again when done: Docker via Colima,
-        # Podman via Lima's own template. It is a persistent self-hosted machine, so unlike every hosted
-        # leg above it is also cleaned before and after.
+        # gets mounted being the VM's, not a kernel socket of the host. Each job starts its own VM and
+        # removes it when done (`.github/scripts/macos-container-engine.sh`): Docker via Colima, which
+        # the job also brings along (the runner has no Docker; Docker Desktop is the commercial product),
+        # and Podman as the runner's installed `podman` makes it - its own `podman machine`, the one a
+        # developer has - once rootless, the default a developer gets, and once rootful, so both of the
+        # modes `apify runtime start` handles are covered. It is a persistent self-hosted machine, so
+        # unlike every hosted leg above it is also cleaned before and after.
         #
         # One job per engine running every e2e file in turn (`test:e2e` serializes them: fixed host
-        # ports), rather than one job per file as above: the engine install is per job, and there is
+        # ports), rather than one job per file as above: the engine setup is per job, and there is
         # one runner, so jobs queue rather than parallelize anyway. The browser-view files pull ~2 GB
         # base images and run Chrome under amd64 emulation, hence the wide budget.
         #
@@ -194,19 +196,20 @@ jobs:
             matrix:
                 engine:
                     - docker
-                    - podman
+                    - podman-rootless
+                    - podman-rootful
         steps:
             - uses: actions/checkout@v4
-            # Downloads the pinned pieces into one directory under the runner user's home (removed again
-            # in the last step), starts the VM and smoke-tests the socket and home mounts the suite relies
-            # on. Exports the engine's env (`CONTAINER_CLI`, `TMPDIR`, ...) to the job; it deliberately
-            # does not set `DOCKER_HOST` (see the script for why).
+            # Starts the VM (for Docker: after downloading the pinned pieces into one directory under the
+            # runner user's home, removed again in the last step) and smoke-tests the socket and home
+            # mounts the suite relies on. Exports the engine's env (`CONTAINER_CLI`, `TMPDIR`, and for
+            # Podman the in-VM socket as `DOCKER_HOST`) to the job - see the script's header.
             # The Docker Hub credentials are the Apify service account's, the same repository secrets
             # `release.yml` publishes with: every job here starts from an empty engine and pulls every base
             # image again, and Docker Hub's anonymous limit is per IP, which one Mac exhausts in a day of
             # runs. Logged in, pulls count against the account. Absent (a fork has no secrets, and the job
             # does not run for forks anyway), the script warns and pulls anonymously.
-            - name: Install a ${{ matrix.engine }} engine (Lima VM, user space)
+            - name: Start a ${{ matrix.engine }} engine in a VM
               env:
                   DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
                   DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
@@ -244,7 +247,8 @@ jobs:
               if: always()
               run: .github/scripts/e2e-host-cleanup.sh
             # Stops and deletes the VM and removes the binaries, the engines' state, the isolated docker
-            # config and Lima's image cache - the machine is left as the job found it.
+            # config and Lima's image cache - the machine is left as the job found it (the installed
+            # podman and its machine image cache included).
             - name: Remove the container engine
               if: always()
               run: .github/scripts/macos-container-engine.sh teardown

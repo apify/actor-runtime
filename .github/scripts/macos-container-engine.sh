@@ -1,43 +1,54 @@
 #!/usr/bin/env bash
-# Puts a container engine on a clean macOS arm64 host for the e2e suite, and takes it away again -
-# for the self-hosted runner in `ci.yml`, which has no Docker, Podman or OrbStack of its own.
+# Puts a container engine on the self-hosted macOS arm64 runner in `ci.yml` for the e2e suite, and takes
+# it away again - a VM per job, started from nothing and deleted at the end, so every job meets a fresh
+# engine and leaves none behind.
 #
-# Everything is user space: no sudo, no Homebrew, no GUI login session, nothing under /usr/local or
-# /Applications. The pieces, all pinned, all downloaded straight from their projects' releases and
-# verified against the checksums those releases publish:
-#   - Lima - runs a Linux VM on Apple's Virtualization.framework (`vz`, macOS 13+); both engines live in
-#     one such VM, which is also how Docker Desktop, OrbStack and Podman Desktop work on a Mac
-#   - `docker`: the static Docker CLI (download.docker.com), the buildx CLI plugin (the runtime's
-#     Dockerfile needs BuildKit: `FROM --platform=$BUILDPLATFORM`, and Docker CLI >= 23 only builds with
-#     BuildKit through this plugin), and Colima, which provisions the Docker daemon in the Lima VM
-#   - `podman`: the podman remote client (containers/podman's `podman-remote-release-darwin_arm64.zip`)
-#     talking to Lima's own `podman-rootful` template - Fedora's current Podman, its API socket at
-#     `/run/podman/podman.sock` inside the VM, forwarded to a host socket the client is pointed at
+# Docker: the runner has no Docker of its own (Docker Desktop is the commercial product; everything here
+# is the Apache-licensed engine and CLI), so each job brings the whole stack, user space, no sudo, no
+# Homebrew, nothing under /usr/local or /Applications - the pieces all pinned, downloaded straight from
+# their projects' releases and verified against the checksums those releases publish:
+#   - Lima - runs a Linux VM on Apple's Virtualization.framework (`vz`, macOS 13+), the way Docker
+#     Desktop, OrbStack and Podman's own machine do
+#   - the static Docker CLI (download.docker.com), the buildx CLI plugin (the runtime's Dockerfile
+#     needs BuildKit: `FROM --platform=$BUILDPLATFORM`, and Docker CLI >= 23 only builds with BuildKit
+#     through this plugin), and Colima, which provisions the Docker daemon in the Lima VM
 #
-# All of it lives under one directory, `$E2E_ENGINE_DIR` (default `$HOME/.actor-runtime-e2e`): the
-# binaries, Colima's state (`COLIMA_HOME`, which also places Lima's `LIMA_HOME` under it), the Podman
-# instance's `LIMA_HOME`, an isolated `DOCKER_CONFIG` for the docker context and the plugin, and a
-# `tmp` dir the job's `TMPDIR` is pointed at (below). `teardown` deletes the VM and that directory,
-# plus Lima's image download cache in `~/Library/Caches`, leaving the machine as it was found. The
-# runner user's own `~/.docker`, `~/.colima`, `~/.lima` and `~/.config/containers` are never touched.
+# Podman: installed on the runner permanently, by hand, from podman.io's installer package - the same
+# install a developer has (Podman Desktop bundles that package; Homebrew builds the same pieces). It is
+# only the client and the VM tooling; no VM runs until a job makes one. Each job creates its own
+# `podman machine` (named `actor-runtime-e2e`, so nothing else of the runner user's is ever touched),
+# rootless (`podman-rootless`, the default a developer gets) or rootful (`podman-rootful`), and removes
+# it in `teardown`. That is the same Fedora CoreOS image, Virtualization.framework VM, virtiofs home
+# share and Rosetta a developer's machine is, so what passes here passes on their Mac. The machine's
+# state lives where Podman keeps it (`~/.local/share/containers/podman/machine`, the connections in
+# `~/.config/containers`); `podman machine rm` takes all of it but the downloaded machine image, kept as
+# a cache (~1 GB) so the next job's `init` is quick.
+#
+# The Docker stack lives under one directory, `$E2E_ENGINE_DIR` (default `$HOME/.actor-runtime-e2e`):
+# the binaries, Colima's state (`COLIMA_HOME`, which also places Lima's `LIMA_HOME` under it), an
+# isolated `DOCKER_CONFIG` for the docker context and the plugin, and a `tmp` dir the job's `TMPDIR` is
+# pointed at (below) - used by both engines, as is the isolated `REGISTRY_AUTH_FILE` for Podman's
+# Docker Hub login. `teardown` deletes the VM and that directory, plus Lima's image download cache in
+# `~/Library/Caches`. The runner user's own `~/.docker`, `~/.colima` and `~/.lima` are never touched.
 #
 # The directory is deliberately short and directly under `$HOME`, not under `$RUNNER_TEMP`: Lima puts
 # unix sockets in the instance dir (`<LIMA_HOME>/<instance>/ssh.sock.<16 digits>`), and macOS caps a
 # socket path at 104 characters - the runner's `_work/_temp/...` path pushed that to 112 and Lima
 # refused to start.
 #
-# Host directories inside the VM: `$HOME` is mounted, writable, at the same path (virtiofs) - the way
-# Docker Desktop shares `/Users` by default. The dev-folder e2e files need it: the runtime probes the
-# registered folder through the daemon's view of `/` and bind-mounts it into the Actor container, so
-# the path must exist inside the VM. `TMPDIR` is pointed at `$engine_dir/tmp` for the same reason:
-# the suite's `mkdtemp` folders (Node's `os.tmpdir()` honors `TMPDIR`) have to be under the mount,
-# and macOS's per-user default (`/var/folders/...`) is not.
+# Host directories inside the VM: `$HOME` is mounted, writable, at the same path (virtiofs) - Colima
+# is told so (`--mount`), Podman's machine does it by default (`/Users`), the way Docker Desktop shares
+# `/Users`. The dev-folder e2e files need it: the runtime probes the registered folder through the
+# daemon's view of `/` and bind-mounts it into the Actor container, so the path must exist inside the
+# VM. `TMPDIR` is pointed at `$engine_dir/tmp` for the same reason: the suite's `mkdtemp` folders
+# (Node's `os.tmpdir()` honors `TMPDIR`) have to be under the mount, and macOS's per-user default
+# (`/var/folders/...`) is not under `$HOME`.
 #
 # amd64 emulation: the Playwright sample Actors' base images have no arm64 build, so the browser-view
 # files build and run them as amd64 (`build-platform.ts`'s fallback). With Rosetta on the host the VM
 # gets it (`--vz-rosetta` / `--rosetta`), which is fast; without it the fallback is QEMU user-mode
-# emulation registered in the VM (`tonistiigi/binfmt` for Docker, `qemu-user-static` for Podman),
-# which is slow but works. Installing Rosetta is attempted once; it may need admin rights.
+# emulation registered in the VM (`tonistiigi/binfmt`), which is slow but works. Installing Rosetta is
+# attempted once; it may need admin rights.
 #
 # Docker Hub: each job starts from an empty engine and pulls every base image again, and Docker Hub's
 # anonymous pull limit is per IP - a day of runs on one Mac exhausts it ("toomanyrequests"). With
@@ -46,16 +57,20 @@
 # the credentials land in the isolated `DOCKER_CONFIG` / `REGISTRY_AUTH_FILE` under the engine dir,
 # never in the runner user's own config, and go with the teardown. Missing credentials only warn.
 #
-# Why no `DOCKER_HOST`: the suite mounts `hostEngineSocketPath()` into the runtime container, and with
-# no `DOCKER_HOST` that is `/var/run/docker.sock` (docker) or `/run/podman/podman.sock` (podman) -
-# which inside the VM, where the container runs, IS the daemon's socket. The host-side forwarded
-# sockets would not work there: a bind mount of a macOS unix socket does not cross into the VM. The
-# CLIs reach the daemon another way: the docker context Colima activates (`--activate`, the default),
-# and `CONTAINER_HOST` for the podman remote client - neither is read by the suite.
+# The socket the runtime container gets: the suite mounts `hostEngineSocketPath()` into it - a path the
+# engine resolves, so it must be the daemon's socket as seen inside the VM, where the container runs;
+# the host-side forwarded sockets would not work there, a bind mount of a macOS unix socket does not
+# cross into the VM. Docker: no `DOCKER_HOST`, and the suite falls back to `/var/run/docker.sock`,
+# which inside the VM IS the daemon's socket; the docker CLI reaches the daemon through the context
+# Colima activates (`--activate`, the default). Podman: `DOCKER_HOST` is set to what
+# `podman info --format '{{.Host.RemoteSocket.Path}}'` reports - the in-VM socket, rootful
+# (`/run/podman/podman.sock`) or rootless (`/run/user/<uid>/podman/podman.sock`), the very query
+# `apify runtime start` makes; the podman client reaches the VM through the machine's own connection
+# (`CONTAINER_CONNECTION`), which the suite never reads.
 #
-# Usage: macos-container-engine.sh install docker|podman
+# Usage: macos-container-engine.sh install docker|podman-rootless|podman-rootful
 #        macos-container-engine.sh teardown
-#   install   downloads, verifies, starts the VM, smoke-tests the socket and home mounts, and exports
+#   install   sets the engine up, starts the VM, smoke-tests the socket and home mounts, and exports
 #             the engine's env (`CONTAINER_CLI`, `TMPDIR`, ...) and PATH additions to the job
 #             (`$GITHUB_ENV` / `$GITHUB_PATH`) so every later step sees the same engine
 #   teardown  stops and deletes whichever VM exists and removes everything `install` created; safe to
@@ -70,7 +85,6 @@ DOCKER_VERSION=29.8.1
 BUILDX_VERSION=v0.37.1
 LIMA_VERSION=2.2.0
 COLIMA_VERSION=v0.10.3
-PODMAN_VERSION=v6.1.2
 
 engine_dir=${E2E_ENGINE_DIR:-$HOME/.actor-runtime-e2e}
 engine_dir=${engine_dir%/}
@@ -80,9 +94,12 @@ tmp_dir=$engine_dir/tmp
 export COLIMA_HOME=$engine_dir/colima
 export DOCKER_CONFIG=$engine_dir/docker-config
 export REGISTRY_AUTH_FILE=$engine_dir/podman-auth.json
-# Lima home for the standalone (podman) instance. Colima ignores it and uses `$COLIMA_HOME/_lima`.
-podman_lima_home=$engine_dir/limahome
-PODMAN_INSTANCE=podman
+# The podman machine this script makes and removes; nothing else of the runner user's Podman is touched.
+PODMAN_MACHINE=actor-runtime-e2e
+# Where podman.io's installer package puts the client, then Homebrew's places, in case `PATH` in the
+# runner's service environment has none of them (the package adds its own through /etc/paths.d, which
+# only login shells read).
+PODMAN_CANDIDATES="/opt/podman/bin /usr/local/bin /opt/homebrew/bin"
 export PATH=$bin_dir:$lima_bin_dir:$PATH
 
 die() {
@@ -177,9 +194,9 @@ smoke_tests() {
 	else
 		"$cli" info --format 'Arch={{.Architecture}} OS={{.OperatingSystem}} Server={{.ServerVersion}}'
 	fi
-	# What the suite's `startRuntimeContainer` adds on a Podman host with SELinux enforcing (Fedora, as
-	# Lima's Podman template and Podman Desktop's machine both are), and what README's "Running with
-	# Podman" tells users to add: without it SELinux keeps a container from the socket mounted into it.
+	# What `apify runtime start` and the suite's `runtimeRunArgs` add on a Podman host with SELinux
+	# enforcing (Fedora CoreOS, as the podman machine is), and what README's "Running with Podman" tells
+	# users to add: without it SELinux keeps a container from the socket mounted into it.
 	# A plain string, expanded unquoted below: macOS's bash 3.2 treats an empty array expansion as an
 	# unbound variable under `set -u`.
 	local secopt=
@@ -228,6 +245,13 @@ export_env() {
 	fi
 }
 
+# export_late NAME=value...: for what is only known once the VM runs (the Podman socket path).
+export_late() {
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		printf '%s\n' "$@" >> "$GITHUB_ENV"
+	fi
+}
+
 install_lima() {
 	echo "::group::Install Lima $LIMA_VERSION"
 	local dl=$1
@@ -244,7 +268,9 @@ install_lima() {
 }
 
 install_docker() {
-	local dl=$1
+	local dl=$engine_dir/downloads
+	mkdir -p "$bin_dir" "$DOCKER_CONFIG/cli-plugins" "$COLIMA_HOME" "$dl"
+	install_lima "$dl"
 
 	echo "::group::Install Docker CLI $DOCKER_VERSION"
 	# The static bundle is served over TLS from Docker's own host and publishes no separate checksum;
@@ -309,96 +335,111 @@ install_docker() {
 	echo "Docker engine ready under $engine_dir."
 }
 
+# find_podman: the installed client, on PATH or in one of the usual install locations; its directory
+# goes on the job's PATH so every later step (the suite, the log dump, `teardown`) finds the same one.
+find_podman() {
+	local dir
+	if ! command -v podman >/dev/null 2>&1; then
+		for dir in $PODMAN_CANDIDATES; do
+			if [ -x "$dir/podman" ]; then
+				export PATH=$dir:$PATH
+				break
+			fi
+		done
+	fi
+	command -v podman >/dev/null 2>&1 ||
+		die "No podman on this runner. Install it from podman.io's installer package (podman-installer-macos-arm64.pkg) as an admin; this script makes and removes the machine itself."
+	dir=$(dirname "$(command -v podman)")
+	if [ -n "${GITHUB_PATH:-}" ]; then
+		echo "$dir" >> "$GITHUB_PATH"
+	fi
+	echo "Using $(command -v podman): $(podman --version)"
+}
+
+# install_podman rootless|rootful
 install_podman() {
-	local dl=$1
+	local mode=$1
+	# Podman keeps the machine's host-side sockets and pids under `$TMPDIR/podman`, resolved on every
+	# invocation, not stored: this script and the job's later steps (which get `TMPDIR=$tmp_dir` from
+	# `export_env`) must agree on it, or `podman machine rm` in `teardown` would look in the wrong
+	# place and leave the VM running. Short enough for macOS's socket path cap, being under `$HOME`.
+	mkdir -p "$tmp_dir"
+	export TMPDIR=$tmp_dir
+	find_podman
+	# The machine's two connections: `<name>` as the VM's user, `<name>-root` as root. The client is
+	# pinned to the one for the mode, rather than relying on which `init` makes the default.
+	local connection=$PODMAN_MACHINE
+	[ "$mode" = rootful ] && connection=$PODMAN_MACHINE-root
+	export CONTAINER_CONNECTION=$connection
+	export_env "CONTAINER_CLI=podman" "CONTAINER_CONNECTION=$connection"
 
-	echo "::group::Install podman remote client $PODMAN_VERSION"
-	local podman_asset=podman-remote-release-darwin_arm64.zip
-	local podman_base="https://github.com/containers/podman/releases/download/$PODMAN_VERSION"
-	fetch "$podman_base/$podman_asset" "$dl/$podman_asset"
-	fetch "$podman_base/shasums" "$dl/podman-shasums"
-	verify "$dl/$podman_asset" "$(sha_for "$dl/podman-shasums" "$podman_asset")"
-	mkdir -p "$dl/podman"
-	unzip -q "$dl/$podman_asset" -d "$dl/podman"
-	# The zip unpacks to `podman-<version>/usr/bin/podman` (plus docs and the mac helper, unused here).
-	local podman_bin
-	podman_bin=$(find "$dl/podman" -type f -name podman -path '*/bin/*' | head -n 1)
-	[ -n "$podman_bin" ] || die "The podman remote client zip contains no bin/podman."
-	command install -m 0755 "$podman_bin" "$bin_dir/podman"
-	echo "::endgroup::"
-
-	rm -rf "$dl"
-	export LIMA_HOME=$podman_lima_home
-	mkdir -p "$LIMA_HOME"
-	local sock="$LIMA_HOME/$PODMAN_INSTANCE/sock/podman.sock"
-	export CONTAINER_HOST="unix://$sock"
-	export_env "CONTAINER_CLI=podman" "LIMA_HOME=$LIMA_HOME" "CONTAINER_HOST=$CONTAINER_HOST"
-
-	echo "::group::Start the Podman VM"
+	echo "::group::Create the Podman machine ($mode)"
 	vm_size
 	ensure_rosetta || true
-	# Lima's own template: Fedora with Podman from dnf, rootful, `podman.socket` on
-	# `/run/podman/podman.sock`, forwarded to `<instance dir>/sock/podman.sock` on the host.
-	# `--mount-writable` turns the template's default read-only `~` mount writable. `--tty=false`: no
-	# interactive "proceed with this configuration?" prompt.
-	limactl start \
-		--tty=false \
-		--name="$PODMAN_INSTANCE" \
-		--vm-type vz \
-		--mount-type virtiofs \
-		--mount-writable \
+	# `--memory` is MiB. `--disk-size` is a sparse maximum. Default mounts (`/Users`, `/private`,
+	# `/var/folders`) cover `$HOME`. `--rosetta` is the applehv provider's; off, the VM has no amd64
+	# handler and the fallback below registers QEMU ones.
+	podman machine init \
 		--cpus "$vm_cpus" \
-		--memory "$vm_memory" \
-		--disk 60 \
-		${rosetta:+--rosetta} \
-		template:podman-rootful
-	limactl list
-	# The socket forward is set up by Lima's host agent once the guest socket exists; give it a moment.
-	local i
-	for i in $(seq 1 60); do
-		[ -S "$sock" ] && podman info >/dev/null 2>&1 && break
-		sleep 1
-	done
-	podman info >/dev/null || die "podman cannot reach the VM's API socket through $sock."
+		--memory "$((vm_memory * 1024))" \
+		--disk-size 60 \
+		--rosetta="$([ -n "$rosetta" ] && echo true || echo false)" \
+		$([ "$mode" = rootful ] && echo --rootful) \
+		"$PODMAN_MACHINE"
+	podman machine start "$PODMAN_MACHINE"
+	podman machine list
+	podman system connection list
+	podman info --format 'Connection OK: {{.Host.Hostname}} rootless={{.Host.Security.Rootless}} selinux={{.Host.Security.SELinuxEnabled}} podman={{.Version.Version}}' ||
+		die "podman cannot reach the machine through connection '$connection'."
 	registry_login podman
+	# The in-VM socket, as `apify runtime start` resolves it for Podman; exported as `DOCKER_HOST` so
+	# the suite mounts that path (see the header). Rootless: `/run/user/<uid>/podman/podman.sock`.
+	local sock
+	sock=$(podman info --format '{{.Host.RemoteSocket.Path}}')
+	sock=${sock#unix://}
+	[ -n "$sock" ] || die "podman info reports no remote socket path."
+	echo "Engine socket inside the VM: $sock"
+	export DOCKER_HOST="unix://$sock"
+	export_late "DOCKER_HOST=$DOCKER_HOST"
 	# For reading a failed socket smoke test below: the socket's SELinux label and the enforcing mode.
-	limactl shell "$PODMAN_INSTANCE" -- sh -c 'getenforce; ls -laZ /run/podman/' || true
+	podman machine ssh "$PODMAN_MACHINE" -- sh -c "getenforce; ls -laZ $(dirname "$sock")/" || true
 	if [ -z "$rosetta" ]; then
-		limactl shell "$PODMAN_INSTANCE" sudo dnf install -y qemu-user-static-x86 ||
-			warn "Could not install QEMU amd64 emulation in the VM."
+		# QEMU user-mode handlers for foreign architectures, registered in the VM's kernel (binfmt_misc)
+		# by the VM's root, whichever mode the machine is in.
+		podman machine ssh "$PODMAN_MACHINE" -- sudo podman run --privileged --rm docker.io/tonistiigi/binfmt --install amd64 ||
+			warn "Could not register QEMU amd64 emulation in the VM."
 	fi
 	echo "::endgroup::"
 
-	smoke_tests podman /run/podman/podman.sock
-	echo "Podman engine ready under $engine_dir."
+	smoke_tests podman "$sock"
+	echo "Podman engine ready: machine $PODMAN_MACHINE ($mode)."
 }
 
 engine_install() {
 	local engine=${1:-}
 	case "$engine" in
-		docker | podman) ;;
-		*) die "Usage: $0 install docker|podman" ;;
+		docker | podman-rootless | podman-rootful) ;;
+		*) die "Usage: $0 install docker|podman-rootless|podman-rootful" ;;
 	esac
 	[ "$(uname -s)" = Darwin ] || die "This script is for macOS; this is $(uname -s)."
 	[ "$(uname -m)" = arm64 ] || die "This script is for Apple Silicon (arm64); this is $(uname -m)."
 	local macos_major
 	macos_major=$(sw_vers -productVersion | cut -d. -f1)
-	[ "$macos_major" -ge 13 ] || die "Lima's vz driver needs macOS 13 or newer; this is $(sw_vers -productVersion)."
+	[ "$macos_major" -ge 13 ] || die "Virtualization.framework VMs need macOS 13 or newer; this is $(sw_vers -productVersion)."
 
 	# A previous job that died without its teardown step (the runner losing contact with GitHub
 	# mid-suite leaves the job's later steps unrun) leaves its VM running and its host agent holding the
 	# forwarded ports. Stop and delete all of that first, with the binaries it left behind, rather than
 	# `rm -rf` the directory from under a live VM.
-	if [ -d "$engine_dir" ]; then
-		echo "Found a leftover engine under $engine_dir; removing it first."
-		engine_teardown
-	fi
-	mkdir -p "$bin_dir" "$DOCKER_CONFIG/cli-plugins" "$COLIMA_HOME" "$tmp_dir"
-	local dl=$engine_dir/downloads
-	mkdir -p "$dl"
+	echo "Removing whatever an earlier job left behind first."
+	engine_teardown
+	mkdir -p "$tmp_dir"
 
-	install_lima "$dl"
-	"install_$engine" "$dl"
+	case "$engine" in
+		docker) install_docker ;;
+		podman-rootless) install_podman rootless ;;
+		podman-rootful) install_podman rootful ;;
+	esac
 }
 
 engine_teardown() {
@@ -406,15 +447,32 @@ engine_teardown() {
 		colima stop --force 2>/dev/null || true
 		colima delete --force 2>/dev/null || true
 	fi
-	if command -v limactl >/dev/null 2>&1 && [ -d "$podman_lima_home/$PODMAN_INSTANCE" ]; then
-		LIMA_HOME=$podman_lima_home limactl stop --tty=false --force "$PODMAN_INSTANCE" 2>/dev/null || true
-		LIMA_HOME=$podman_lima_home limactl delete --tty=false --force "$PODMAN_INSTANCE" 2>/dev/null || true
-	fi
 	# Lima's host agents and the ssh sessions they keep to the VMs, matched by their own names plus the
 	# engine dir on their command line - Lima normally ends them; this is for a half-started VM. Not a
 	# bare `pkill -f "$engine_dir"`: that also matches any shell whose command line mentions the dir.
 	pkill -f "limactl.*$engine_dir" 2>/dev/null || true
 	pkill -f "ssh.*$engine_dir" 2>/dev/null || true
+	# The podman machine, if the client is here and the machine exists (a leftover or this job's own):
+	# `rm -f` stops it first and drops its connections. Before the engine dir goes: the machine's
+	# host-side sockets live under `$tmp_dir` (see `install_podman`), and `rm` needs them to stop it.
+	# The machine image cache is kept, on purpose.
+	local dir
+	if ! command -v podman >/dev/null 2>&1; then
+		for dir in $PODMAN_CANDIDATES; do
+			[ -x "$dir/podman" ] && export PATH=$dir:$PATH && break
+		done
+	fi
+	if command -v podman >/dev/null 2>&1; then
+		mkdir -p "$tmp_dir"
+		export TMPDIR=$tmp_dir
+		if podman machine inspect "$PODMAN_MACHINE" >/dev/null 2>&1; then
+			echo "Removing podman machine $PODMAN_MACHINE."
+			podman machine rm -f "$PODMAN_MACHINE" || warn "Could not remove podman machine $PODMAN_MACHINE."
+		fi
+		# The VM and its network helper, should `rm` have lost track of them (a job killed mid-start).
+		pkill -f "vfkit.*$PODMAN_MACHINE" 2>/dev/null || true
+		pkill -f "gvproxy.*$PODMAN_MACHINE" 2>/dev/null || true
+	fi
 	rm -rf "$engine_dir"
 	# Lima keeps the downloaded VM images here, outside LIMA_HOME. Removed for a fully clean machine; a
 	# runner that stays up between jobs could keep it and skip the ~700 MB download next time.
@@ -426,7 +484,7 @@ case "${1:-}" in
 	install) engine_install "${2:-}" ;;
 	teardown) engine_teardown ;;
 	*)
-		echo "Usage: $0 install docker|podman | teardown" >&2
+		echo "Usage: $0 install docker|podman-rootless|podman-rootful | teardown" >&2
 		exit 2
 		;;
 esac
