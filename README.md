@@ -217,9 +217,9 @@ podman run --rm -p 3333:3333 -p 3000:3000 \
 - To use other ports, set `-e ACTOR_RUNTIME_API_PORT=4333 -e ACTOR_RUNTIME_CONSOLE_PORT=4000` and publish
   the same numbers on the host (`-p 4333:4333 -p 4000:4000`).
 - On a host where SELinux is enforcing - Fedora, and the Fedora-based VM behind Podman Desktop /
-  `podman machine` on macOS and Windows - add `--security-opt label=disable` to the `podman run` above:
-  SELinux otherwise keeps the runtime container from the engine's socket mounted into it, and the
-  runtime reports the engine as unavailable.
+  `podman machine` on macOS and Windows - add `--security-opt label=disable` to the `podman run` above
+  (`apify runtime start` does): SELinux otherwise keeps the runtime container from the engine's socket
+  mounted into it, and the runtime reports the engine as unavailable.
 - Podman 3.4 (Ubuntu 22.04's stock package) and newer are supported. Keep the API port published on
   all interfaces (`-p 3333:3333` by default): under Podman 3.x and rootless Podman, Actors reach the API through it.
 - Under rootless Podman 3.x, add `--network slirp4netns:allow_host_loopback=true` to the `podman run`

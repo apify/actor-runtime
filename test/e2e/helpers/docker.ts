@@ -75,20 +75,21 @@ export interface RuntimeRunArgsOptions {
 	hostSocketPath: string;
 	/** Mounted as the runtime's `/data`: a host directory, as the CLI mounts, or a named volume. */
 	dataMount: string;
-	/** Arguments the CLI's command does not have, placed right before the image - the suite's own
-	 * additions for the host it runs on (`engineSecurityOptions`). Empty by default, so the pinned
-	 * CLI-verbatim command is unchanged. */
-	extraRunArgs?: string[];
 }
 
 /**
  * The command `apify runtime start --detach` runs, as apify-cli's `buildRuntimeRunArgs` builds it (the
  * container name and the data mount aside), so the suite starts the runtime exactly the way the CLI
  * does on every engine - including the host-loopback network mode rootless Podman 3.x needs
- * (`actor-driver.md`'s "Web server (live view)"). `test/unit/e2e-runtime-command.test.ts` pins it.
+ * (`actor-driver.md`'s "Web server (live view)") and the SELinux label the CLI's
+ * `runtimeSecurityOptions` adds on Podman hosts with SELinux enforcing (Fedora; the Fedora-based VM of
+ * Podman Desktop / `podman machine` on macOS and Windows), without which SELinux keeps the container
+ * from the engine's socket bind-mounted into it - README's "Running with Podman" documents the same
+ * flag for users. `test/unit/e2e-runtime-command.test.ts` pins it.
  */
 export function runtimeRunArgs(engine: EngineInfo, options: RuntimeRunArgsOptions): string[] {
 	const hostLoopback = engine.cli === 'podman' && engine.rootless && engine.podmanMajorVersion === 3;
+	const selinux = engine.cli === 'podman' && engine.selinux === true;
 	return [
 		'run',
 		'--rm',
@@ -97,6 +98,7 @@ export function runtimeRunArgs(engine: EngineInfo, options: RuntimeRunArgsOption
 		options.containerName,
 		'--detach',
 		...(hostLoopback ? ['--network', 'slirp4netns:allow_host_loopback=true'] : []),
+		...(selinux ? ['--security-opt', 'label=disable'] : []),
 		'-p',
 		'3333:3333',
 		'-p',
@@ -105,7 +107,6 @@ export function runtimeRunArgs(engine: EngineInfo, options: RuntimeRunArgsOption
 		`${options.hostSocketPath}:${RUNTIME_SOCKET_PATH}`,
 		'-v',
 		`${options.dataMount}:/data`,
-		...(options.extraRunArgs ?? []),
 		options.image,
 	];
 }
@@ -169,17 +170,6 @@ export function pullImage(image: string): void {
 	execFileSync(CONTAINER_CLI, ['pull', '--platform', COMPATIBILITY_BUILD_PLATFORM, image], { stdio: 'inherit' });
 }
 
-/**
- * `--security-opt label=disable` for the runtime container on a Podman host with SELinux enforcing
- * (Fedora; the Fedora-based VM of Podman Desktop / `podman machine` on macOS and Windows): without it,
- * SELinux keeps the container from the engine's socket bind-mounted into it - README's "Running with
- * Podman" documents the same flag for users. Docker hosts and Podman hosts without SELinux get nothing
- * extra, so the suite there runs `apify runtime start`'s own command verbatim (`runtimeRunArgs`).
- */
-function engineSecurityOptions(engine: EngineInfo): string[] {
-	return engine.cli === 'podman' && engine.selinux ? ['--security-opt', 'label=disable'] : [];
-}
-
 export function startRuntimeContainer(tag: string, containerName: string): void {
 	// A previous run that died before its `afterAll` (killed vitest, a CI job cancelled or timed out on a
 	// persistent self-hosted runner) leaves a container of this name, and with it the fixed host ports
@@ -199,7 +189,6 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 		containerName,
 		hostSocketPath: hostEngineSocketPath(),
 		dataMount: `${containerName}-data`,
-		extraRunArgs: engineSecurityOptions(engine),
 	});
 	process.stdout.write(`${CONTAINER_CLI} ${args.join(' ')}\n`);
 	execFileSync(CONTAINER_CLI, args, { stdio: 'inherit' });

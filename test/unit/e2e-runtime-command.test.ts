@@ -35,23 +35,21 @@ describe("the e2e suite's runtime start command mirrors apify runtime start", ()
 		expect(runtimeRunArgs({ cli: 'podman', rootless: true }, options)).toEqual(plain);
 	});
 
-	it("the suite's own extra args (SELinux hosts) go right before the image, and nothing else moves", () => {
+	it('Podman with SELinux enforcing gets the socket mount un-labelled, after any network mode', () => {
+		const detached = ['run', '--rm', '--init', '--name', 'apify-actor-runtime', '--detach'];
+		const unlabelled = ['--security-opt', 'label=disable'];
+		expect(runtimeRunArgs({ cli: 'podman', rootless: false, selinux: true }, options)).toEqual([
+			...detached,
+			...unlabelled,
+			...common,
+		]);
 		expect(
-			runtimeRunArgs(
-				{ cli: 'podman', rootless: false, selinux: true },
-				{ ...options, extraRunArgs: ['--security-opt', 'label=disable'] },
-			),
-		).toEqual([
-			'run',
-			'--rm',
-			'--init',
-			'--name',
-			'apify-actor-runtime',
-			'--detach',
-			...common.slice(0, -1),
-			'--security-opt',
-			'label=disable',
-			'apify/actor-runtime:latest',
+			runtimeRunArgs({ cli: 'podman', rootless: true, podmanMajorVersion: 3, selinux: true }, options),
+		).toEqual([...detached, '--network', 'slirp4netns:allow_host_loopback=true', ...unlabelled, ...common]);
+		// SELinux is a Podman-host concern; Docker reports nothing and gets nothing.
+		expect(runtimeRunArgs({ cli: 'docker', rootless: false, selinux: true }, options)).toEqual([
+			...detached,
+			...common,
 		]);
 	});
 
