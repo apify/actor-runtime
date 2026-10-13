@@ -378,16 +378,23 @@ install_podman() {
 	echo "::group::Create the Podman machine ($mode)"
 	vm_size
 	ensure_rosetta || true
+	# Rosetta is a `containers.conf` setting (`[machine] rosetta`, on by default for applehv on Apple
+	# silicon; Podman 6 has no `init` flag for it). Only with no Rosetta on the host is it switched off,
+	# through an override file for this one command, so the machine starts and the fallback below
+	# registers QEMU handlers instead.
+	if [ -z "$rosetta" ]; then
+		printf '[machine]\nrosetta = false\n' > "$tmp_dir/containers-no-rosetta.conf"
+		export CONTAINERS_CONF_OVERRIDE=$tmp_dir/containers-no-rosetta.conf
+	fi
 	# `--memory` is MiB. `--disk-size` is a sparse maximum. Default mounts (`/Users`, `/private`,
-	# `/var/folders`) cover `$HOME`. `--rosetta` is the applehv provider's; off, the VM has no amd64
-	# handler and the fallback below registers QEMU ones.
+	# `/var/folders`) cover `$HOME`.
 	podman machine init \
 		--cpus "$vm_cpus" \
 		--memory "$((vm_memory * 1024))" \
 		--disk-size 60 \
-		--rosetta="$([ -n "$rosetta" ] && echo true || echo false)" \
 		$([ "$mode" = rootful ] && echo --rootful) \
 		"$PODMAN_MACHINE"
+	unset CONTAINERS_CONF_OVERRIDE
 	podman machine start "$PODMAN_MACHINE"
 	podman machine list
 	podman system connection list
