@@ -317,6 +317,12 @@ describe('standby router', () => {
 		expect(again.runId).toBe(echoed.runId);
 		expect(again.url).toBe(`/?token=${server.token}`);
 		expect(driver.containers).toHaveLength(1);
+
+		// The same path form under `/v2`, as `apify api` sends it.
+		const viaV2 = await fetch(`${url.replace('/actor-runtime/', '/v2/actor-runtime/')}/x?token=${server.token}`);
+		expect(viaV2.status).toBe(200);
+		expect(((await viaV2.json()) as { runId: string; url: string }).runId).toBe(echoed.runId);
+		expect(driver.containers).toHaveLength(1);
 	});
 
 	it('also answers on the <label>.localhost host and by Actor id', async () => {

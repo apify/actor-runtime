@@ -3,7 +3,7 @@
  * `containerUrl` to the HTTP server the Actor runs on `ACTOR_WEB_SERVER_PORT` inside that run's
  * container. Two addressings, both on the API port: `http://<runId>.runs.localhost:3333/<path>` (the
  * platform's host-based shape, where the run owns `/`) and `/actor-runtime/container/<runId>/<path>` (for
- * Actor containers and clients that do not resolve `*.localhost`).
+ * Actor containers and clients that do not resolve `*.localhost`; also under `/v2`, for `apify api`).
  *
  * Unauthenticated, as the platform's container URLs are: the run id is the only thing it scopes on.
  * Mounted ahead of the API's body parser, so a request body is streamed through untouched.
@@ -18,6 +18,7 @@ import {
 	endUpgradeWithError,
 	forwardHttpRequest,
 	forwardUpgrade,
+	pathUnderPrefix,
 	sendJsonError,
 	trackUpgradedSocket,
 } from './http-proxy.js';
@@ -41,8 +42,8 @@ export function containerTargetOf(req: IncomingMessage): ContainerTarget | undef
 	const url = req.url ?? '/';
 	const hostLabel = runLabelFromHost(req.headers.host);
 	if (hostLabel) return { label: hostLabel, forwardPath: url.startsWith('/') ? url : `/${url}` };
-	if (!url.startsWith(`${CONTAINER_PATH_PREFIX}/`)) return undefined;
-	const rest = url.slice(CONTAINER_PATH_PREFIX.length + 1);
+	const rest = pathUnderPrefix(url, CONTAINER_PATH_PREFIX);
+	if (rest === undefined) return undefined;
 	const end = rest.search(/[/?]/);
 	const label = decodeURIComponent(end === -1 ? rest : rest.slice(0, end));
 	if (!label) return undefined;

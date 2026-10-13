@@ -4,8 +4,8 @@ import { requireUser } from '../auth.js';
 
 import { paginate, sendData, sortByTimestamp } from '../envelope.js';
 import { deletingUnfinishedBuild, recordNotFound } from '../errors.js';
-import { h, paginationParams } from '../handler.js';
-import { abortBuild, deleteBuild, getOwnedBuild, listOwnedBuilds } from '../../services/builds.js';
+import { h, paginationParams, queryNumber } from '../handler.js';
+import { abortBuild, deleteBuild, getOwnedBuild, listOwnedBuilds, waitForBuildFinish } from '../../services/builds.js';
 import { isTerminalJobStatus } from '../../services/job-status.js';
 import { buildDto } from '../dto/actors.js';
 import type { ApiServerDeps } from '../server.js';
@@ -27,7 +27,9 @@ export function mountBuilds(router: Router, deps: ApiServerDeps): void {
 		h(async (req, res) => {
 			const build = await getOwnedBuild(requireUser(req).id, req.params.buildId as string);
 			if (!build) throw recordNotFound();
-			sendData(res, buildDto(build));
+			const waitSecs = queryNumber(req, 'waitForFinish');
+			const finalBuild = waitSecs ? ((await waitForBuildFinish(build.id, waitSecs)) ?? build) : build;
+			sendData(res, buildDto(finalBuild));
 		}),
 	);
 

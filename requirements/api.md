@@ -63,6 +63,9 @@
 
 # Public API
 
+- `?waitForFinish=<secs>` on `GET v2/actor-runs/:runId` and `GET v2/actor-builds/:buildId` holds the
+  response until the run or build finishes or that many seconds pass, as on the platform (what the
+  SDKs' and `apify-client`'s `waitForFinish()` poll).
 - It implements these API paths:
     - Actors
         - v2/actors
@@ -230,15 +233,17 @@
 
 - Implemented as on the platform. Differences: only the owner is served, and `standbyUrl` is
   `http://<username>--<actor-name>.localhost:3333`, or `http://localhost:3333/actor-runtime/standby/<username>--<actor-name>`
-  for clients without `*.localhost` (`http://apify-api:3333/...` from Actors). Standby errors are never
+  for clients without `*.localhost` (`http://apify-api:3333/...` from Actors; also under
+  `/v2/actor-runtime/...`, so `apify api` reaches it). Standby errors are never
   relayed by the upstream fallback.
 
 # Run web server
 
 - Implemented as on the platform. Difference: `containerUrl` is `http://<runId>.runs.localhost:3333`, or
   `http://localhost:3333/actor-runtime/container/<runId>` for clients without `*.localhost`
-  (`http://apify-api:3333/...` from Actors). A request the Actor's server cannot answer (not listening yet,
-  run finished, unknown run) gets an error saying why, never relayed by the upstream fallback.
+  (`http://apify-api:3333/...` from Actors; also under `/v2/actor-runtime/...`, so `apify api` reaches
+  it). A request the Actor's server cannot answer (not listening yet, run finished, unknown run) gets an
+  error saying why, never relayed by the upstream fallback.
 
 # Actor runtime API
 

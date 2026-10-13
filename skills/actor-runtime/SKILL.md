@@ -266,8 +266,9 @@ A run's web server (`ACTOR_WEB_SERVER_PORT`) and `containerUrl` work as on the p
 the run's console page name the URL. Local differences:
 
 - The URL is `http://<runid>.runs.localhost:3333` (the run owns `/`), or
-  `http://localhost:3333/actor-runtime/container/<runId>` for clients that do not resolve `*.localhost`;
-  from another Actor's container, `http://apify-api:3333/actor-runtime/container/<runId>`.
+  `http://localhost:3333/actor-runtime/container/<runId>` for clients that do not resolve `*.localhost`
+  (`apify api GET /actor-runtime/container/<runId>/` from the CLI); from another Actor's container,
+  `http://apify-api:3333/actor-runtime/container/<runId>`.
 - Under rootless Podman 3.x the runtime container needs `--network slirp4netns:allow_host_loopback=true`
   (`apify runtime start` adds it); without it only a standby run's server is reachable, and the run log
   says so.
@@ -334,6 +335,8 @@ apify push
 curl "http://<username>--<actor-name>.localhost:3333/some/path?token=<token>"
 # The same Actor, for clients that do not resolve *.localhost (older curl, many Node/Python clients):
 curl "http://localhost:3333/actor-runtime/standby/<username>--<actor-name>/some/path?token=<token>"
+# Or from the CLI, authenticated as you:
+apify api GET "/actor-runtime/standby/<username>--<actor-name>/some/path"
 ```
 
 - The Actor's console page has the `*.localhost` standby URL with your token already in it (masked on screen), as a link
@@ -407,7 +410,7 @@ a later step misses. Only a call naming an Actor this runtime does not know is r
 
 ## Inspecting state directly
 
-- `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
+- `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/actors`.
   The `v2/` prefix and the leading slash are both optional.
 - A named Actor, task, dataset, key-value store or request queue can stand in for its id as `~name` (your
   own), `username~name` or `userId~name`, like on the platform:

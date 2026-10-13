@@ -94,6 +94,8 @@ describe('standby addressing', () => {
 		['/actor-runtime/standby/a--b/', { label: 'a--b', forwardPath: '/' }],
 		['/actor-runtime/standby/A--B/mcp?x=1', { label: 'a--b', forwardPath: '/mcp?x=1' }],
 		['/actor-runtime/standby/a--b?token=t', { label: 'a--b', forwardPath: '/?token=t' }],
+		['/v2/actor-runtime/standby/a--b/mcp?x=1', { label: 'a--b', forwardPath: '/mcp?x=1' }],
+		['/v2/actor-runtime/standby/', undefined],
 		['/actor-runtime/standby/', undefined],
 		['/actor-runtime/standbyx/a', undefined],
 		['/v2/actors', undefined],

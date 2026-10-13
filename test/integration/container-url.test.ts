@@ -259,6 +259,11 @@ describe('run web server (containerUrl)', () => {
 		expect(echoed).toMatchObject({ runId: run.id, method: 'POST', url: '/search/items?q=1', body: 'hello' });
 		expect(echoed.headers['x-custom']).toBe('c');
 
+		// The path form under `/v2`, as `apify api` sends it.
+		const viaV2 = await fetch(`${server.baseUrl}/v2/actor-runtime/container/${run.id}/v2/path?q=2`);
+		expect(viaV2.status).toBe(200);
+		expect(await viaV2.json()).toMatchObject({ runId: run.id, url: '/v2/path?q=2' });
+
 		// The host form, as a browser sends it: the run owns `/`.
 		const byHost = await requestByHost(server.baseUrl, run.containerUrl, '/deep/path?x=1');
 		expect(byHost.status).toBe(200);

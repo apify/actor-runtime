@@ -3,8 +3,9 @@
  * one of its standby runs, starting runs as `services/standby.ts` decides. Two addressings, both on the
  * API port: `http://<label>.localhost:3333/<path>` (the Actor's `standbyUrl`, the platform's host-based
  * shape, where the Actor owns `/`) and `/actor-runtime/standby/<label>/<path>` (for Actor containers and
- * clients that do not resolve `*.localhost`). `<label>` is the platform's `<username>--<actor-name>` or
- * `<username>--<task-name>`, or the Actor or task id; an Actor wins over a task of the same name.
+ * clients that do not resolve `*.localhost`; also under `/v2`, for `apify api`). `<label>` is the
+ * platform's `<username>--<actor-name>` or `<username>--<task-name>`, or the Actor or task id; an Actor
+ * wins over a task of the same name.
  *
  * Mounted ahead of the API's body parser, so a request body is streamed through untouched.
  */
@@ -29,6 +30,7 @@ import {
 	endUpgradeWithError,
 	forwardHttpRequest,
 	forwardUpgrade,
+	pathUnderPrefix,
 	sendJsonError,
 	trackUpgradedSocket,
 } from './http-proxy.js';
@@ -44,8 +46,8 @@ export function standbyTargetOf(req: IncomingMessage): StandbyTarget | undefined
 	const url = req.url ?? '/';
 	const hostLabel = labelFromHost(req.headers.host);
 	if (hostLabel) return { label: hostLabel, forwardPath: url.startsWith('/') ? url : `/${url}` };
-	if (!url.startsWith(`${STANDBY_PATH_PREFIX}/`)) return undefined;
-	const rest = url.slice(STANDBY_PATH_PREFIX.length + 1);
+	const rest = pathUnderPrefix(url, STANDBY_PATH_PREFIX);
+	if (rest === undefined) return undefined;
 	const end = rest.search(/[/?]/);
 	const label = decodeURIComponent(end === -1 ? rest : rest.slice(0, end));
 	if (!label) return undefined;
