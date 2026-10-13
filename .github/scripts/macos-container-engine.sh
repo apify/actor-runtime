@@ -46,9 +46,11 @@
 #
 # amd64 emulation: the Playwright sample Actors' base images have no arm64 build, so the browser-view
 # files build and run them as amd64 (`build-platform.ts`'s fallback). With Rosetta on the host the VM
-# gets it (`--vz-rosetta` / `--rosetta`), which is fast; without it the fallback is QEMU user-mode
-# emulation registered in the VM (`tonistiigi/binfmt`), which is slow but works. Installing Rosetta is
-# attempted once; it may need admin rights.
+# gets it (Colima's `--vz-rosetta`; Podman's machine by its `containers.conf` default), which is fast
+# and runs Chrome; without it the fallback is QEMU user-mode emulation in the VM (`tonistiigi/binfmt`
+# for Docker, the handlers Podman's image ships), which is slow and cannot run Chrome. Installing
+# Rosetta is attempted once; it may need admin rights. In Podman's machine the script also makes sure
+# Rosetta, not the image's QEMU handler, is what serves amd64 binaries (`ROSETTA_IN_VM_SCRIPT`).
 #
 # Docker Hub: each job starts from an empty engine and pulls every base image again, and Docker Hub's
 # anonymous pull limit is per IP - a day of runs on one Mac exhausts it ("toomanyrequests"). With
@@ -221,7 +223,14 @@ smoke_tests() {
 	# amd64 emulation, for the browser-view files. A warning, not a failure: only those files need it,
 	# and their own assertions will say so if it is missing.
 	if "$cli" run --rm --platform linux/amd64 docker.io/library/busybox uname -m 2>/dev/null | grep -q x86_64; then
-		echo "amd64 containers run on this engine."
+		# Which emulator: the interpreter binfmt_misc hands the binary to is mapped into the process.
+		local emulator
+		emulator=$("$cli" run --rm --platform linux/amd64 docker.io/library/busybox \
+			sh -c 'grep -o -m1 -E "rosetta|qemu-x86_64[a-z_-]*" /proc/self/maps' 2>/dev/null || true)
+		echo "amd64 containers run on this engine (via ${emulator:-an emulator /proc/self/maps does not name})."
+		case "$emulator" in
+			qemu*) warn "amd64 containers run under QEMU, not Rosetta; the browser-view e2e files will fail (Chrome crashes under QEMU)." ;;
+		esac
 	else
 		warn "amd64 containers do not run on this engine; the browser-view e2e files will fail."
 	fi
@@ -358,6 +367,39 @@ find_podman() {
 	echo "Using $(command -v podman): $(podman --version)"
 }
 
+# vm_root_sh <script>: runs a shell script as root inside the podman machine, passed base64-encoded so
+# no quoting has to survive two shells and ssh on the way.
+vm_root_sh() {
+	local encoded
+	encoded=$(printf '%s' "$1" | base64 | tr -d '\n')
+	podman machine ssh "$PODMAN_MACHINE" -- sudo sh -c "echo $encoded | base64 -d | sh"
+}
+
+# The Rosetta registration the machine's own activation service is supposed to make (binfmt_misc:
+# x86_64 ELF magic and mask, the interpreter from the virtiofs share, `OCF` = open the interpreter at
+# registration, pass credentials, fix binary).
+ROSETTA_BINFMT=':rosetta:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/mnt/rosetta/rosetta:OCF'
+ROSETTA_IN_VM_SCRIPT="
+bm=/proc/sys/fs/binfmt_misc
+echo '--- rosetta-activation.service:' \$(systemctl is-active rosetta-activation.service 2>&1)
+systemctl status --no-pager rosetta-activation.service 2>&1 | tail -n 12 || true
+echo '--- rosetta mount:'; mount | grep -i rosetta || echo none
+echo '--- binfmt handlers:'; ls \$bm
+if [ ! -e \$bm/rosetta ] && [ -x /mnt/rosetta/rosetta ]; then
+	echo 'Rosetta is mounted but not registered; registering it.'
+	printf '%s' '$ROSETTA_BINFMT' > \$bm/register
+fi
+if [ -e \$bm/rosetta ]; then
+	echo '--- rosetta handler:'; cat \$bm/rosetta
+	if [ -e \$bm/qemu-x86_64 ]; then
+		echo 'Removing the QEMU x86_64 handler so that Rosetta serves amd64 binaries.'
+		echo -1 > \$bm/qemu-x86_64
+	fi
+else
+	echo 'No Rosetta in this VM; amd64 binaries run under QEMU, which cannot run Chrome.'
+fi
+"
+
 # install_podman rootless|rootful
 install_podman() {
 	local mode=$1
@@ -412,12 +454,15 @@ install_podman() {
 	export_late "DOCKER_HOST=$DOCKER_HOST"
 	# For reading a failed socket smoke test below: the socket's SELinux label and the enforcing mode.
 	podman machine ssh "$PODMAN_MACHINE" -- sh -c "getenforce; ls -laZ $(dirname "$sock")/" || true
-	if [ -z "$rosetta" ]; then
-		# QEMU user-mode handlers for foreign architectures, registered in the VM's kernel (binfmt_misc)
-		# by the VM's root, whichever mode the machine is in.
-		podman machine ssh "$PODMAN_MACHINE" -- sudo podman run --privileged --rm docker.io/tonistiigi/binfmt --install amd64 ||
-			warn "Could not register QEMU amd64 emulation in the VM."
-	fi
+	echo "::endgroup::"
+	# The machine image ships QEMU user-mode handlers for foreign architectures, and its
+	# `rosetta-activation.service` is meant to put Rosetta in front of them. Seen on this runner: the
+	# service enabled, yet an amd64 Chrome ran under `qemu-x86_64-static` and crashed (QEMU cannot run
+	# Chrome; Rosetta can). So, as the VM's root: register Rosetta if its share is mounted but no
+	# handler exists, and drop the image's x86_64 QEMU handler whenever a Rosetta one is there, so
+	# that Rosetta is the only handler for amd64 binaries. Without Rosetta the QEMU handlers stay.
+	echo "::group::Rosetta in the VM"
+	vm_root_sh "$ROSETTA_IN_VM_SCRIPT" || warn "Could not inspect the VM's binary-format handlers."
 	echo "::endgroup::"
 
 	smoke_tests podman "$sock"
