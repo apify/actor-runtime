@@ -38,6 +38,7 @@ import {
 	removeIsolatedApifyHome,
 	type ApiEnvelope,
 	type PushResult,
+	RUN_MEMORY_PARAMS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -52,7 +53,10 @@ interface RunApi {
 }
 
 function startRun(actorId: string, env: NodeJS.ProcessEnv): RunApi {
-	const output = apify(['api', 'POST', `actors/${actorId}/runs`, '--body', '{}'], { cwd: REPO_ROOT, env });
+	const output = apify(
+		['api', 'POST', `actors/${actorId}/runs`, '--params', JSON.stringify(RUN_MEMORY_PARAMS), '--body', '{}'],
+		{ cwd: REPO_ROOT, env },
+	);
 	return (JSON.parse(output) as ApiEnvelope<RunApi>).data;
 }
 

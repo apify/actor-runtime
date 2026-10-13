@@ -34,6 +34,7 @@ import {
 	type ApiEnvelope,
 	type DatasetInfoResult,
 	type PushResult,
+	RUN_MEMORY_MBYTES,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -45,7 +46,7 @@ const IMAGE_TAG = 'actor-runtime:e2e-all-modes';
 const EXPECTED_IMAGE_WORKING_DIR = '/home/myuser';
 const DEBUG_PORT = 9229;
 /** The default 1024 MB grants a quarter core (`resources.ts`), too little for a headful browser. */
-const RUN_MEMORY_MBYTES = 4096;
+const BROWSER_RUN_MEMORY_MBYTES = Math.max(4096, RUN_MEMORY_MBYTES);
 const MAX_REQUESTS_PER_CRAWL = 4;
 
 /** Edited in the dev folder after the push, so printing it proves the mount supplied the code. */
@@ -60,7 +61,7 @@ interface RunApi {
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
 	// Debug mode does not extend the run timeout for the time spent attaching.
-	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 900 });
+	const params = JSON.stringify({ memory: BROWSER_RUN_MEMORY_MBYTES, timeout: 900 });
 	const output = apify(
 		['api', 'POST', `actors/${actorId}/runs`, '--params', params, '--body', JSON.stringify(input)],
 		{ cwd: REPO_ROOT, env },

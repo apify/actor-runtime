@@ -130,17 +130,19 @@ sha_for() {
 	awk -v name="$2" '{ f = $2; sub(/^\*/, "", f); if (f == name) { print $1; exit } }' "$1"
 }
 
-# Half the machine, with a floor: the runtime image build (tsc, pip), Actor builds and emulated
-# browsers run in here, and the engines' own defaults (2 CPUs, 2-4 GiB) are tight for that.
+# Most of the machine, with floors: all but 2 cores and all but 8 GiB. The runtime image build (tsc,
+# pip), Actor builds, emulated browsers and the Actor runs - which the workflow gives 8 GB each, so two
+# cores' worth of CPU share - all run in here; the host keeps what macOS and the runner need. The
+# engines' own defaults (2 CPUs, 2-4 GiB) are far too tight for that.
 vm_cpus=2
 vm_memory=4
 vm_size() {
 	local ncpu memsize
 	ncpu=$(sysctl -n hw.ncpu)
 	memsize=$(sysctl -n hw.memsize)
-	vm_cpus=$((ncpu / 2))
+	vm_cpus=$((ncpu - 2))
 	[ "$vm_cpus" -ge 2 ] || vm_cpus=2
-	vm_memory=$((memsize / 1024 / 1024 / 1024 / 2))
+	vm_memory=$((memsize / 1024 / 1024 / 1024 - 8))
 	[ "$vm_memory" -ge 4 ] || vm_memory=4
 	echo "VM: $vm_cpus CPUs, ${vm_memory} GiB memory (host: $ncpu CPUs, $((memsize / 1024 / 1024 / 1024)) GiB)"
 }

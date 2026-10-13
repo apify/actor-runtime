@@ -232,8 +232,13 @@ jobs:
                   path: ${{ runner.temp }}/apify-cli-package
             - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
               run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
-            # Every e2e file, one after another, on this engine.
+            # Every e2e file, one after another, on this engine. The runs get 8 GB each - two cores
+            # under the platform's memory-to-CPU rule - rather than the suite's 1 GB default: this VM
+            # has the memory and cores for it, and a run's CPU share is what its duration hangs on
+            # (`helpers/apify-cli.ts`'s `RUN_MEMORY_MBYTES`).
             - run: pnpm run test:e2e
+              env:
+                  ACTOR_RUNTIME_E2E_RUN_MEMORY_MBYTES: 8192
             - name: Dump runtime container logs on failure
               if: failure()
               run: |

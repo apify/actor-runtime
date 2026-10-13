@@ -29,6 +29,7 @@ import {
 	type CallResult,
 	type DatasetInfoResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -85,10 +86,13 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 				expect(push.build.status).toBe('SUCCEEDED');
 
 				const itemCountFor = async (maxPages: number): Promise<number> => {
-					const callOutput = apify(['call', '--input', JSON.stringify({ maxPages }), '--json'], {
-						cwd: actorDir,
-						env,
-					});
+					const callOutput = apify(
+						['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages }), '--json'],
+						{
+							cwd: actorDir,
+							env,
+						},
+					);
 					const call = JSON.parse(callOutput) as CallResult;
 					expect(call.run.status).toBe('SUCCEEDED');
 
@@ -110,7 +114,7 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 	it('Python sample actor fills the extra datasets its .actor/actor.json declares', () => {
 		const env = apifyEnv(isolatedApifyHome);
 		const actorDir = join(REPO_ROOT, 'samples', 'actor_py');
-		const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 2 }), '--json'], {
+		const callOutput = apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 2 }), '--json'], {
 			cwd: actorDir,
 			env,
 		});
@@ -149,7 +153,7 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 
 	it('the run log contains the crawler per-page lines', () => {
 		const env = apifyEnv(isolatedApifyHome);
-		const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
+		const callOutput = apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
 			cwd: join(REPO_ROOT, 'samples', 'actor_ts'),
 			env,
 		});
@@ -163,7 +167,7 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 		const env = apifyEnv(isolatedApifyHome);
 		const actorDir = join(REPO_ROOT, 'samples', 'actor_ts');
 
-		const callOutput = apify(['call', '--json'], { cwd: actorDir, env });
+		const callOutput = apify(['call', ...RUN_MEMORY_ARGS, '--json'], { cwd: actorDir, env });
 		const call = JSON.parse(callOutput) as CallResult;
 		expect(call.run.status).toBe('SUCCEEDED');
 
@@ -191,16 +195,19 @@ describe('full Actor dev loop via apify-cli (requires Docker)', () => {
 
 		// `maxPages` has `minimum: 1` - the run is refused before any container starts, and the CLI
 		// surfaces the runtime's validation message.
-		const rejected = apifyExpectingFailure(['call', '--input', JSON.stringify({ maxPages: 0 }), '--json'], {
-			cwd: actorDir,
-			env,
-		});
+		const rejected = apifyExpectingFailure(
+			['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 0 }), '--json'],
+			{
+				cwd: actorDir,
+				env,
+			},
+		);
 		expect(rejected).toMatch(/maxPages/);
 	});
 
 	it('apify api reads back the run and its default dataset (requirements/cli.md: `apify api`)', () => {
 		const env = apifyEnv(isolatedApifyHome);
-		const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
+		const callOutput = apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
 			cwd: join(REPO_ROOT, 'samples', 'actor_ts'),
 			env,
 		});

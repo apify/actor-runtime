@@ -40,6 +40,8 @@ import {
 	type ApiEnvelope,
 	type CallResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
+	RUN_MEMORY_PARAMS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -150,10 +152,13 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 
 			// Run #1: no edit, no recompile since the push above - the host folder's `dist/` still matches
 			// what the image itself was just built from.
-			const firstCallOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-				cwd: actorDir,
-				env,
-			});
+			const firstCallOutput = apify(
+				['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'],
+				{
+					cwd: actorDir,
+					env,
+				},
+			);
 			const firstCall = JSON.parse(firstCallOutput) as CallResult;
 			expect(firstCall.run.status).toBe('SUCCEEDED');
 			const firstLog = apifyAllOutput(['runs', 'log', firstCall.run.id], { cwd: REPO_ROOT, env });
@@ -167,10 +172,13 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 
 			// Run #2: same registered Actor, same image throughout (asserted below via buildId) - only the
 			// host folder's own compiled output changed.
-			const secondCallOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-				cwd: actorDir,
-				env,
-			});
+			const secondCallOutput = apify(
+				['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'],
+				{
+					cwd: actorDir,
+					env,
+				},
+			);
 			const secondCall = JSON.parse(secondCallOutput) as CallResult;
 			expect(secondCall.run.status).toBe('SUCCEEDED');
 			const secondLog = apifyAllOutput(['runs', 'log', secondCall.run.id], { cwd: REPO_ROOT, env });
@@ -215,7 +223,7 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 						'POST',
 						`actors/${actorId}/runs`,
 						'--params',
-						JSON.stringify({ devFolder: 'false', waitForFinish: 180 }),
+						JSON.stringify({ ...RUN_MEMORY_PARAMS, devFolder: 'false', waitForFinish: 180 }),
 						'--body',
 						JSON.stringify({ maxPages: 1 }),
 					],
@@ -231,7 +239,10 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 
 			// The registration survived.
 			const call = JSON.parse(
-				apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], { cwd: actorDir, env }),
+				apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
+					cwd: actorDir,
+					env,
+				}),
 			) as CallResult;
 			expect(call.run.status).toBe('SUCCEEDED');
 			const callLog = apifyAllOutput(['runs', 'log', call.run.id], { cwd: REPO_ROOT, env });
@@ -284,10 +295,13 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			const registered = registerDevFolder(actorId, actorDir, env);
 			expect(registered.data.localDevFolder).toBe(actorDir);
 
-			const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-				cwd: actorDir,
-				env,
-			});
+			const callOutput = apify(
+				['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'],
+				{
+					cwd: actorDir,
+					env,
+				},
+			);
 			const call = JSON.parse(callOutput) as CallResult;
 			// Succeeds despite `actorDir` having no `node_modules` of its own (removed above) - the crawl
 			// cannot run at all without `apify`/`@crawlee/cheerio` resolving, and the only place they could
@@ -336,10 +350,13 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 			const cleared = JSON.parse(clearOutput) as DevFolderApiResult;
 			expect(cleared.data.localDevFolder).toBeNull();
 
-			const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-				cwd: actorDir,
-				env,
-			});
+			const callOutput = apify(
+				['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'],
+				{
+					cwd: actorDir,
+					env,
+				},
+			);
 			const call = JSON.parse(callOutput) as CallResult;
 			expect(call.run.status).toBe('SUCCEEDED');
 
@@ -391,7 +408,9 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 				expect(push.build.status).toBe('SUCCEEDED');
 				registerDevFolder(push.actor.id, devFolder, env);
 
-				const call = JSON.parse(apify(['call', '--json'], { cwd: entryActorDir, env })) as CallResult;
+				const call = JSON.parse(
+					apify(['call', ...RUN_MEMORY_ARGS, '--json'], { cwd: entryActorDir, env }),
+				) as CallResult;
 				expect(call.run.status).toBe('SUCCEEDED');
 				// The stored log, not `apify call`'s streamed copy: for an Actor that exits within milliseconds
 				// the CLI's stream can close before its last lines are flushed, on any engine.
@@ -438,10 +457,13 @@ describe('local dev-folder bind mount: edit-compile-call loop with no rebuild (r
 
 			const before = countDanglingVolumes();
 			for (let i = 0; i < 3; i++) {
-				const callOutput = apify(['call', '--input', JSON.stringify({ maxPages: 1 }), '--json'], {
-					cwd: actorDir,
-					env,
-				});
+				const callOutput = apify(
+					['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 1 }), '--json'],
+					{
+						cwd: actorDir,
+						env,
+					},
+				);
 				const call = JSON.parse(callOutput) as CallResult;
 				expect(call.run.status).toBe('SUCCEEDED');
 			}

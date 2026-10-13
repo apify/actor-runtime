@@ -31,6 +31,7 @@ import {
 	type CallResult,
 	type DatasetInfoResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
 } from './helpers/apify-cli.js';
 import { waitFor } from './helpers/wait.js';
 
@@ -270,10 +271,19 @@ describe('Actor Standby via apify-cli (requires Docker)', () => {
 				// An ordinary run of the sample is the client: it reads the standby Actor's standbyUrl through the
 				// API from its container and calls `/api/greeting` there.
 				const call = JSON.parse(
-					apify(['call', '--input', JSON.stringify({ standbyActor: actorId, name: 'Actor' }), '--json'], {
-						cwd: actorDir,
-						env,
-					}),
+					apify(
+						[
+							'call',
+							...RUN_MEMORY_ARGS,
+							'--input',
+							JSON.stringify({ standbyActor: actorId, name: 'Actor' }),
+							'--json',
+						],
+						{
+							cwd: actorDir,
+							env,
+						},
+					),
 				) as CallResult;
 				expect(call.run.status).toBe('SUCCEEDED');
 

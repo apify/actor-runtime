@@ -34,6 +34,8 @@ import {
 	type CallResult,
 	type DatasetInfoResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
+	RUN_MEMORY_PARAMS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,7 +71,9 @@ function buildLog(buildId: string, env: NodeJS.ProcessEnv): string {
 }
 
 function callWith(input: object, env: NodeJS.ProcessEnv, cwd = SAMPLE_ACTOR_DIR): CallResult {
-	return JSON.parse(apify(['call', '--input', JSON.stringify(input), '--json'], { cwd, env })) as CallResult;
+	return JSON.parse(
+		apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify(input), '--json'], { cwd, env }),
+	) as CallResult;
 }
 
 function registerDevFolder(id: string, path: string, env: NodeJS.ProcessEnv): { localDevFolder: string | null } {
@@ -295,7 +299,9 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 
 				expect(registerDevFolder(push.actor.id, devFolder, env).localDevFolder).toBe(devFolder);
 
-				const call = JSON.parse(apify(['call', '--json'], { cwd: noWorkdirActorDir, env })) as CallResult;
+				const call = JSON.parse(
+					apify(['call', ...RUN_MEMORY_ARGS, '--json'], { cwd: noWorkdirActorDir, env }),
+				) as CallResult;
 				// The run starts exactly as if the feature did not exist...
 				expect(call.run.status).toBe('SUCCEEDED');
 				const log = storedLog(call.run.id, env);
@@ -333,7 +339,18 @@ describe('non-standard Actors: unusual base image, custom entry point, unusual w
 			// starts a run under the hood, returning immediately.
 			const run = (
 				JSON.parse(
-					apify(['api', 'POST', `actors/${actorId}/runs`, '--body', '{}'], { cwd: REPO_ROOT, env }),
+					apify(
+						[
+							'api',
+							'POST',
+							`actors/${actorId}/runs`,
+							'--params',
+							JSON.stringify(RUN_MEMORY_PARAMS),
+							'--body',
+							'{}',
+						],
+						{ cwd: REPO_ROOT, env },
+					),
 				) as ApiEnvelope<{
 					id: string;
 					status: string;

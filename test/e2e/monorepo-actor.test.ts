@@ -31,6 +31,7 @@ import {
 	removeIsolatedApifyHome,
 	type CallResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -98,7 +99,10 @@ describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via a
 				expect(buildLog).toContain('RUN ./shared/check-context.sh');
 
 				const call = JSON.parse(
-					apify(['call', '--input', JSON.stringify({ count: 3 }), '--json'], { cwd: actorDir, env }),
+					apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ count: 3 }), '--json'], {
+						cwd: actorDir,
+						env,
+					}),
 				) as CallResult;
 				expect(call.run.status).toBe('SUCCEEDED');
 
@@ -120,7 +124,7 @@ describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via a
 		const env = apifyEnv(isolatedApifyHome);
 		const actorDir = join(MONOREPO_ROOT, 'actors', 'greeter');
 
-		const call = JSON.parse(apify(['call', '--json'], { cwd: actorDir, env })) as CallResult;
+		const call = JSON.parse(apify(['call', ...RUN_MEMORY_ARGS, '--json'], { cwd: actorDir, env })) as CallResult;
 		expect(call.run.status).toBe('SUCCEEDED');
 		const storedInput = apify(['key-value-stores', 'get-value', call.storage.defaultKeyValueStoreId, 'INPUT'], {
 			cwd: actorDir,
@@ -128,10 +132,13 @@ describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via a
 		});
 		expect(JSON.parse(storedInput) as Record<string, unknown>).toEqual({ count: 2 });
 
-		const rejected = apifyExpectingFailure(['call', '--input', JSON.stringify({ count: 0 }), '--json'], {
-			cwd: actorDir,
-			env,
-		});
+		const rejected = apifyExpectingFailure(
+			['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ count: 0 }), '--json'],
+			{
+				cwd: actorDir,
+				env,
+			},
+		);
 		expect(rejected).toMatch(/count/);
 	});
 
