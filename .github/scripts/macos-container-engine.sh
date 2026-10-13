@@ -430,9 +430,10 @@ install_podman() {
 	vm_size
 	ensure_rosetta || true
 	# Rosetta is a `containers.conf` setting (`[machine] rosetta`; Podman 6 has no `init` flag for it),
-	# applehv only. Set explicitly for this one command, through an override file, to what the host
-	# has: Podman 5.6 turned it off by default over kernel issues since fixed, and the setting's
-	# default has moved since, so the default is not relied on either way.
+	# applehv only, and off by default since Podman 5.6 (kernel issues, since fixed). Set explicitly,
+	# through an override file, to what the host has - for `init` AND `start`: Podman reads the setting
+	# again when it starts the machine and overwrites what `init` recorded, so an override that ends
+	# with `init` yields a VM with no Rosetta share (seen here: the activation service's mount failing).
 	printf '[machine]\nrosetta = %s\n' "$([ -n "$rosetta" ] && echo true || echo false)" > "$tmp_dir/containers-machine.conf"
 	export CONTAINERS_CONF_OVERRIDE=$tmp_dir/containers-machine.conf
 	# `--memory` is MiB. `--disk-size` is a sparse maximum. Default mounts (`/Users`, `/private`,
@@ -444,8 +445,8 @@ install_podman() {
 		--disk-size 60 \
 		$([ "$mode" = rootful ] && echo --rootful) \
 		"$PODMAN_MACHINE"
-	unset CONTAINERS_CONF_OVERRIDE
 	podman machine start "$PODMAN_MACHINE"
+	unset CONTAINERS_CONF_OVERRIDE
 	podman machine list
 	podman system connection list
 	podman info --format 'Connection OK: {{.Host.Hostname}} rootless={{.Host.Security.Rootless}} selinux={{.Host.Security.SELinuxEnabled}} podman={{.Version.Version}}' ||

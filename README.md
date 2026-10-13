@@ -221,11 +221,12 @@ podman run --rm -p 3333:3333 -p 3000:3000 \
   (`apify runtime start` does): SELinux otherwise keeps the runtime container from the engine's socket
   mounted into it, and the runtime reports the engine as unavailable.
 - On an Apple Silicon Mac, Actors whose base image has no arm64 build (the Playwright images, for
-  example) run under amd64 emulation. Only Rosetta can run a browser that way, and only a
-  `podman machine` on the `applehv` provider has Rosetta: Podman 6 creates machines on `libkrun` by
-  default, where such Actors run under QEMU and Chrome crashes. Create the machine with
-  `podman machine init --provider applehv` (with Rosetta installed, `softwareupdate --install-rosetta`)
-  to run them.
+  example) run under amd64 emulation. Only Rosetta can run a browser that way, and a `podman machine`
+  has Rosetta only on the `applehv` provider with the setting on: Podman 6 creates machines on
+  `libkrun` by default, where such Actors run under QEMU and Chrome crashes, and has had Rosetta off
+  by default since 5.6. To run them: install Rosetta (`softwareupdate --install-rosetta`), put
+  `rosetta = true` under `[machine]` in `~/.config/containers/containers.conf`, and create the machine
+  with `podman machine init --provider applehv`.
 - Podman 3.4 (Ubuntu 22.04's stock package) and newer are supported. Keep the API port published on
   all interfaces (`-p 3333:3333` by default): under Podman 3.x and rootless Podman, Actors reach the API through it.
 - Under rootless Podman 3.x, add `--network slirp4netns:allow_host_loopback=true` to the `podman run`
