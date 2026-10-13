@@ -2,7 +2,8 @@
  * Monorepo Actors (`actor-driver.md`'s "Monorepo Actors") through `apify-cli` only: both Actors of
  * `samples/actor_monorepo` share one Dockerfile, one input schema and one package outside their own folders,
  * so each builds only from the whole Docker context `apify push` sends. Needs an `apify-cli` with monorepo
- * support - until it is published, point `ACTOR_RUNTIME_E2E_APIFY_CLI` at a built one (`helpers/apify-cli.ts`).
+ * support: CI drives the suite with the CLI built from its `actor-runtime` branch, which has it; locally,
+ * until it is published, point `ACTOR_RUNTIME_E2E_APIFY_CLI` at a built one (`helpers/apify-cli.ts`).
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -30,6 +31,7 @@ import {
 	removeIsolatedApifyHome,
 	type CallResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,7 +46,8 @@ interface GreetingItem {
 	actorPath: string;
 }
 
-// Until a published apify-cli supports monorepo Actors, this file runs only against a locally built one.
+// Until a published apify-cli supports monorepo Actors, this file runs only against a locally built one -
+// which CI always provides, so there it never skips.
 describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via apify-cli (requires Docker)', () => {
 	let isolatedApifyHome: string;
 
@@ -96,7 +99,10 @@ describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via a
 				expect(buildLog).toContain('RUN ./shared/check-context.sh');
 
 				const call = JSON.parse(
-					apify(['call', '--input', JSON.stringify({ count: 3 }), '--json'], { cwd: actorDir, env }),
+					apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ count: 3 }), '--json'], {
+						cwd: actorDir,
+						env,
+					}),
 				) as CallResult;
 				expect(call.run.status).toBe('SUCCEEDED');
 
@@ -118,7 +124,7 @@ describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via a
 		const env = apifyEnv(isolatedApifyHome);
 		const actorDir = join(MONOREPO_ROOT, 'actors', 'greeter');
 
-		const call = JSON.parse(apify(['call', '--json'], { cwd: actorDir, env })) as CallResult;
+		const call = JSON.parse(apify(['call', ...RUN_MEMORY_ARGS, '--json'], { cwd: actorDir, env })) as CallResult;
 		expect(call.run.status).toBe('SUCCEEDED');
 		const storedInput = apify(['key-value-stores', 'get-value', call.storage.defaultKeyValueStoreId, 'INPUT'], {
 			cwd: actorDir,
@@ -126,10 +132,13 @@ describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via a
 		});
 		expect(JSON.parse(storedInput) as Record<string, unknown>).toEqual({ count: 2 });
 
-		const rejected = apifyExpectingFailure(['call', '--input', JSON.stringify({ count: 0 }), '--json'], {
-			cwd: actorDir,
-			env,
-		});
+		const rejected = apifyExpectingFailure(
+			['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ count: 0 }), '--json'],
+			{
+				cwd: actorDir,
+				env,
+			},
+		);
 		expect(rejected).toMatch(/count/);
 	});
 

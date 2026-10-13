@@ -32,6 +32,7 @@ import {
 	type CallResult,
 	type DatasetInfoResult,
 	type PushResult,
+	RUN_MEMORY_MBYTES,
 } from './apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,10 +59,10 @@ interface RunApi {
 }
 
 /** The default 1024 MB grants a quarter core (`resources.ts`), too little for a headful browser. */
-const RUN_MEMORY_MBYTES = 4096;
+const BROWSER_RUN_MEMORY_MBYTES = Math.max(4096, RUN_MEMORY_MBYTES);
 
 function startRun(actorId: string, input: unknown, env: NodeJS.ProcessEnv): RunApi {
-	const params = JSON.stringify({ memory: RUN_MEMORY_MBYTES, timeout: 600 });
+	const params = JSON.stringify({ memory: BROWSER_RUN_MEMORY_MBYTES, timeout: 600 });
 	const output = apify(
 		['api', 'POST', `actors/${actorId}/runs`, '--params', params, '--body', JSON.stringify(input)],
 		{
@@ -226,7 +227,7 @@ export function describeBrowserViewSuite(sample: BrowserViewSample): void {
 						'--input',
 						JSON.stringify(sample.input(2)),
 						'--memory',
-						String(RUN_MEMORY_MBYTES),
+						String(BROWSER_RUN_MEMORY_MBYTES),
 						'--json',
 					],
 					{

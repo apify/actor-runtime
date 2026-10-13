@@ -25,6 +25,7 @@ import {
 	removeIsolatedApifyHome,
 	type ApiEnvelope,
 	type PushResult,
+	RUN_MEMORY_PARAMS,
 } from './helpers/apify-cli.js';
 import { fetchConsole } from './helpers/console-view.js';
 import { waitFor } from './helpers/wait.js';
@@ -96,10 +97,21 @@ describe('Run web server via apify-cli (requires Docker)', () => {
 			// Started via `apify api`, not `apify call`, so the page can be read while the run goes.
 			const started = (
 				JSON.parse(
-					apify(['api', 'POST', `actors/${push.actor.id}/runs`, '--body', JSON.stringify({ maxPages: 5 })], {
-						cwd: REPO_ROOT,
-						env,
-					}),
+					apify(
+						[
+							'api',
+							'POST',
+							`actors/${push.actor.id}/runs`,
+							'--params',
+							JSON.stringify(RUN_MEMORY_PARAMS),
+							'--body',
+							JSON.stringify({ maxPages: 5 }),
+						],
+						{
+							cwd: REPO_ROOT,
+							env,
+						},
+					),
 				) as ApiEnvelope<RunApi>
 			).data;
 			const runId = started.id;

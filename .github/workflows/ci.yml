@@ -5,6 +5,12 @@ on:
         branches: [master, v2-poc-requirements]
     pull_request:
 
+env:
+    # The apify-cli branch the runtime is developed against. Every e2e job below drives the runtime
+    # with the CLI built from it (the `apify-cli` job), not the one published on npm, so a change on
+    # either side that breaks the other shows up here, before either is released.
+    APIFY_CLI_REF: actor-runtime
+
 jobs:
     checks:
         name: Build, lint, unit + integration tests
@@ -25,8 +31,39 @@ jobs:
             - run: pnpm run format:check
             - run: pnpm test
 
+    apify-cli:
+        # The CLI the e2e jobs drive the runtime with, built once here and installed by each of them
+        # (`.github/scripts/install-apify-cli-package.sh`) - see `APIFY_CLI_REF` above.
+        name: Build apify-cli from its development branch
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  repository: apify/apify-cli
+                  ref: ${{ env.APIFY_CLI_REF }}
+            - name: Record the CLI commit
+              run: echo "apify-cli \`$APIFY_CLI_REF\` @ $(git rev-parse HEAD) - $(git log -1 --format=%s)" >> "$GITHUB_STEP_SUMMARY"
+            # The CLI's own pnpm (its `packageManager`) and Node: the checkout is the CLI's repository.
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            # `pnpm pack` runs the CLI's `prepack` (its build included) and produces the same package
+            # `pnpm publish` would, the published `files` only - what `npm install -g apify-cli` gets.
+            - run: pnpm pack --out apify-cli.tgz
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: apify-cli.tgz
+                  retention-days: 1
+                  if-no-files-found: error
+
     e2e:
         name: e2e ${{ matrix.file }} (apify-cli + ${{ matrix.engine }})
+        needs: apify-cli
         # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
         # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
         runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
@@ -48,6 +85,7 @@ jobs:
                     - actor-dev-loop
                     - debug-mode
                     - dev-folder-bind-mount
+                    - monorepo-actor
                     - nonstandard-actor
                     - browser-view-ts
                     - browser-view-py
@@ -63,6 +101,12 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: ${{ runner.temp }}/apify-cli-package
+            - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
+              run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
             # Rootless Podman serves its Docker-compatible API on a socket only when asked to. The suite
             # drives Podman through `CONTAINER_CLI=podman` and mounts the socket named by `DOCKER_HOST`
             # into the runtime container.
@@ -78,7 +122,7 @@ jobs:
                   echo "DOCKER_HOST=unix://$sock" >> "$GITHUB_ENV"
             # The suite manages the engine itself against the runner's daemon: it pre-pulls the
             # Actor base images, builds the runtime image, starts the runtime container with
-            # the host engine's socket, and drives it with stock apify-cli via npx.
+            # the host engine's socket, and drives it with the apify-cli installed above.
             - run: pnpm exec vitest run test/e2e/${{ matrix.file }}.test.ts
             # The e2e's runtime container is normally removed by the suite's afterAll; on
             # failure it is left running, so its server-side view of any failed request
@@ -93,8 +137,10 @@ jobs:
 
     e2e-arm64:
         name: e2e actor-dev-loop (apify-cli + docker on arm64)
-        # The only arm64 coverage in CI: `build-image.yml` builds multi-arch but runs only on dispatch or release, so an
-        # arm64 break would otherwise surface at release time. Native, so nothing here is emulated.
+        needs: apify-cli
+        # The Linux arm64 coverage in CI (`e2e-macos-arm64` below is the other): `build-image.yml` builds
+        # multi-arch but runs only on dispatch or release, so an arm64 break would otherwise surface at
+        # release time. Native, so nothing here is emulated.
         runs-on: ubuntu-24.04-arm
         timeout-minutes: 30
         steps:
@@ -105,8 +151,15 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: ${{ runner.temp }}/apify-cli-package
+            - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
+              run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
             # Only this file. The browser-based cases need the amd64 emulation `startBuild`'s fallback
-            # builds under, and nothing here installs binfmt/QEMU - an Apple Silicon Mac runs them.
+            # builds under, and nothing here installs binfmt/QEMU - `e2e-macos-arm64` runs them, under
+            # Rosetta.
             - run: pnpm exec vitest run test/e2e/actor-dev-loop.test.ts
             - name: Dump runtime container logs on failure
               if: failure()
@@ -114,3 +167,107 @@ jobs:
                   for c in $(docker ps -aq --filter name=actor-runtime-e2e); do
                     docker logs --tail 300 "$c" || true
                   done
+
+    e2e-macos-arm64:
+        name: e2e advanced modes (apify-cli + ${{ matrix.engine }} on macOS arm64, self-hosted)
+        # The leg on the platform most developers run the runtime on: an Apple Silicon Mac, with the
+        # engine in a Linux VM, the host's `$HOME` shared into it, and the socket the runtime container
+        # gets mounted being the VM's, not a kernel socket of the host. Each job starts its own VM and
+        # removes it when done (`.github/scripts/macos-container-engine.sh`): Docker via Colima, which
+        # the job also brings along (the runner has no Docker; Docker Desktop is the commercial product),
+        # and Podman as the runner's installed `podman` makes it - its own `podman machine`, the one a
+        # developer has - once rootless, the default a developer gets, and once rootful, so both of the
+        # modes `apify runtime start` handles are covered. It is a persistent self-hosted machine, so
+        # unlike every hosted leg above it is also cleaned before and after.
+        #
+        # One job per engine running a few e2e files in turn (fixed host ports, so never in parallel),
+        # rather than one job per file as above: the engine setup is per job, and there is one runner,
+        # so jobs queue rather than parallelize anyway. Not every file: the hosted legs already prove
+        # the runtime's behaviour on every engine, and this leg is for what is different on a Mac - the
+        # engine in a VM, the host's folders reaching it over virtiofs, amd64 images under Rosetta,
+        # `*.localhost` names and published ports crossing the VM boundary. The files below are the
+        # smallest set that drives every hard feature through all of that (`MACOS_E2E_FILES`). The
+        # Playwright images are ~2 GB pulls and run Chrome under emulation, hence the budget.
+        #
+        # Self-hosted, so never for a fork's pull request: `pull_request` runs the head branch's code,
+        # and the runner is a long-lived Apify machine. Pushes to master and same-repo PRs only.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        needs: apify-cli
+        runs-on: [self-hosted, macOS, ARM64]
+        timeout-minutes: 60
+        env:
+            # - all-modes: one run with debug mode, the live dev folder and browser view all on - a local
+            #   edit runs without a rebuild (the dev folder over virtiofs), the browser's display streams
+            #   live (amd64 Playwright image under Rosetta), the debugger port is published
+            # - web-server: the run's own web server is served live at its `*.localhost` container URL
+            # - standby: Standby Actors (Node, Python, one owning `/`) served at their standby URLs, and
+            #   reached from another Actor's container
+            # Everything else (dev loop, debug mode alone, dev-folder edge cases, pricing, non-standard
+            # and monorepo Actors) is engine-independent and covered by the hosted legs.
+            MACOS_E2E_FILES: test/e2e/all-modes.test.ts test/e2e/web-server.test.ts test/e2e/standby.test.ts
+        strategy:
+            fail-fast: false
+            matrix:
+                engine:
+                    - docker
+                    - podman-rootless
+                    - podman-rootful
+        steps:
+            - uses: actions/checkout@v4
+            # Starts the VM (for Docker: after downloading the pinned pieces into one directory under the
+            # runner user's home, removed again in the last step) and smoke-tests the socket and home
+            # mounts the suite relies on. Exports the engine's env (`CONTAINER_CLI`, `TMPDIR`, and for
+            # Podman the in-VM socket as `DOCKER_HOST`) to the job - see the script's header.
+            # The Docker Hub credentials are the Apify service account's, the same repository secrets
+            # `release.yml` publishes with: every job here starts from an empty engine and pulls every base
+            # image again, and Docker Hub's anonymous limit is per IP, which one Mac exhausts in a day of
+            # runs. Logged in, pulls count against the account. Absent (a fork has no secrets, and the job
+            # does not run for forks anyway), the script warns and pulls anonymously.
+            - name: Start a ${{ matrix.engine }} engine in a VM
+              env:
+                  DOCKERHUB_USERNAME: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_USERNAME }}
+                  DOCKERHUB_TOKEN: ${{ secrets.APIFY_SERVICE_ACCOUNT_DOCKERHUB_TOKEN }}
+              run: .github/scripts/macos-container-engine.sh install ${{ matrix.engine }}
+            # A previous job on this machine may have been cancelled or timed out mid-suite. The engine is
+            # new, so there is nothing of ours left in it; this catches the suite's temp dirs and, above
+            # all, fails with the holder named if 3333/3000 is taken by something that is not ours, rather
+            # than letting the container start fail deep in `beforeAll`.
+            - name: Clean up leftovers of earlier runs
+              run: .github/scripts/e2e-host-cleanup.sh --require-free-ports
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: ${{ runner.temp }}/apify-cli-package
+            - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
+              run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
+            # The files above, one after another, on this engine. The runs get 8 GB each - two cores
+            # under the platform's memory-to-CPU rule - rather than the suite's 1 GB default: this VM
+            # has the memory and cores for it, and a run's CPU share is what its duration hangs on
+            # (`helpers/apify-cli.ts`'s `RUN_MEMORY_MBYTES`).
+            - run: pnpm exec vitest run $MACOS_E2E_FILES --no-file-parallelism
+              env:
+                  ACTOR_RUNTIME_E2E_RUN_MEMORY_MBYTES: 8192
+            - name: Dump runtime container logs on failure
+              if: failure()
+              run: |
+                  cli=${CONTAINER_CLI:-docker}
+                  for c in $($cli ps -aq --filter name=actor-runtime-e2e); do
+                    $cli logs --tail 300 "$c" || true
+                  done
+            # Always, so the next job starts clean whatever happened here. The engine and everything in
+            # it goes in the next step anyway; this one is for the suite's temp dirs on the host.
+            - name: Clean up
+              if: always()
+              run: .github/scripts/e2e-host-cleanup.sh
+            # Stops and deletes the VM and removes the binaries, the engines' state, the isolated docker
+            # config and Lima's image cache - the machine is left as the job found it (the installed
+            # podman and its machine image cache included).
+            - name: Remove the container engine
+              if: always()
+              run: .github/scripts/macos-container-engine.sh teardown

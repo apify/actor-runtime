@@ -26,6 +26,7 @@ import {
 	type ApiEnvelope,
 	type CallResult,
 	type PushResult,
+	RUN_MEMORY_ARGS,
 } from './helpers/apify-cli.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -124,7 +125,10 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 
 			// A free run first: no pricing fields at all, but the compute-unit estimate is there.
 			const freeCall = JSON.parse(
-				apify(['call', '--input', JSON.stringify({ maxPages: 2 }), '--json'], { cwd: SAMPLE_ACTOR_DIR, env }),
+				apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 2 }), '--json'], {
+					cwd: SAMPLE_ACTOR_DIR,
+					env,
+				}),
 			) as CallResult;
 			expect(freeCall.run.status).toBe('SUCCEEDED');
 			const freeRun = getRun(freeCall.run.id, env);
@@ -150,12 +154,15 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			expect(priced.data.pricingInfos).toHaveLength(1);
 
 			const call = JSON.parse(
-				apify(['call', '--input', JSON.stringify({ maxPages: 3 }), '--json'], { cwd: SAMPLE_ACTOR_DIR, env }),
+				apify(['call', ...RUN_MEMORY_ARGS, '--input', JSON.stringify({ maxPages: 3 }), '--json'], {
+					cwd: SAMPLE_ACTOR_DIR,
+					env,
+				}),
 			) as CallResult;
 			expect(call.run.status).toBe('SUCCEEDED');
 			const run = getRun(call.run.id, env);
 			expect(run.pricingInfo?.pricingModel).toBe('PAY_PER_EVENT');
-			// 3 pages -> 512 MB from the sample's defaultMemoryMbytes -> the start event once; the SDK charged the page and crawl events over the endpoint.
+			// The start event once; the SDK charged the page and crawl events over the endpoint.
 			expect(run.chargedEventCounts).toEqual({
 				[PAGE_EVENT]: 3,
 				[FINISHED_EVENT]: 1,

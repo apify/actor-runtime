@@ -56,10 +56,9 @@ apify datasets get-items <datasetId> --format json
 
 ### Apple Silicon and other arm64 hosts
 
-Builds run for the host's architecture. Some Apify base images are published for `linux/amd64` only -
-both `apify/actor-node-playwright*` and `apify/actor-python-playwright*` are - and a build from one of
-those is retried for `linux/amd64`, the architecture the Apify platform builds and runs on, with the
-reason in the build log. The engine emulates it (Rosetta on Apple Silicon), so it works, just slower.
+Builds run for the host's architecture. An Actor whose base image has no build for it (the Playwright
+images are `linux/amd64` only) is built and run for `linux/amd64` instead, as on the platform, under
+the engine's emulation: it works, just slower, and the build log says so.
 
 ## Monorepo Actors (`dockerContextDir`)
 

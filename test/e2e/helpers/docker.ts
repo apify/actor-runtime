@@ -43,6 +43,9 @@ export interface EngineInfo {
 	rootless: boolean;
 	/** Podman only. */
 	podmanMajorVersion?: number;
+	/** Podman only: SELinux enforcing on the engine's host (Fedora; the Fedora-based VM of Podman Desktop /
+	 * `podman machine` on macOS and Windows, and of Lima's Podman template the macOS CI leg uses). */
+	selinux?: boolean;
 }
 
 export function detectEngine(): EngineInfo {
@@ -50,15 +53,16 @@ export function detectEngine(): EngineInfo {
 	try {
 		const output = execFileSync(
 			CONTAINER_CLI,
-			['info', '--format', '{{.Host.Security.Rootless}} {{.Version.Version}}'],
+			['info', '--format', '{{.Host.Security.Rootless}} {{.Host.Security.SELinuxEnabled}} {{.Version.Version}}'],
 			{ encoding: 'utf8' },
 		).trim();
-		const [rootless, version] = output.split(/\s+/);
+		const [rootless, selinux, version] = output.split(/\s+/);
 		const major = Number(version?.match(/^(\d+)\./)?.[1]);
 		return {
 			cli: 'podman',
 			rootless: rootless === 'true',
 			podmanMajorVersion: Number.isInteger(major) ? major : undefined,
+			selinux: selinux === 'true',
 		};
 	} catch {
 		return { cli: 'podman', rootless: false };
@@ -77,10 +81,15 @@ export interface RuntimeRunArgsOptions {
  * The command `apify runtime start --detach` runs, as apify-cli's `buildRuntimeRunArgs` builds it (the
  * container name and the data mount aside), so the suite starts the runtime exactly the way the CLI
  * does on every engine - including the host-loopback network mode rootless Podman 3.x needs
- * (`actor-driver.md`'s "Web server (live view)"). `test/unit/e2e-runtime-command.test.ts` pins it.
+ * (`actor-driver.md`'s "Web server (live view)") and the SELinux label the CLI's
+ * `runtimeSecurityOptions` adds on Podman hosts with SELinux enforcing (Fedora; the Fedora-based VM of
+ * Podman Desktop / `podman machine` on macOS and Windows), without which SELinux keeps the container
+ * from the engine's socket bind-mounted into it - README's "Running with Podman" documents the same
+ * flag for users. `test/unit/e2e-runtime-command.test.ts` pins it.
  */
 export function runtimeRunArgs(engine: EngineInfo, options: RuntimeRunArgsOptions): string[] {
 	const hostLoopback = engine.cli === 'podman' && engine.rootless && engine.podmanMajorVersion === 3;
+	const selinux = engine.cli === 'podman' && engine.selinux === true;
 	return [
 		'run',
 		'--rm',
@@ -89,6 +98,7 @@ export function runtimeRunArgs(engine: EngineInfo, options: RuntimeRunArgsOption
 		options.containerName,
 		'--detach',
 		...(hostLoopback ? ['--network', 'slirp4netns:allow_host_loopback=true'] : []),
+		...(selinux ? ['--security-opt', 'label=disable'] : []),
 		'-p',
 		'3333:3333',
 		'-p',
@@ -161,6 +171,11 @@ export function pullImage(image: string): void {
 }
 
 export function startRuntimeContainer(tag: string, containerName: string): void {
+	// A previous run that died before its `afterAll` (killed vitest, a CI job cancelled or timed out on a
+	// persistent self-hosted runner) leaves a container of this name, and with it the fixed host ports
+	// below, in place; `docker run` would then fail with "name is already in use" / "port is already
+	// allocated". The name is this suite's own, so removing whatever holds it is always the right call.
+	removeContainerAndDataVolume(containerName);
 	// Host ports are fixed, not derived from `containerName` - only one runtime container can ever be
 	// bound to 3333/3000 at a time. `package.json`'s `test:e2e` script therefore runs
 	// `vitest run test/e2e --no-file-parallelism`: if a second e2e file's `beforeAll` ever raced this
@@ -168,7 +183,8 @@ export function startRuntimeContainer(tag: string, containerName: string): void 
 	// whole suite down with it. Adding an e2e file is safe as long as the suite stays serialized on one
 	// daemon - do not drop `--no-file-parallelism` without also parameterizing these two ports per
 	// container. CI parallelizes by running each file in its own job instead (`.github/workflows/ci.yml`).
-	const args = runtimeRunArgs(detectEngine(), {
+	const engine = detectEngine();
+	const args = runtimeRunArgs(engine, {
 		image: tag,
 		containerName,
 		hostSocketPath: hostEngineSocketPath(),
@@ -196,6 +212,11 @@ export function stopRuntimeContainer(containerName: string): void {
 		// best-effort: the container may already be gone (never started, already removed) - diagnostics
 		// only, never a reason to skip the cleanup below.
 	}
+	removeContainerAndDataVolume(containerName);
+}
+
+/** Force-removes the runtime container and its `<name>-data` volume; a no-op when neither exists. */
+function removeContainerAndDataVolume(containerName: string): void {
 	try {
 		execFileSync(CONTAINER_CLI, ['rm', '-f', containerName], { stdio: 'ignore' });
 	} catch {
@@ -206,6 +227,15 @@ export function stopRuntimeContainer(containerName: string): void {
 	} catch {
 		// best-effort cleanup
 	}
+}
+
+/** Ids of the engine's dangling (unattached) volumes - through `CONTAINER_CLI`, like every other engine
+ * call here. A hardcoded `docker` would count the wrong daemon's volumes on a Podman host (or, with no
+ * `docker` binary at all, as on the macOS Podman leg, fail with ENOENT). */
+export function danglingVolumeIds(): string[] {
+	return execFileSync(CONTAINER_CLI, ['volume', 'ls', '-q', '-f', 'dangling=true'], { encoding: 'utf8' })
+		.split('\n')
+		.filter((line) => line.trim() !== '');
 }
 
 export async function waitForHttpOk(url: string, timeoutMs = 60_000): Promise<void> {

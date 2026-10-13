@@ -6,6 +6,9 @@
 
 - CI (GitHub Actions) runs on every pull request and on pushes to the main branches: build, lint, format check, and all test layers, with the mandatory CLI-only e2e suite below executing against a real Docker daemon. A missing daemon fails the CI job - the e2e suite never silently skips.
 - CI runs each e2e file as its own job, in parallel; locally the files run one after another (each starts a runtime container on the fixed ports).
+- The e2e suite gives the sample Actors' runs more memory than the samples' own defaults, so the runs are not CPU-starved; only the tests that check a run's memory keep the sample's default.
+- CI runs the e2e suite against the `apify-cli` the runtime is developed together with - the CLI's unreleased development branch - not the published one, so the two stay compatible. Locally the suite uses the published CLI unless pointed at another build (`ACTOR_RUNTIME_E2E_APIFY_CLI`).
+- Beside the hosted Linux runners (Docker and Podman, x86_64 and arm64), CI runs the e2e tests of the features that behave differently on a developer's Mac - where the engine lives in a VM, host folders are shared into it, and amd64-only images run under emulation - on a self-hosted Apple Silicon runner: the advanced run modes (debug, live dev folder, browser view), the live view of a run's web server, and Standby; against Docker, and against Podman both rootless and rootful. Each job starts from a fresh engine and leaves the machine as it found it. It never runs for pull requests from forks.
 
 # Mandatory end-to-end tests
 
@@ -62,5 +65,6 @@ Test case must verify full Actor development flow:
 - Both Actors of `samples/actor_monorepo` push, build and run with the shared Dockerfile, input schema and
   package.
 - A build fails or succeeds as the platform's Git build of the same repository would.
-- Runs only with a locally built CLI (`ACTOR_RUNTIME_E2E_APIFY_CLI`) until monorepo support is published,
-  and is not in CI until then. `ACTOR_RUNTIME_E2E_IMAGE` tests an already built runtime image.
+- Runs only with an `apify-cli` that supports monorepo Actors (`ACTOR_RUNTIME_E2E_APIFY_CLI` points the
+  suite at one until that support is published); CI always has one. `ACTOR_RUNTIME_E2E_IMAGE` tests an
+  already built runtime image.

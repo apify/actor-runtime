@@ -4,10 +4,32 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Set to a built `apify-cli` entry script (`<apify-cli checkout>/dist/apify.js`) to drive the suite with
- * that CLI instead of the published one - for runtime features whose CLI side is not released yet.
+ * Set to a built `apify-cli` entry script (`<apify-cli checkout>/dist/apify.js`, or the installed
+ * package's `node_modules/apify-cli/dist/apify.js`) to drive the suite with that CLI instead of the
+ * published one - for runtime features whose CLI side is not released yet. CI always sets it, to the
+ * CLI built from its `actor-runtime` branch (`ci.yml`'s `apify-cli` job): the runtime and the CLI are
+ * developed together, and the suite is what keeps them compatible.
  */
 const LOCAL_APIFY_CLI_ENV_VAR = 'ACTOR_RUNTIME_E2E_APIFY_CLI';
+
+/**
+ * Memory the suite asks for on every run it starts, where the run's memory is not itself under test:
+ * the samples' own defaults (`defaultMemoryMbytes`, 128 MB per page for `actor_ts` / `actor_py`) buy
+ * the platform's matching CPU share - a thirty-second of a core at 128 MB (`resources.ts`) - and a
+ * run that small spends over a minute starting Node and fetching one page. The CI jobs set this per
+ * machine (`ci.yml`: more on the macOS runner, whose VM has the memory and cores to spare); 1 GB, a
+ * quarter core, is the floor.
+ */
+const RUN_MEMORY_ENV_VAR = 'ACTOR_RUNTIME_E2E_RUN_MEMORY_MBYTES';
+const DEFAULT_RUN_MEMORY_MBYTES = 1024;
+export const RUN_MEMORY_MBYTES = Math.max(
+	DEFAULT_RUN_MEMORY_MBYTES,
+	Number(process.env[RUN_MEMORY_ENV_VAR]) || DEFAULT_RUN_MEMORY_MBYTES,
+);
+/** For `apify call`: spread right after `'call'`. */
+export const RUN_MEMORY_ARGS = ['--memory', String(RUN_MEMORY_MBYTES)];
+/** For `apify api POST actors/:id/runs --params`: merge into the query parameters. */
+export const RUN_MEMORY_PARAMS = { memory: RUN_MEMORY_MBYTES };
 
 /**
  * By default the stock, unmodified `apify-cli` from npm (v1.8.0 or newer, per `cli.md`) via `npx`, so the

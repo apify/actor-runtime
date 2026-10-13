@@ -216,6 +216,17 @@ podman run --rm -p 3333:3333 -p 3000:3000 \
   `-e DOCKER_HOST=unix:///that/path`.
 - To use other ports, set `-e ACTOR_RUNTIME_API_PORT=4333 -e ACTOR_RUNTIME_CONSOLE_PORT=4000` and publish
   the same numbers on the host (`-p 4333:4333 -p 4000:4000`).
+- On a host where SELinux is enforcing - Fedora, and the Fedora-based VM behind Podman Desktop /
+  `podman machine` on macOS and Windows - add `--security-opt label=disable` to the `podman run` above
+  (`apify runtime start` does): SELinux otherwise keeps the runtime container from the engine's socket
+  mounted into it, and the runtime reports the engine as unavailable.
+- On an Apple Silicon Mac, Actors whose base image has no arm64 build (the Playwright images) run under
+  amd64 emulation, and a browser runs that way only under Rosetta. With Podman that takes a
+  `podman machine` on the `applehv` provider with Rosetta on: install Rosetta
+  (`softwareupdate --install-rosetta`), set `rosetta = true` under `[machine]` in
+  `~/.config/containers/containers.conf`, and create the machine with
+  `podman machine init --provider applehv`. Podman 6's default machine (`libkrun`, Rosetta off) runs
+  such Actors under QEMU, where Chrome crashes.
 - Podman 3.4 (Ubuntu 22.04's stock package) and newer are supported. Keep the API port published on
   all interfaces (`-p 3333:3333` by default): under Podman 3.x and rootless Podman, Actors reach the API through it.
 - Under rootless Podman 3.x, add `--network slirp4netns:allow_host_loopback=true` to the `podman run`
