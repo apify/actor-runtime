@@ -407,7 +407,7 @@ a later step misses. Only a call naming an Actor this runtime does not know is r
 
 ## Inspecting state directly
 
-- `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/acts`.
+- `apify api ...` sends authenticated calls: `apify api GET v2/datasets`, `apify api GET v2/actors`.
   The `v2/` prefix and the leading slash are both optional.
 - A named Actor, task, dataset, key-value store or request queue can stand in for its id as `~name` (your
   own), `username~name` or `userId~name`, like on the platform:

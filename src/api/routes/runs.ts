@@ -22,6 +22,7 @@ import {
 	listOwnedRuns,
 	resurrectRun,
 	setRunStatusMessage,
+	waitForRunFinish,
 } from '../../services/runs.js';
 import { rebootRun } from '../../services/migrations.js';
 import { chargeEvent, MAX_CHARGE_COUNT } from '../../services/charging.js';
@@ -47,12 +48,16 @@ export function mountRuns(router: Router, deps: ApiServerDeps): void {
 		}),
 	);
 
+	// `waitForFinish` here is what the SDKs' and apify-client's `run.waitForFinish()` poll: answered at
+	// once, that loop spins against the API instead of holding.
 	router.get(
 		'/actor-runs/:runId',
 		h(async (req, res) => {
 			const run = await getOwnedRun(requireUser(req).id, req.params.runId as string);
 			if (!run) throw recordNotFound();
-			sendData(res, runDto(run, standbyUrlAudienceOf(req.headers.host)));
+			const waitSecs = queryNumber(req, 'waitForFinish');
+			const finalRun = waitSecs ? ((await waitForRunFinish(run.id, waitSecs)) ?? run) : run;
+			sendData(res, runDto(finalRun, standbyUrlAudienceOf(req.headers.host)));
 		}),
 	);
 

@@ -27,6 +27,15 @@ export function forwardedHeaders(headers: IncomingHttpHeaders): IncomingHttpHead
 	return forwarded;
 }
 
+/** The part of `url` after `<prefix>/`, with or without the `/v2` that `apify api` puts in front of every
+ * path (`server.ts` explains); `undefined` when the URL is not under the prefix at all. */
+export function pathUnderPrefix(url: string, prefix: string): string | undefined {
+	for (const candidate of [prefix, `/v2${prefix}`]) {
+		if (url.startsWith(`${candidate}/`)) return url.slice(candidate.length + 1);
+	}
+	return undefined;
+}
+
 export function sendJsonError(res: ServerResponse, status: number, type: string, message: string): void {
 	if (res.headersSent) {
 		res.destroy();
