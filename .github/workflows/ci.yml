@@ -169,7 +169,7 @@ jobs:
                   done
 
     e2e-macos-arm64:
-        name: e2e all files (apify-cli + ${{ matrix.engine }} on macOS arm64, self-hosted)
+        name: e2e advanced modes (apify-cli + ${{ matrix.engine }} on macOS arm64, self-hosted)
         # The leg on the platform most developers run the runtime on: an Apple Silicon Mac, with the
         # engine in a Linux VM, the host's `$HOME` shared into it, and the socket the runtime container
         # gets mounted being the VM's, not a kernel socket of the host. Each job starts its own VM and
@@ -180,17 +180,31 @@ jobs:
         # modes `apify runtime start` handles are covered. It is a persistent self-hosted machine, so
         # unlike every hosted leg above it is also cleaned before and after.
         #
-        # One job per engine running every e2e file in turn (`test:e2e` serializes them: fixed host
-        # ports), rather than one job per file as above: the engine setup is per job, and there is
-        # one runner, so jobs queue rather than parallelize anyway. The browser-view files pull ~2 GB
-        # base images and run Chrome under amd64 emulation, hence the wide budget.
+        # One job per engine running a few e2e files in turn (fixed host ports, so never in parallel),
+        # rather than one job per file as above: the engine setup is per job, and there is one runner,
+        # so jobs queue rather than parallelize anyway. Not every file: the hosted legs already prove
+        # the runtime's behaviour on every engine, and this leg is for what is different on a Mac - the
+        # engine in a VM, the host's folders reaching it over virtiofs, amd64 images under Rosetta,
+        # `*.localhost` names and published ports crossing the VM boundary. The files below are the
+        # smallest set that drives every hard feature through all of that (`MACOS_E2E_FILES`). The
+        # Playwright images are ~2 GB pulls and run Chrome under emulation, hence the budget.
         #
         # Self-hosted, so never for a fork's pull request: `pull_request` runs the head branch's code,
         # and the runner is a long-lived Apify machine. Pushes to master and same-repo PRs only.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         needs: apify-cli
         runs-on: [self-hosted, macOS, ARM64]
-        timeout-minutes: 120
+        timeout-minutes: 60
+        env:
+            # - all-modes: one run with debug mode, the live dev folder and browser view all on - a local
+            #   edit runs without a rebuild (the dev folder over virtiofs), the browser's display streams
+            #   live (amd64 Playwright image under Rosetta), the debugger port is published
+            # - web-server: the run's own web server is served live at its `*.localhost` container URL
+            # - standby: Standby Actors (Node, Python, one owning `/`) served at their standby URLs, and
+            #   reached from another Actor's container
+            # Everything else (dev loop, debug mode alone, dev-folder edge cases, pricing, non-standard
+            # and monorepo Actors) is engine-independent and covered by the hosted legs.
+            MACOS_E2E_FILES: test/e2e/all-modes.test.ts test/e2e/web-server.test.ts test/e2e/standby.test.ts
         strategy:
             fail-fast: false
             matrix:
@@ -232,11 +246,11 @@ jobs:
                   path: ${{ runner.temp }}/apify-cli-package
             - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
               run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
-            # Every e2e file, one after another, on this engine. The runs get 8 GB each - two cores
+            # The files above, one after another, on this engine. The runs get 8 GB each - two cores
             # under the platform's memory-to-CPU rule - rather than the suite's 1 GB default: this VM
             # has the memory and cores for it, and a run's CPU share is what its duration hangs on
             # (`helpers/apify-cli.ts`'s `RUN_MEMORY_MBYTES`).
-            - run: pnpm run test:e2e
+            - run: pnpm exec vitest run $MACOS_E2E_FILES --no-file-parallelism
               env:
                   ACTOR_RUNTIME_E2E_RUN_MEMORY_MBYTES: 8192
             - name: Dump runtime container logs on failure
