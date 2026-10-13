@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 ### 🐛 Bug Fixes
 
 - Serve the POST aliases of the record, version and env-var PUT endpoints ([#104](https://github.com/apify/actor-runtime/pull/104)) ([06a5382](https://github.com/apify/actor-runtime/commit/06a5382c8aca584b72d9c7904ee849031a5b0951)) by [@Pijukatel](https://github.com/Pijukatel)
+- Honour waitForFinish on GET run&#x2F;build, serve standby and container proxies under &#x2F;v2 ([#105](https://github.com/apify/actor-runtime/pull/105)) ([058ccea](https://github.com/apify/actor-runtime/commit/058ccea6c0731fc562dd7f8d4c3c383ec203ebbc)) by [@Pijukatel](https://github.com/Pijukatel)
 
 
 <!-- git-cliff-unreleased-end -->
