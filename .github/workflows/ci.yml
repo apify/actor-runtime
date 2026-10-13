@@ -5,6 +5,12 @@ on:
         branches: [master, v2-poc-requirements]
     pull_request:
 
+env:
+    # The apify-cli branch the runtime is developed against. Every e2e job below drives the runtime
+    # with the CLI built from it (the `apify-cli` job), not the one published on npm, so a change on
+    # either side that breaks the other shows up here, before either is released.
+    APIFY_CLI_REF: actor-runtime
+
 jobs:
     checks:
         name: Build, lint, unit + integration tests
@@ -25,8 +31,39 @@ jobs:
             - run: pnpm run format:check
             - run: pnpm test
 
+    apify-cli:
+        # The CLI the e2e jobs drive the runtime with, built once here and installed by each of them
+        # (`.github/scripts/install-apify-cli-package.sh`) - see `APIFY_CLI_REF` above.
+        name: Build apify-cli from its development branch
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  repository: apify/apify-cli
+                  ref: ${{ env.APIFY_CLI_REF }}
+            - name: Record the CLI commit
+              run: echo "apify-cli \`$APIFY_CLI_REF\` @ $(git rev-parse HEAD) - $(git log -1 --format=%s)" >> "$GITHUB_STEP_SUMMARY"
+            # The CLI's own pnpm (its `packageManager`) and Node: the checkout is the CLI's repository.
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            # `pnpm pack` runs the CLI's `prepack` (its build included) and produces the same package
+            # `pnpm publish` would, the published `files` only - what `npm install -g apify-cli` gets.
+            - run: pnpm pack --out apify-cli.tgz
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: apify-cli.tgz
+                  retention-days: 1
+                  if-no-files-found: error
+
     e2e:
         name: e2e ${{ matrix.file }} (apify-cli + ${{ matrix.engine }})
+        needs: apify-cli
         # `podman-3.4` is the Podman 3.x leg: Ubuntu 22.04's stock Podman 3.4.4, which the ubuntu-22.04
         # runner image ships preinstalled - the CNI generation, with no usable user-defined networks.
         runs-on: ${{ matrix.engine == 'podman-3.4' && 'ubuntu-22.04' || 'ubuntu-latest' }}
@@ -48,6 +85,7 @@ jobs:
                     - actor-dev-loop
                     - debug-mode
                     - dev-folder-bind-mount
+                    - monorepo-actor
                     - nonstandard-actor
                     - browser-view-ts
                     - browser-view-py
@@ -63,6 +101,12 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: ${{ runner.temp }}/apify-cli-package
+            - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
+              run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
             # Rootless Podman serves its Docker-compatible API on a socket only when asked to. The suite
             # drives Podman through `CONTAINER_CLI=podman` and mounts the socket named by `DOCKER_HOST`
             # into the runtime container.
@@ -78,7 +122,7 @@ jobs:
                   echo "DOCKER_HOST=unix://$sock" >> "$GITHUB_ENV"
             # The suite manages the engine itself against the runner's daemon: it pre-pulls the
             # Actor base images, builds the runtime image, starts the runtime container with
-            # the host engine's socket, and drives it with stock apify-cli via npx.
+            # the host engine's socket, and drives it with the apify-cli installed above.
             - run: pnpm exec vitest run test/e2e/${{ matrix.file }}.test.ts
             # The e2e's runtime container is normally removed by the suite's afterAll; on
             # failure it is left running, so its server-side view of any failed request
@@ -93,6 +137,7 @@ jobs:
 
     e2e-arm64:
         name: e2e actor-dev-loop (apify-cli + docker on arm64)
+        needs: apify-cli
         # The Linux arm64 coverage in CI (`e2e-macos-arm64` below is the other): `build-image.yml` builds
         # multi-arch but runs only on dispatch or release, so an arm64 break would otherwise surface at
         # release time. Native, so nothing here is emulated.
@@ -106,6 +151,12 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: ${{ runner.temp }}/apify-cli-package
+            - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
+              run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
             # Only this file. The browser-based cases need the amd64 emulation `startBuild`'s fallback
             # builds under, and nothing here installs binfmt/QEMU - `e2e-macos-arm64` runs them, under
             # Rosetta.
@@ -135,6 +186,7 @@ jobs:
         # Self-hosted, so never for a fork's pull request: `pull_request` runs the head branch's code,
         # and the runner is a long-lived Apify machine. Pushes to master and same-repo PRs only.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        needs: apify-cli
         runs-on: [self-hosted, macOS, ARM64]
         timeout-minutes: 120
         strategy:
@@ -171,6 +223,12 @@ jobs:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: apify-cli-package
+                  path: ${{ runner.temp }}/apify-cli-package
+            - name: Install the apify-cli package built from its ${{ env.APIFY_CLI_REF }} branch
+              run: .github/scripts/install-apify-cli-package.sh "$RUNNER_TEMP/apify-cli-package/apify-cli.tgz"
             # Every e2e file, one after another, on this engine.
             - run: pnpm run test:e2e
             - name: Dump runtime container logs on failure

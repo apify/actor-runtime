@@ -2,7 +2,8 @@
  * Monorepo Actors (`actor-driver.md`'s "Monorepo Actors") through `apify-cli` only: both Actors of
  * `samples/actor_monorepo` share one Dockerfile, one input schema and one package outside their own folders,
  * so each builds only from the whole Docker context `apify push` sends. Needs an `apify-cli` with monorepo
- * support - until it is published, point `ACTOR_RUNTIME_E2E_APIFY_CLI` at a built one (`helpers/apify-cli.ts`).
+ * support: CI drives the suite with the CLI built from its `actor-runtime` branch, which has it; locally,
+ * until it is published, point `ACTOR_RUNTIME_E2E_APIFY_CLI` at a built one (`helpers/apify-cli.ts`).
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -44,7 +45,8 @@ interface GreetingItem {
 	actorPath: string;
 }
 
-// Until a published apify-cli supports monorepo Actors, this file runs only against a locally built one.
+// Until a published apify-cli supports monorepo Actors, this file runs only against a locally built one -
+// which CI always provides, so there it never skips.
 describe.skipIf(!process.env.ACTOR_RUNTIME_E2E_APIFY_CLI)('monorepo Actors via apify-cli (requires Docker)', () => {
 	let isolatedApifyHome: string;
 

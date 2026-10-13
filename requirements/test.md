@@ -6,6 +6,7 @@
 
 - CI (GitHub Actions) runs on every pull request and on pushes to the main branches: build, lint, format check, and all test layers, with the mandatory CLI-only e2e suite below executing against a real Docker daemon. A missing daemon fails the CI job - the e2e suite never silently skips.
 - CI runs each e2e file as its own job, in parallel; locally the files run one after another (each starts a runtime container on the fixed ports).
+- CI drives every e2e job with `apify-cli` built from the CLI's `actor-runtime` branch - the unreleased CLI the runtime is developed against - rather than the one published on npm: one job packs that branch the way `npm publish` would, and each e2e job installs the package and points the suite at it (`ACTOR_RUNTIME_E2E_APIFY_CLI`). A change on either side that breaks the other fails CI here, before either is released. Locally the suite defaults to the published CLI.
 - Beside the hosted Linux runners (Docker and Podman, x86_64 and arm64), CI runs the whole e2e suite on a self-hosted macOS arm64 runner - the platform most developers use the runtime from - once against Docker and once against Podman, each engine in a Linux VM with the host's home directory shared into it, the way Docker Desktop and Podman Desktop work on a Mac. That runner is a clean, persistent Mac with no container engine of its own, so each job installs one for itself in user space (Lima's VM plus Colima and the Docker CLI, or Lima's Podman template plus the podman remote client; pinned and checksum-verified, no sudo), logs it into Docker Hub with the repository's service-account secrets so the per-job image pulls count against the account rather than the machine's anonymous per-IP limit, runs the suite, then removes everything it left behind (its temp dirs, and the engine with every container, image and volume in it), leaving the machine as it found it. The job never runs for pull requests from forks.
 
 # Mandatory end-to-end tests
@@ -63,5 +64,6 @@ Test case must verify full Actor development flow:
 - Both Actors of `samples/actor_monorepo` push, build and run with the shared Dockerfile, input schema and
   package.
 - A build fails or succeeds as the platform's Git build of the same repository would.
-- Runs only with a locally built CLI (`ACTOR_RUNTIME_E2E_APIFY_CLI`) until monorepo support is published,
-  and is not in CI until then. `ACTOR_RUNTIME_E2E_IMAGE` tests an already built runtime image.
+- Runs only with a locally built CLI (`ACTOR_RUNTIME_E2E_APIFY_CLI`) until monorepo support is published;
+  CI, which builds the CLI from its `actor-runtime` branch, runs it like every other file.
+  `ACTOR_RUNTIME_E2E_IMAGE` tests an already built runtime image.

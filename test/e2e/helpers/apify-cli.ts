@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Set to a built `apify-cli` entry script (`<apify-cli checkout>/dist/apify.js`) to drive the suite with
- * that CLI instead of the published one - for runtime features whose CLI side is not released yet.
+ * Set to a built `apify-cli` entry script (`<apify-cli checkout>/dist/apify.js`, or the installed
+ * package's `node_modules/apify-cli/dist/apify.js`) to drive the suite with that CLI instead of the
+ * published one - for runtime features whose CLI side is not released yet. CI always sets it, to the
+ * CLI built from its `actor-runtime` branch (`ci.yml`'s `apify-cli` job): the runtime and the CLI are
+ * developed together, and the suite is what keeps them compatible.
  */
 const LOCAL_APIFY_CLI_ENV_VAR = 'ACTOR_RUNTIME_E2E_APIFY_CLI';
 
