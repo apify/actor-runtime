@@ -32,8 +32,8 @@ jobs:
         run: |
           jq -n --arg pr_url "$PR_URL" --arg pr_number "$PR_NUMBER" '{
               agent: "agent_REPLACEME",
-              environment_id: "env_REPLACEME",
-              vault_ids: ["vlt_REPLACEME"],
+              environment_id: "env_014xt9ZqCAQxkgQTxKezqsHg",
+              vault_ids: ["vlt_011CgBEg4og89Ai1ea6rFSiL"],
               title: "PR #\($pr_number)",
               initial_events: [
                   {
