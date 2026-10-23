@@ -1,0 +1,52 @@
+# Starts the Actor Runtime Review Managed Agent on a pull request. The agent is defined in
+# apify/apify-tooling-orchestration (`automations/actor-runtime-review/`); it compares the pull request with how the
+# real Apify platform behaves and posts its comment itself, so this job only starts the session.
+name: Platform parity review
+
+on:
+    pull_request:
+        types: [opened, synchronize, ready_for_review]
+        paths:
+            - src/**
+            - docker/**
+            - Dockerfile
+            - requirements/**
+            - skills/**
+
+permissions:
+    contents: read
+
+jobs:
+    trigger-review:
+        name: Trigger agent review
+        runs-on: ubuntu-latest
+        # Secrets are not available to PRs from forks
+        if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+
+        steps:
+            - name: Start review session
+              env:
+                  ANTHROPIC_API_KEY: ${{ secrets.ACTOR_RUNTIME_REVIEW_KEY }}
+                  PR_URL: ${{ github.event.pull_request.html_url }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+              run: |
+                  jq -n --arg pr_url "$PR_URL" --arg pr_number "$PR_NUMBER" '{
+                      agent: "agent_01BXryMddqDpwSJte9EdwT1A",
+                      environment_id: "env_014xt9ZqCAQxkgQTxKezqsHg",
+                      vault_ids: ["vlt_011CgBEg4og89Ai1ea6rFSiL"],
+                      title: "PR #\($pr_number)",
+                      initial_events: [
+                          {
+                              type: "user.message",
+                              content: [
+                                  { type: "text", text: "Review this pull request: \($pr_url)" }
+                              ]
+                          }
+                      ]
+                  }' | curl -sS --fail-with-body https://api.anthropic.com/v1/sessions \
+                      -H "Content-Type: application/json" \
+                      -H "anthropic-version: 2023-06-01" \
+                      -H "anthropic-beta: managed-agents-2026-04-01" \
+                      -H "anthropic-workspace-id: wrkspc_01WgY7dQqUQz8iqpLXhjt8Ho" \
+                      -H "x-api-key: $ANTHROPIC_API_KEY" \
+                      -d @-
