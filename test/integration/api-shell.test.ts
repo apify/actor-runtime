@@ -94,3 +94,36 @@ describe('API shell: envelope, 501/404, internal-object isolation, ownership sco
 		}
 	});
 });
+
+describe('legacy /v2/acts alias', () => {
+	let server: TestServerHandle;
+
+	beforeEach(async () => {
+		server = await startTestServer();
+	});
+
+	afterEach(async () => {
+		await server.close();
+	});
+
+	it('serves /v2/acts/* exactly like /v2/actors/*', async () => {
+		const headers = { Authorization: `Bearer ${server.token}` };
+		const created = await axios.post(
+			`${server.baseUrl}/v2/acts`,
+			{ name: 'legacy-alias' },
+			{ headers, validateStatus: () => true },
+		);
+		expect(created.status).toBe(201);
+		const id = created.data.data.id;
+
+		const viaActs = await axios.get(`${server.baseUrl}/v2/acts/${id}`, { headers });
+		const viaActors = await axios.get(`${server.baseUrl}/v2/actors/${id}`, { headers });
+		expect(viaActs.data).toEqual(viaActors.data);
+
+		const list = await axios.get(`${server.baseUrl}/v2/acts?limit=10`, { headers });
+		expect(list.data.data.items.map((a: { id: string }) => a.id)).toContain(id);
+
+		const runs = await axios.get(`${server.baseUrl}/v2/acts/${id}/runs`, { headers });
+		expect(runs.status).toBe(200);
+	});
+});

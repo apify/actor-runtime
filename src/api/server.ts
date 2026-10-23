@@ -93,6 +93,13 @@ export function createApiServer(deps: ApiServerDeps): Express {
 	// is explicit field-by-field regardless of which path reached this router.
 	app.use('/v2/actor-runtime', actorRuntime);
 
+	// Legacy alias: the platform still serves `/v2/acts/*` as `/v2/actors/*`. Rewritten ahead of the `v2`
+	// router so every actors route (and the 501/404 catch-all) answers identically on either prefix.
+	app.use((req: Request, _res: Response, next: NextFunction) => {
+		req.url = req.url.replace(/^\/v2\/acts(?=[/?]|$)/, '/v2/actors');
+		next();
+	});
+
 	const v2 = express.Router();
 	v2.use(auth());
 
