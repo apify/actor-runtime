@@ -1,0 +1,101 @@
+# Reviews a pull request against how the real Apify platform behaves and comments on user-facing differences the
+# requirements do not document. Starts the Actor Runtime Review Managed Agent, defined in
+# apify/apify-tooling-orchestration (`automations/actor-runtime-review/`), and waits for it to finish. The agent
+# reads this repository and the platform repositories through its own GitHub access and posts the comment itself.
+name: Platform parity review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - src/**
+      - docker/**
+      - Dockerfile
+      - requirements/**
+      - skills/**
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request number to review
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# One review per pull request; a newer commit replaces the running one.
+concurrency:
+  group: platform-parity-review-${{ github.event.pull_request.number || inputs.pull_request }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review
+    if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Lets the session mount the repository that holds the agent's skills.
+      SKILLS_REPOSITORY_TOKEN: ${{ secrets.TOOLING_ORCHESTRATION_READ_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      PULL_REQUEST: ${{ github.event.pull_request.number || inputs.pull_request }}
+      # Console ids of the agent, from automations/actor-runtime-review/infrastructure.yaml.
+      AGENT_ID: ${{ vars.ACTOR_RUNTIME_REVIEW_AGENT_ID }}
+      ENVIRONMENT_ID: ${{ vars.ACTOR_RUNTIME_REVIEW_ENVIRONMENT_ID }}
+      VAULT_ID: ${{ vars.ACTOR_RUNTIME_REVIEW_VAULT_ID }}
+    steps:
+      - name: Resolve the head commit
+        run: echo "HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST" --jq .head.sha)" >> "$GITHUB_ENV"
+
+      - name: Run the review agent
+        run: |
+          pip install --quiet anthropic
+          python - <<'PY'
+          import os, sys, time
+          from anthropic import Anthropic
+
+          client = Anthropic()
+          session = client.beta.sessions.create(
+              agent=os.environ["AGENT_ID"],
+              environment_id=os.environ["ENVIRONMENT_ID"],
+              title=f"Platform parity review: {os.environ['GITHUB_REPOSITORY']}#{os.environ['PULL_REQUEST']}",
+              vault_ids=[os.environ["VAULT_ID"]],
+              resources=[{
+                  "type": "github_repository",
+                  "url": "https://github.com/apify/apify-tooling-orchestration",
+                  "mount_path": "/workspace/apify-tooling-orchestration",
+                  "checkout": {"type": "branch", "name": "master"},
+                  "authorization_token": os.environ["SKILLS_REPOSITORY_TOKEN"],
+              }],
+          )
+          print(f"session {session.id}")
+          message = (
+              "Use the actor-runtime-review skill.\n"
+              f"repository: {os.environ['GITHUB_REPOSITORY']}\n"
+              f"pull_request: {os.environ['PULL_REQUEST']}\n"
+              f"head_sha: {os.environ['HEAD_SHA']}"
+          )
+          deadline = time.monotonic() + 40 * 60
+          with client.beta.sessions.events.stream(session_id=session.id) as stream:
+              client.beta.sessions.events.send(
+                  session_id=session.id,
+                  events=[{"type": "user.message", "content": [{"type": "text", "text": message}]}],
+              )
+              for event in stream:
+                  if time.monotonic() > deadline:
+                      client.beta.sessions.events.send(session_id=session.id, events=[{"type": "user.interrupt"}])
+                      sys.exit("review timed out")
+                  if event.type == "agent.tool_use" and getattr(event, "evaluated_permission", None) == "ask":
+                      client.beta.sessions.events.send(session_id=session.id, events=[{
+                          "type": "user.tool_confirmation", "tool_use_id": event.id, "result": "deny",
+                          "deny_message": "This run is unattended; nothing can be approved. Find another way.",
+                      }])
+                  elif event.type == "session.error":
+                      print(f"session error: {event.error}")
+                  elif event.type == "session.status_terminated":
+                      sys.exit("session terminated")
+                  elif event.type == "session.status_idle" and event.stop_reason.type != "requires_action":
+                      print(f"finished: {event.stop_reason.type}")
+                      sys.exit(0 if event.stop_reason.type == "end_turn" else f"stopped: {event.stop_reason.type}")
+          PY
