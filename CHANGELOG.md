@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 <!-- git-cliff-unreleased-start -->
 ## 0.1.3 - **not yet released**
 
+### 🚀 Features
+
+- **api:** Serve legacy &#x2F;v2&#x2F;acts paths as alias of &#x2F;v2&#x2F;actors ([#110](https://github.com/apify/actor-runtime/pull/110)) ([dda975d](https://github.com/apify/actor-runtime/commit/dda975d832e6ef6564908cd21a3833687612a29e)) by [@Pijukatel](https://github.com/Pijukatel)
+
 ### 🐛 Bug Fixes
 
 - Serve the POST aliases of the record, version and env-var PUT endpoints ([#104](https://github.com/apify/actor-runtime/pull/104)) ([06a5382](https://github.com/apify/actor-runtime/commit/06a5382c8aca584b72d9c7904ee849031a5b0951)) by [@Pijukatel](https://github.com/Pijukatel)
