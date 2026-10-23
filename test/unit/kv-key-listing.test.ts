@@ -33,8 +33,8 @@ describe('pageKeys', () => {
 		expect(page.isTruncated).toBe(false);
 	});
 
-	it('defaults to a limit of 1000', () => {
+	it('defaults to a limit of 100', () => {
 		const page = pageKeys(keys);
-		expect(page.limit).toBe(1000);
+		expect(page.limit).toBe(100);
 	});
 });

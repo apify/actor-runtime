@@ -21,7 +21,7 @@ export interface KeyListingPage {
 	nextExclusiveStartKey?: string;
 }
 
-const DEFAULT_LIMIT = 1000;
+const DEFAULT_LIMIT = 100;
 
 export function pageKeys(allKeys: KeyWithSize[], options: KeyListingOptions = {}): KeyListingPage {
 	const sorted = [...allKeys].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
