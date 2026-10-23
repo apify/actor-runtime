@@ -214,20 +214,28 @@ export class ProcessDriver implements Driver {
 					const source = from ? (stages.get(from) ?? from) : contextDir;
 					const parts = text.split(/\s+/).filter(Boolean);
 					const destination = parts.pop()!;
-					await this.copyInto(
-						source,
-						parts,
-						rootfs,
-						destination.startsWith('/') ? destination : posix.join(workdir, destination),
-					);
+					const target = destination.startsWith('/') ? destination : posix.join(workdir, destination);
+					await this.copyInto(source, parts, rootfs, target);
+					if (instruction.flags.chown) {
+						const owner = instruction.flags.chown;
+						const env = await this.buildEnv({}, rootfs);
+						const status = await this.exec(
+							rootfs,
+							['chown', '-R', owner, target],
+							{ env, cwd: '/' },
+							onLog,
+							signal,
+						);
+						if (status !== 0) throw new Error(`COPY --chown=${owner} failed with code ${status}`);
+					}
 					break;
 				}
 				case 'RUN': {
-					const exec = parseExecForm(instruction.args) ?? ['/bin/sh', '-c', text];
+					const exec = parseExecForm(instruction.args) ?? ['/bin/sh', '-c', instruction.args];
 					const status = await this.exec(
 						rootfs,
 						exec,
-						{ env: this.buildEnv(env), cwd: workdir, user },
+						{ env: await this.buildEnv(env, rootfs, user), cwd: workdir, user },
 						onLog,
 						signal,
 					);
@@ -236,10 +244,10 @@ export class ProcessDriver implements Driver {
 					break;
 				}
 				case 'CMD':
-					config.cmd = parseExecForm(instruction.args) ?? ['/bin/sh', '-c', text];
+					config.cmd = parseExecForm(instruction.args) ?? ['/bin/sh', '-c', instruction.args];
 					break;
 				case 'ENTRYPOINT':
-					config.entrypoint = parseExecForm(instruction.args) ?? ['/bin/sh', '-c', text];
+					config.entrypoint = parseExecForm(instruction.args) ?? ['/bin/sh', '-c', instruction.args];
 					config.cmd = undefined;
 					break;
 				case 'LABEL':
@@ -300,8 +308,23 @@ export class ProcessDriver implements Driver {
 		if (!hosts.includes('apify-api')) await writeFile(join(rootfs, 'etc/hosts'), `${hosts}\n127.0.0.1 apify-api\n`);
 	}
 
-	private buildEnv(env: Record<string, string>): Record<string, string> {
-		return { PATH: DEFAULT_PATH, HOME: '/root', ...env };
+	/** `HOME` as Docker sets it: the user's home from the image's passwd, `/root` for root. */
+	private async buildEnv(
+		env: Record<string, string>,
+		rootfs: string,
+		user?: string,
+	): Promise<Record<string, string>> {
+		const account = user?.split(':')[0];
+		let home = '/root';
+		if (account && account !== 'root' && account !== '0') {
+			const passwd = await readFile(join(rootfs, 'etc/passwd'), 'utf8').catch(() => '');
+			const row = passwd
+				.split('\n')
+				.map((line) => line.split(':'))
+				.find((fields) => fields[0] === account || fields[2] === account);
+			home = row?.[5] || '/';
+		}
+		return { PATH: DEFAULT_PATH, HOME: home, ...env };
 	}
 
 	private async copyInto(sourceRoot: string, sources: string[], rootfs: string, destination: string): Promise<void> {
@@ -391,7 +414,7 @@ export class ProcessDriver implements Driver {
 		const imageEnv = Object.fromEntries(
 			image.env.map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)]),
 		);
-		const env = this.buildEnv({ ...imageEnv, ...sharedNetnsEnv(ctx.env, port) });
+		const env = await this.buildEnv({ ...imageEnv, ...sharedNetnsEnv(ctx.env, port) }, image.rootfs, image.user);
 		const argv = [...(image.entrypoint ?? []), ...(image.cmd ?? [])];
 		if (argv.length === 0) throw new Error('The image defines neither ENTRYPOINT nor CMD');
 
