@@ -76,6 +76,18 @@ apify call
 - `apify push` of such an Actor to the Apify platform stops with an error: it is not supported there yet
   (https://github.com/apify/apify-core/issues/28685). Build it from the Git repository instead.
 
+## Builds behind a TLS-intercepting proxy
+
+When outbound HTTPS is re-signed by a proxy, a build's `npm install` fails with
+`SELF_SIGNED_CERT_IN_CHAIN` (or quietly uses the package index cached in the base image, so new package
+versions are not found). Start the runtime with a PEM file of the extra CA(s) mounted and named in
+`ACTOR_RUNTIME_EXTRA_CA_FILE`; `apify runtime start` does this itself from `--ca-file`, or from
+`NODE_EXTRA_CA_CERTS` when that is set.
+
+- Every build then trusts the file for Node.js tools, and the Actor's runs inherit it
+  (`NODE_EXTRA_CA_CERTS`); the build log says so.
+- Tools that replace their roots instead (`pip`, `curl`, Python's `ssl`) are not configured.
+
 ## Dataset schema validation
 
 A dataset schema in `.actor/actor.json` is enforced as on the platform. It comes from the **build**, so
