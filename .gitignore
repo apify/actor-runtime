@@ -240,6 +240,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Copied by standby-actor/sync.sh
-standby-actor/runtime/
