@@ -63,6 +63,7 @@
 
 # Public API
 
+- The legacy `v2/acts/...` paths are served as aliases of `v2/actors/...`, behaving identically.
 - It implements these API paths:
     - Actors
         - v2/actors

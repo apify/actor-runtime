@@ -64,7 +64,6 @@ real account, not in the runtime.
 - Multiple, scoped and expiring API tokens
 - Apify Proxy emulation (real proxy used when password known)
 - OAuth connections for Actors
-- Legacy `/v2/acts` API paths (older clients)
 - Unauthenticated reads of public resources
 
 ## Console
