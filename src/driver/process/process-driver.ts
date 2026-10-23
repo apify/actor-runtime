@@ -34,8 +34,16 @@ import { pullImage, type ImageConfig } from './registry.js';
 
 const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const IMAGE_PREFIX = 'process:';
+/** proot older than 5.3 mishandles statx, which breaks Rust toolchains (rustup, cargo). */
+const PROOT = process.env.ACTOR_RUNTIME_PROOT ?? 'proot';
 
 type Sandbox = 'chroot' | 'proot';
+
+interface Identity {
+	uid?: number;
+	gid?: number;
+	home: string;
+}
 
 interface StoredImage extends ImageConfig {
 	rootfs: string;
@@ -74,19 +82,23 @@ export class ProcessDriver implements Driver {
 			this.unavailableReason = "'tar' is not installed";
 			return;
 		}
-		// `chroot /` proves the platform grants CAP_SYS_CHROOT, which is not a given inside an Actor.
-		const chrootWorks =
-			hasRoot &&
-			(await probe('chroot')) &&
-			(await promisify(execFile)('chroot', ['/', '/bin/true']).then(
+		const works = async (binary: string, args: string[]) =>
+			(await probe(binary)) &&
+			(await promisify(execFile)(binary, args).then(
 				() => true,
 				() => false,
 			));
-		if (chrootWorks) this.sandbox = 'chroot';
-		else if (await probe('proot')) this.sandbox = 'proot';
-		else {
+		// `chroot /` proves the platform grants CAP_SYS_CHROOT, which is not a given inside an Actor;
+		// `proot` proves ptrace is allowed. proot also provides /proc, which a chroot cannot mount without
+		// CAP_SYS_ADMIN and which rustup, JVMs and many installers need.
+		const chrootWorks = hasRoot && (await works('chroot', ['/', '/bin/true']));
+		const prootWorks = await works(PROOT, ['-r', '/', '-b', '/proc', '/bin/true']);
+		const wanted = process.env.ACTOR_RUNTIME_PROCESS_SANDBOX ?? 'auto';
+		if (wanted === 'chroot' ? chrootWorks : wanted === 'proot' ? prootWorks : prootWorks || chrootWorks) {
+			this.sandbox = wanted === 'chroot' || (wanted === 'auto' && !prootWorks) ? 'chroot' : 'proot';
+		} else {
 			this.unavailableReason =
-				'Neither a working chroot (root with CAP_SYS_CHROOT) nor proot is available to run Actor images';
+				'Neither a working chroot (root with CAP_SYS_CHROOT) nor proot (needs ptrace) is available to run Actor images';
 			return;
 		}
 		await mkdir(join(this.storeDir, 'images'), { recursive: true });
@@ -98,6 +110,7 @@ export class ProcessDriver implements Driver {
 	}
 
 	private async which(binary: string): Promise<string | undefined> {
+		if (binary.startsWith('/')) return existsSync(binary) ? binary : undefined;
 		for (const dir of (process.env.PATH ?? DEFAULT_PATH).split(':')) {
 			const candidate = join(dir, binary);
 			if (existsSync(candidate)) return candidate;
@@ -308,28 +321,35 @@ export class ProcessDriver implements Driver {
 		if (!hosts.includes('apify-api')) await writeFile(join(rootfs, 'etc/hosts'), `${hosts}\n127.0.0.1 apify-api\n`);
 	}
 
-	/** `HOME` as Docker sets it: the user's home from the image's passwd, `/root` for root. */
+	/** The user's ids and home from the image's passwd, as Docker resolves `USER`; root when unset. */
+	private async identity(rootfs: string, user?: string): Promise<Identity> {
+		const [account, group] = (user ?? '').split(':');
+		if (!account || account === 'root' || account === '0') return { home: '/root' };
+		const read = async (file: string) =>
+			(await readFile(join(rootfs, 'etc', file), 'utf8').catch(() => ''))
+				.split('\n')
+				.map((line) => line.split(':'));
+		const row = (await read('passwd')).find((f) => f[0] === account || f[2] === account);
+		const gidRow = group ? (await read('group')).find((f) => f[0] === group || f[2] === group) : undefined;
+		return {
+			uid: Number(row?.[2] ?? account),
+			gid: Number(gidRow?.[2] ?? group ?? row?.[3] ?? 0),
+			home: row?.[5] || '/',
+		};
+	}
+
 	private async buildEnv(
 		env: Record<string, string>,
 		rootfs: string,
 		user?: string,
 	): Promise<Record<string, string>> {
-		const account = user?.split(':')[0];
-		let home = '/root';
-		if (account && account !== 'root' && account !== '0') {
-			const passwd = await readFile(join(rootfs, 'etc/passwd'), 'utf8').catch(() => '');
-			const row = passwd
-				.split('\n')
-				.map((line) => line.split(':'))
-				.find((fields) => fields[0] === account || fields[2] === account);
-			home = row?.[5] || '/';
-		}
-		return { PATH: DEFAULT_PATH, HOME: home, ...env };
+		return { PATH: DEFAULT_PATH, HOME: (await this.identity(rootfs, user)).home, ...env };
 	}
 
 	private async copyInto(sourceRoot: string, sources: string[], rootfs: string, destination: string): Promise<void> {
 		const target = join(rootfs, destination);
-		const intoDirectory = sources.length > 1 || destination.endsWith('/');
+		const targetIsDirectory = existsSync(target) && statSync(target).isDirectory();
+		const intoDirectory = sources.length > 1 || destination.endsWith('/') || targetIsDirectory;
 		if (intoDirectory) await mkdir(target, { recursive: true });
 		for (const pattern of sources) {
 			const matches: string[] = [];
@@ -352,10 +372,12 @@ export class ProcessDriver implements Driver {
 
 	// ---- execution --------------------------------------------------------------------------------
 
-	private wrap(rootfs: string, argv: string[], opts: { cwd: string; user?: string }): string[] {
+	private wrap(rootfs: string, argv: string[], opts: { cwd: string; user?: string; ids?: Identity }): string[] {
 		if (this.sandbox === 'proot') {
+			const identity = opts.ids?.uid !== undefined ? ['-i', `${opts.ids.uid}:${opts.ids.gid}`] : [];
 			return [
-				'proot',
+				PROOT,
+				...identity,
 				'-r',
 				rootfs,
 				'-b',
@@ -374,14 +396,14 @@ export class ProcessDriver implements Driver {
 		return ['chroot', ...userSpec, rootfs, '/bin/sh', '-c', `cd "$0" && exec "$@"`, opts.cwd, ...argv];
 	}
 
-	private exec(
+	private async exec(
 		rootfs: string,
 		argv: string[],
 		opts: { env: Record<string, string>; cwd: string; user?: string },
 		onLog: (c: string) => void,
 		signal?: AbortSignal,
 	): Promise<number> {
-		const [cmd, ...rest] = this.wrap(rootfs, argv, opts);
+		const [cmd, ...rest] = this.wrap(rootfs, argv, { ...opts, ids: await this.identity(rootfs, opts.user) });
 		return new Promise((resolve, reject) => {
 			const child = spawn(cmd!, rest, { env: opts.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
 			signal?.addEventListener('abort', () => this.kill(child, 'SIGKILL'), { once: true });
@@ -424,7 +446,11 @@ export class ProcessDriver implements Driver {
 					`this runtime's network.`,
 			),
 		);
-		const [cmd, ...rest] = this.wrap(image.rootfs, argv, { cwd: image.workingDir ?? '/', user: image.user });
+		const [cmd, ...rest] = this.wrap(image.rootfs, argv, {
+			cwd: image.workingDir ?? '/',
+			user: image.user,
+			ids: await this.identity(image.rootfs, image.user),
+		});
 		const child = spawn(cmd!, rest, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
 		this.runs.set(ctx.runId, child);
 		this.servers.set(ctx.runId, { host: '127.0.0.1', port });

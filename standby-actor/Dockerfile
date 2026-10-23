@@ -11,9 +11,17 @@ COPY runtime/src ./src
 RUN pnpm run build
 
 FROM node:24-bookworm-slim
-# tar unpacks image layers; chroot (coreutils) runs them as root; proot is the fallback when not root.
+# tar unpacks image layers; chroot (coreutils) runs them as root. proot gives builds a /proc and does not
+# need root; it is pinned to 5.3.0 (older ones break Rust toolchains), with Debian's package as the
+# fallback where no static build is pinned.
+ARG TARGETARCH
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends tar ca-certificates proot \
+	&& apt-get install -y --no-install-recommends tar ca-certificates curl \
+	&& if [ "$TARGETARCH" = "amd64" ]; then \
+		curl -fsSL -o /usr/local/bin/proot https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-x86_64-static \
+		&& echo "d1eb20cb201e6df08d707023efb000623ff7c10d6574839d7bb42d0adba6b4da  /usr/local/bin/proot" | sha256sum -c - \
+		&& chmod +x /usr/local/bin/proot; \
+	else apt-get install -y --no-install-recommends proot; fi \
 	&& rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/src/app
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0

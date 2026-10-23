@@ -31,6 +31,9 @@ Pushing an Actor to it: use the same token and `$URL/v2` as the API base URL.
 - **Reduced Dockerfile support.** `FROM` (multi-stage ok), `ARG`, `ENV`, `WORKDIR`, `USER`, `COPY`, `ADD`
   (as `COPY`), `RUN`, `CMD`, `ENTRYPOINT`. Not: `.dockerignore`, `RUN --mount`, heredocs, remote/archive
   `ADD`, caching (every build pulls and runs from scratch).
+- **Slower builds.** `RUN` steps go through `proot` (ptrace) so that `/proc` exists; CPU-heavy compiles
+  (Rust, C++) run slower than in a container. Set `ACTOR_RUNTIME_PROCESS_SANDBOX=chroot` to skip it, at the
+  cost of `/proc` (rustup/cargo then fail).
 - **No dev folder, debug mode, browser view, or migration testing.**
 - **No persistence.** Storages live on the Actor's disk and are gone when the standby run ends (idle
   timeout, migration, abort). Use it for experiments.
