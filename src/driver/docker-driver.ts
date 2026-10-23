@@ -458,7 +458,7 @@ async function statInProbe(container: Docker.Container, containerPath: string): 
 
 /** A TCP port that is free in this process's own network namespace right now - bound on loopback and
  * released again, for a sidecar about to share that namespace (`startBrowserViewer`). */
-async function allocateFreePort(): Promise<number> {
+export async function allocateFreePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const server = createServer();
 		server.once('error', reject);

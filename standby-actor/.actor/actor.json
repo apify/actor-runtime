@@ -1,0 +1,10 @@
+{
+	"actorSpecification": 1,
+	"name": "actor-runtime-standby",
+	"title": "Actor Runtime (standby)",
+	"description": "A local-style Apify platform (API + console) served as an Actor Standby endpoint.",
+	"version": "0.1",
+	"buildTag": "latest",
+	"usesStandbyMode": true,
+	"minMemoryMbytes": 2048
+}

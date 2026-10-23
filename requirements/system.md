@@ -56,6 +56,9 @@
   under rootless Podman 3.x the runtime container also needs `--network slirp4netns:allow_host_loopback=true`
   for runs' web servers (`actor-driver.md`); the CLI adds it.
 
+- The runtime can also be hosted as an Apify standby Actor, with one port for API and console and no
+  container engine: see `hosted.md` for the behavior and what is not possible there.
+
 - Optionally set `APIFY_PROXY_PASSWORD` in the runtime's own environment to have it forwarded into
   every Actor container (see `actor-driver.md`).
 

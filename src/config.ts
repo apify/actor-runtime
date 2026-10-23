@@ -14,9 +14,20 @@ export function portFromEnv(name: string, fallback: number, env: NodeJS.ProcessE
 	return port;
 }
 
-export const API_PORT = portFromEnv('ACTOR_RUNTIME_API_PORT', DEFAULT_API_PORT);
-export const CONSOLE_PORT = portFromEnv('ACTOR_RUNTIME_CONSOLE_PORT', DEFAULT_CONSOLE_PORT);
-if (API_PORT === CONSOLE_PORT) {
+/** Hosted mode: the runtime is itself an Apify standby Actor (`requirements/hosted.md`). The platform
+ * routes every request to the one `ACTOR_STANDBY_PORT`, so the API and the console share it. */
+export function isHostedMode(env: NodeJS.ProcessEnv = process.env): boolean {
+	return (
+		env.ACTOR_RUNTIME_HOSTED === '1' || (env.APIFY_IS_AT_HOME === '1' && Boolean(env.ACTOR_STANDBY_PORT?.trim()))
+	);
+}
+
+export const HOSTED = isHostedMode();
+export const HOSTED_PORT = HOSTED ? portFromEnv('ACTOR_STANDBY_PORT', 4321) : undefined;
+
+export const API_PORT = HOSTED_PORT ?? portFromEnv('ACTOR_RUNTIME_API_PORT', DEFAULT_API_PORT);
+export const CONSOLE_PORT = HOSTED_PORT ?? portFromEnv('ACTOR_RUNTIME_CONSOLE_PORT', DEFAULT_CONSOLE_PORT);
+if (!HOSTED && API_PORT === CONSOLE_PORT) {
 	throw new Error(`ACTOR_RUNTIME_API_PORT and ACTOR_RUNTIME_CONSOLE_PORT must differ, both are ${API_PORT}.`);
 }
 
@@ -35,7 +46,9 @@ export const CONTAINER_EVENTS_WS_BASE_URL = `ws://${CONTAINER_API_ALIAS}:${API_P
  * `console.apify.com`; this points at the one console this runtime actually serves). The path appended
  * after this base uses the real platform's URL shape (e.g. `/storage/datasets/:id`), which the console
  * server redirects to its own page - see `console.md`. */
-export const CONSOLE_BASE_URL = `http://localhost:${CONSOLE_PORT}`;
+export const CONSOLE_BASE_URL = HOSTED
+	? (process.env.ACTOR_STANDBY_URL?.replace(/\/+$/, '') ?? `http://localhost:${CONSOLE_PORT}`)
+	: `http://localhost:${CONSOLE_PORT}`;
 
 export const DEFAULT_DATA_DIR = process.env.ACTOR_RUNTIME_DATA_DIR ?? '/data';
 
