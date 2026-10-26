@@ -39,7 +39,7 @@ jobs:
         uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@7bca4b020c38fe2ea6d497d97337f3e791a74ae9
         with:
             agent_dir: automations/actor-runtime-review/agents
-            title: PR #${{ github.event.pull_request.number }}
+            title: "PR #${{ github.event.pull_request.number }}"
             metadata: |
                 repository=${{ github.repository }}
                 pull_request=${{ github.event.pull_request.number }}
