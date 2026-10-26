@@ -2,11 +2,11 @@
 # apify/apify-tooling-orchestration (`automations/actor-runtime-review/`); it compares the pull request with how the
 # real Apify platform behaves and posts its comment itself.
 #
-# One session per pull request: the shared `Agent session` workflow finds the agent's session carrying this
-# pull request's metadata, or starts it, and delivers every push behind an interrupt, so a review of an older
-# commit is never finished, let alone posted. The agent re-reads the head before posting, so a push this workflow
-# does not run for (paths outside the filter) still never gets a stale comment. Closing or merging the pull
-# request archives its session.
+# One session per pull request: `apify-agents send` finds the agent's session carrying this pull request's
+# metadata, or starts it, and delivers every push behind an interrupt, so a review of an older commit is never
+# finished, let alone posted. The agent re-reads the head before posting, so a push this workflow does not run for
+# (paths outside the filter) still never gets a stale comment. Closing or merging the pull request archives its
+# session with `apify-agents archive`.
 name: Platform parity review
 
 on:
@@ -29,37 +29,47 @@ concurrency:
     cancel-in-progress: false
 
 jobs:
-    review:
-        name: Send the pull request to its review session
-        # Secrets are not available to PRs from forks
+    session:
+        name: ${{ github.event.action == 'closed' && 'Archive the review session' || 'Send the pull request to its review session' }}
+        runs-on: ubuntu-latest
+        # Secrets are not available to PRs from forks. A draft is not reviewed, but closing one still archives.
         if: >-
-            github.event.action != 'closed'
-            && github.event.pull_request.head.repo.full_name == github.repository
-            && !github.event.pull_request.draft
-        uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@7bca4b020c38fe2ea6d497d97337f3e791a74ae9
-        with:
-            agent_dir: automations/actor-runtime-review/agents
-            title: "PR #${{ github.event.pull_request.number }}"
-            metadata: |
-                repository=${{ github.repository }}
-                pull_request=${{ github.event.pull_request.number }}
-            created_after: ${{ github.event.pull_request.created_at }}
-            message: "Review this pull request: ${{ github.event.pull_request.html_url }} (head commit ${{ github.event.pull_request.head.sha }})."
-        secrets:
-            anthropic_api_key: ${{ secrets.ACTOR_RUNTIME_REVIEW_KEY }}
-            repository_token: ${{ secrets.APIFY_SERVICE_ACCOUNT_GITHUB_TOKEN }}
+            github.event.pull_request.head.repo.full_name == github.repository
+            && (github.event.action == 'closed' || !github.event.pull_request.draft)
+        env:
+            ANTHROPIC_API_KEY: ${{ secrets.ACTOR_RUNTIME_REVIEW_KEY }}
+            AGENT_DIR: automations/actor-runtime-review/agents
+            REPOSITORY: ${{ github.repository }}
+            PR_NUMBER: ${{ github.event.pull_request.number }}
+            PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
 
-    archive:
-        name: Archive the review session
-        if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@7bca4b020c38fe2ea6d497d97337f3e791a74ae9
-        with:
-            action: archive
-            agent_dir: automations/actor-runtime-review/agents
-            metadata: |
-                repository=${{ github.repository }}
-                pull_request=${{ github.event.pull_request.number }}
-            created_after: ${{ github.event.pull_request.created_at }}
-        secrets:
-            anthropic_api_key: ${{ secrets.ACTOR_RUNTIME_REVIEW_KEY }}
-            repository_token: ${{ secrets.APIFY_SERVICE_ACCOUNT_GITHUB_TOKEN }}
+        steps:
+            # The tooling and the agent's ids live in apify/apify-tooling-orchestration. It is an internal repository,
+            # which a public one can neither call reusable workflows from nor read with its own token.
+            - uses: actions/checkout@v4
+              with:
+                  repository: apify/apify-tooling-orchestration
+                  ref: claude/kind-curie-orivy7
+                  token: ${{ secrets.APIFY_SERVICE_ACCOUNT_GITHUB_TOKEN }}
+            - uses: astral-sh/setup-uv@v7
+            - run: uv sync --all-packages
+
+            - name: Send the push to the pull request's session
+              if: github.event.action != 'closed'
+              env:
+                  PR_URL: ${{ github.event.pull_request.html_url }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+              run: |
+                  uv run apify-agents send "$AGENT_DIR" \
+                      --metadata "repository=$REPOSITORY" --metadata "pull_request=$PR_NUMBER" \
+                      --created-after "$PR_CREATED_AT" --title "PR #$PR_NUMBER" \
+                      --message "Review this pull request: $PR_URL (head commit $HEAD_SHA)." \
+                      | tee -a "$GITHUB_STEP_SUMMARY"
+
+            - name: Archive the pull request's session
+              if: github.event.action == 'closed'
+              run: |
+                  uv run apify-agents archive "$AGENT_DIR" \
+                      --metadata "repository=$REPOSITORY" --metadata "pull_request=$PR_NUMBER" \
+                      --created-after "$PR_CREATED_AT" \
+                      | tee -a "$GITHUB_STEP_SUMMARY"
