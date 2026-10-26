@@ -1,6 +1,11 @@
-# Starts the Actor Runtime Review Managed Agent on a pull request. The agent is defined in
+# Starts or continues the Actor Runtime Review Managed Agent on a pull request. The agent is defined in
 # apify/apify-tooling-orchestration (`automations/actor-runtime-review/`); it compares the pull request with how the
-# real Apify platform behaves and posts its comment itself, so this job only starts the session.
+# real Apify platform behaves and posts its comment itself, so this job only hands the pull request to the agent.
+#
+# One session per pull request, found by its metadata among the agent's sessions. The first run creates it; every
+# later push interrupts whatever the agent is doing and sends it the new head, so a review of an older commit is
+# never finished, let alone posted. The agent re-reads the head before posting, so a push this workflow does not
+# run for (paths outside the filter) still never gets a stale comment.
 name: Platform parity review
 
 on:
@@ -16,6 +21,12 @@ on:
 permissions:
     contents: read
 
+# One run per pull request at a time, and of the runs waiting behind it only the newest survives, so pushes reach
+# the session in order and a push that is already superseded is not sent at all.
+concurrency:
+    group: platform-parity-review-${{ github.event.pull_request.number }}
+    cancel-in-progress: false
+
 jobs:
     trigger-review:
         name: Trigger agent review
@@ -24,29 +35,72 @@ jobs:
         if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
 
         steps:
-            - name: Start review session
+            - name: Send the pull request to its review session
               env:
                   ANTHROPIC_API_KEY: ${{ secrets.ACTOR_RUNTIME_REVIEW_KEY }}
+                  WORKSPACE_ID: wrkspc_01WgY7dQqUQz8iqpLXhjt8Ho
+                  AGENT_ID: agent_01BXryMddqDpwSJte9EdwT1A
+                  ENVIRONMENT_ID: env_014xt9ZqCAQxkgQTxKezqsHg
+                  VAULT_ID: vlt_011CgBEg4og89Ai1ea6rFSiL
+                  REPOSITORY: ${{ github.repository }}
                   PR_URL: ${{ github.event.pull_request.html_url }}
                   PR_NUMBER: ${{ github.event.pull_request.number }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
               run: |
-                  jq -n --arg pr_url "$PR_URL" --arg pr_number "$PR_NUMBER" '{
-                      agent: "agent_01BXryMddqDpwSJte9EdwT1A",
-                      environment_id: "env_014xt9ZqCAQxkgQTxKezqsHg",
-                      vault_ids: ["vlt_011CgBEg4og89Ai1ea6rFSiL"],
-                      title: "PR #\($pr_number)",
-                      initial_events: [
-                          {
-                              type: "user.message",
-                              content: [
-                                  { type: "text", text: "Review this pull request: \($pr_url)" }
-                              ]
-                          }
-                      ]
-                  }' | curl -sS --fail-with-body https://api.anthropic.com/v1/sessions \
-                      -H "Content-Type: application/json" \
-                      -H "anthropic-version: 2023-06-01" \
-                      -H "anthropic-beta: managed-agents-2026-04-01" \
-                      -H "anthropic-workspace-id: wrkspc_01WgY7dQqUQz8iqpLXhjt8Ho" \
-                      -H "x-api-key: $ANTHROPIC_API_KEY" \
-                      -d @-
+                  api() { # api <method> <path> [<json body>]
+                      local -a body=()
+                      if [ $# -ge 3 ]; then body=(-d "$3"); fi
+                      curl -sS --fail-with-body -X "$1" "https://api.anthropic.com/v1$2" \
+                          -H "Content-Type: application/json" \
+                          -H "anthropic-version: 2023-06-01" \
+                          -H "anthropic-beta: managed-agents-2026-04-01" \
+                          -H "anthropic-workspace-id: $WORKSPACE_ID" \
+                          -H "x-api-key: $ANTHROPIC_API_KEY" \
+                          "${body[@]}"
+                  }
+
+                  # The newest session of this pull request, if it can still take messages. The list is newest first
+                  # and has no metadata filter, so it is scanned until the pull request's newest session turns up.
+                  find_session() {
+                      local page="" response match
+                      while :; do
+                          response=$(api GET "/sessions?agent_id=$AGENT_ID&limit=100${page:+&page=$page}") \
+                              || { echo "::error::Listing the agent's sessions failed: $response" >&2; return 1; }
+                          match=$(jq -c --arg repository "$REPOSITORY" --arg pr "$PR_NUMBER" '
+                              [.data[] | select(.metadata.repository == $repository and .metadata.pull_request == $pr)]
+                              | first // empty' <<< "$response")
+                          if [ -n "$match" ]; then
+                              jq -r 'if .status == "terminated" or .archived_at != null then empty else .id end' <<< "$match"
+                              return 0
+                          fi
+                          page=$(jq -r '.next_page // empty' <<< "$response")
+                          if [ -z "$page" ]; then return 0; fi
+                      done
+                  }
+
+                  message=$(jq -n --arg text "Review this pull request: $PR_URL (head commit $HEAD_SHA)." \
+                      '{ type: "user.message", content: [{ type: "text", text: $text }] }')
+
+                  session_id=$(find_session)
+                  if [ -n "$session_id" ]; then
+                      echo "Sending the push to session $session_id"
+                      # The interrupt jumps the queue and stops a review of an older head; it is a no-op on an idle session.
+                      if api POST "/sessions/$session_id/events" \
+                          "$(jq -n --argjson message "$message" '{ events: [{ type: "user.interrupt" }, $message] }')"; then
+                          exit 0
+                      fi
+                      echo "::warning::Session $session_id did not take the message; starting a new session"
+                  fi
+
+                  echo "Starting a new session"
+                  session=$(jq -n --argjson message "$message" \
+                      --arg agent "$AGENT_ID" --arg environment "$ENVIRONMENT_ID" --arg vault "$VAULT_ID" \
+                      --arg repository "$REPOSITORY" --arg pr "$PR_NUMBER" '{
+                      agent: $agent,
+                      environment_id: $environment,
+                      vault_ids: [$vault],
+                      title: "PR #\($pr)",
+                      metadata: { repository: $repository, pull_request: $pr },
+                      initial_events: [$message]
+                  }')
+                  api POST /sessions "$session"
