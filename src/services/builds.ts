@@ -10,7 +10,12 @@ import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import { sourceFileToText } from './actor-source-files.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
-import { addCaBundleToDockerfile, CA_BUNDLE_CONTEXT_FILE, readSystemCaBundle } from './dockerfile-extra-ca.js';
+import {
+	addCaBundleToDockerfile,
+	CA_BUNDLE_CONTEXT_FILE,
+	certificatesMissingFrom,
+	readSystemCaBundle,
+} from './dockerfile-extra-ca.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
 import { dockerContextFiles, nameInDockerContext, resolveDockerContext } from './docker-context.js';
 import { describeActorJsonDefect } from './actor-json-validation.js';
@@ -115,13 +120,14 @@ function qualifyDockerfileImages(
 	});
 }
 
-/** Name of the runtime's environment variable pointing at a PEM file of extra CA certificates (`actor-driver.md`). */
+/** Name of the runtime's environment variable pointing at a PEM file of the CA certificates the host trusts (`actor-driver.md`). */
 export const EXTRA_CA_FILE_ENV_VAR = 'ACTOR_RUNTIME_EXTRA_CA_FILE';
 
 /**
- * With `ACTOR_RUNTIME_EXTRA_CA_FILE` set, the extra CA joins this build's context and its Dockerfile
- * trusts it (`dockerfile-extra-ca.ts`). Read per build so a replaced file applies to the next build. An
- * unreadable file is stated in the build log and the build goes on without it.
+ * With `ACTOR_RUNTIME_EXTRA_CA_FILE` set, the certificates in it that the runtime's own roots lack join this
+ * build's context and its Dockerfile trusts them (`dockerfile-extra-ca.ts`); with none missing the build is
+ * left alone. Read per build so a replaced file applies to the next build. An unreadable file is stated in
+ * the build log and the build goes on without it.
  */
 async function trustExtraCa(
 	sourceFiles: SourceFile[],
@@ -131,15 +137,17 @@ async function trustExtraCa(
 ): Promise<SourceFile[]> {
 	const caFile = env[EXTRA_CA_FILE_ENV_VAR]?.trim();
 	if (!caFile) return sourceFiles;
-	let extraCa: string;
+	let hostCertificates: string;
 	try {
-		extraCa = await readFile(caFile, 'utf8');
+		hostCertificates = await readFile(caFile, 'utf8');
 	} catch (error) {
 		log(`Cannot read ${EXTRA_CA_FILE_ENV_VAR} (${caFile}): ${(error as Error).message}. Building without it.\n`);
 		return sourceFiles;
 	}
 	const systemRoots = await readSystemCaBundle();
 	const replaceRoots = systemRoots !== undefined;
+	const extra = certificatesMissingFrom(systemRoots ?? '', hostCertificates);
+	if (extra.length === 0) return sourceFiles;
 	let stages = 0;
 	const rewritten = sourceFiles.map((file) => {
 		if (normalizeEntryName(file.name) !== dockerfilePath) return file;
@@ -150,10 +158,10 @@ async function trustExtraCa(
 	if (stages === 0) return sourceFiles;
 	log(
 		replaceRoots
-			? `Trusting the CA certificates from ${EXTRA_CA_FILE_ENV_VAR}, added to the system roots, in ${stages} build stage(s).\n`
-			: `Trusting the CA certificates from ${EXTRA_CA_FILE_ENV_VAR} in ${stages} build stage(s) for Node.js tools only: the runtime found no system root bundle to add them to.\n`,
+			? `Trusting ${extra.length} CA certificate(s) of the host that the system roots lack, in ${stages} build stage(s).\n`
+			: `Trusting ${extra.length} CA certificate(s) of the host in ${stages} build stage(s) for Node.js tools only: the runtime found no system root bundle to add them to.\n`,
 	);
-	const bundle = replaceRoots ? `${systemRoots}\n${extraCa}` : extraCa;
+	const bundle = [...(systemRoots ? [systemRoots] : []), ...extra].join('\n');
 	return [
 		...rewritten.filter((file) => normalizeEntryName(file.name) !== CA_BUNDLE_CONTEXT_FILE),
 		{ name: CA_BUNDLE_CONTEXT_FILE, format: 'TEXT', content: bundle },

@@ -52,6 +52,30 @@ export async function readSystemCaBundle(
 	return undefined;
 }
 
+const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+/** A certificate's identity for comparison: its base64 body without whitespace, so line wrapping and
+ * trailing text around the PEM block do not matter. */
+function certificateBody(pem: string): string {
+	return pem.replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '');
+}
+
+/**
+ * The certificates of `candidates` that `roots` does not already hold, each once. What a build has to be
+ * given: everything else it trusts anyway, so a host that trusts nothing special adds nothing.
+ */
+export function certificatesMissingFrom(roots: string, candidates: string): string[] {
+	const known = new Set((roots.match(PEM_CERTIFICATE) ?? []).map(certificateBody));
+	const missing: string[] = [];
+	for (const certificate of candidates.match(PEM_CERTIFICATE) ?? []) {
+		const body = certificateBody(certificate);
+		if (known.has(body)) continue;
+		known.add(body);
+		missing.push(certificate);
+	}
+	return missing;
+}
+
 /** `replaceRoots` is false when the bundle holds only the extra CA: pointing a replacing variable at it
  * would leave that tool trusting nothing else. */
 export function addCaBundleToDockerfile(

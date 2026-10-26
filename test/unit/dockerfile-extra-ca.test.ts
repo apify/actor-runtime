@@ -4,7 +4,11 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { addCaBundleToDockerfile, readSystemCaBundle } from '../../src/services/dockerfile-extra-ca.js';
+import {
+	addCaBundleToDockerfile,
+	certificatesMissingFrom,
+	readSystemCaBundle,
+} from '../../src/services/dockerfile-extra-ca.js';
 
 const COPY = 'COPY actor-runtime-ca-bundle.pem /actor-runtime-ca-bundle.pem';
 const B = '/actor-runtime-ca-bundle.pem';
@@ -62,5 +66,24 @@ describe('readSystemCaBundle', () => {
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('certificatesMissingFrom', () => {
+	const cert = (body: string) => `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----`;
+
+	it('keeps only the candidates the roots lack, once each, whatever the line wrapping', () => {
+		const roots = `${cert('AAAA')}\n${cert('BBBB')}\n`;
+		const candidates = `# host\n${cert('BB\nBB')}\n${cert('CCCC')}\n${cert('CCCC')}\n${cert('AAAA')}`;
+		expect(certificatesMissingFrom(roots, candidates)).toEqual([cert('CCCC')]);
+	});
+
+	it('is empty when the host trusts nothing the roots do not, and for text without certificates', () => {
+		expect(certificatesMissingFrom(cert('AAAA'), cert('AAAA'))).toEqual([]);
+		expect(certificatesMissingFrom(cert('AAAA'), 'nothing here')).toEqual([]);
+	});
+
+	it('treats every candidate as missing when there are no roots', () => {
+		expect(certificatesMissingFrom('', cert('AAAA'))).toEqual([cert('AAAA')]);
 	});
 });

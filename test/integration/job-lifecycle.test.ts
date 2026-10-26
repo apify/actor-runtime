@@ -35,6 +35,7 @@ import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import { abortBuild, runBuildInBackground, startBuild } from '../../src/services/builds.js';
+import { readSystemCaBundle } from '../../src/services/dockerfile-extra-ca.js';
 import {
 	abortRun,
 	reconcileOrphanedJobs,
@@ -560,10 +561,12 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			],
 		};
 
-		it('adds the extra CA to the system roots in the build context and trusts it in the Dockerfile, and the build log says so', async () => {
+		it('adds only the host certificates the system roots lack to the build context, and trusts them in the Dockerfile', async () => {
+			const systemRoots = (await readSystemCaBundle())!;
+			const known = systemRoots.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)![0];
 			const caDir = await mkdtemp(join(tmpdir(), 'extra-ca-'));
 			const caFile = join(caDir, 'ca.pem');
-			await writeFile(caFile, '-----BEGIN CERTIFICATE-----\nEXTRA-CA\n-----END CERTIFICATE-----\n');
+			await writeFile(caFile, `${known}\n-----BEGIN CERTIFICATE-----\nEXTRA-CA\n-----END CERTIFICATE-----\n`);
 			vi.stubEnv('ACTOR_RUNTIME_EXTRA_CA_FILE', caFile);
 			try {
 				const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
@@ -581,10 +584,30 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 				expect(dockerfile.content).toContain('SSL_CERT_FILE=/actor-runtime-ca-bundle.pem');
 				const bundle = files.find((file) => file.name === 'actor-runtime-ca-bundle.pem')!;
 				expect(bundle.content).toContain('EXTRA-CA');
-				expect(bundle.content.length).toBeGreaterThan('EXTRA-CA'.length + 100);
-				expect(await getFullLog(record.id)).toContain(
-					'Trusting the CA certificates from ACTOR_RUNTIME_EXTRA_CA_FILE',
-				);
+				expect(bundle.content.startsWith(systemRoots)).toBe(true);
+				expect(await getFullLog(record.id)).toContain('Trusting 1 CA certificate(s) of the host');
+			} finally {
+				vi.unstubAllEnvs();
+				await rm(caDir, { recursive: true, force: true });
+			}
+		});
+
+		it('leaves the build alone when the host trusts nothing the system roots lack', async () => {
+			const systemRoots = (await readSystemCaBundle())!;
+			const caDir = await mkdtemp(join(tmpdir(), 'extra-ca-'));
+			const caFile = join(caDir, 'ca.pem');
+			await writeFile(caFile, systemRoots);
+			vi.stubEnv('ACTOR_RUNTIME_EXTRA_CA_FILE', caFile);
+			try {
+				const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
+				server = await startTestServer(driver);
+				const actor = await seedActor(server, 'extra-ca-none-actor');
+				const record = startedBuildRecord(actor);
+				await getRegistries().builds.set(record.id, record);
+
+				await runBuildInBackground(driver, actor, dockerfileVersion, record, { tag: 'latest', useCache: true });
+
+				expect(driver.startBuildContexts[0]!.sourceFiles).toEqual(dockerfileVersion.sourceFiles);
 			} finally {
 				vi.unstubAllEnvs();
 				await rm(caDir, { recursive: true, force: true });

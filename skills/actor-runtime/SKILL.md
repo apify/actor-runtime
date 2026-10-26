@@ -80,12 +80,14 @@ apify call
 
 When outbound HTTPS is re-signed by a proxy, a build's `npm install` or `pip install` fails with a
 certificate error (or quietly uses the package index cached in the base image, so new package versions
-are not found). Start the runtime with a PEM file of the extra CA(s) mounted and named in
-`ACTOR_RUNTIME_EXTRA_CA_FILE`; `apify runtime start` does this itself from `--ca-file`, or from
-`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` or `CURL_CA_BUNDLE` when one of them is set.
+are not found). `apify runtime start` hands the runtime the CA certificates of the machine it runs on
+(`--no-host-ca` turns that off; `--ca-file`, or `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, adds more). A runtime started by hand names such a PEM file in
+`ACTOR_RUNTIME_EXTRA_CA_FILE`.
 
-- Every build then trusts the extra CAs on top of the public roots, for Node.js, Python, `pip`, `curl`,
-  `git` and the AWS SDKs, and the Actor's runs inherit it; the build log says so.
+- Builds trust the certificates their image lacks, on top of the public roots, for Node.js, Python, `pip`,
+  `curl`, `git` and the AWS SDKs, and the Actor's runs inherit it; the build log says how many were added.
+  A machine that trusts nothing special changes no build.
 - Java's `cacerts` and other tools with a store of their own are not configured.
 
 ## Dataset schema validation
