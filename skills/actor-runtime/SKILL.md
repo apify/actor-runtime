@@ -82,9 +82,7 @@ Only if your network re-signs HTTPS with its own CA (corporate networks, some sa
 containers do not inherit the host's trust store, so builds and runs fail with certificate errors
 (`SELF_SIGNED_CERT_IN_CHAIN`, `x509: certificate signed by unknown authority`, ...), or `npm`/`pip` report "no
 matching version" because they fall back to the base image's cache. The platform has no such proxy, and the
-runtime does not handle it: add the CA to the Actor's own Dockerfile, for local runtime use only.
-
-Add the proxy's CA certificate to the Actor's Dockerfile.
+runtime does not handle it: add the proxy's CA certificate to the Actor's own Dockerfile (local use only).
 
 ## Dataset schema validation
 
