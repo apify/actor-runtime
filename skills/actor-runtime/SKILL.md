@@ -88,8 +88,9 @@ names the mounted file in `ACTOR_RUNTIME_EXTRA_CA_FILE`). Without such a proxy, 
   file is right when `openssl s_client -connect registry.npmjs.org:443 -servername registry.npmjs.org
 -CAfile <pem> </dev/null 2>&1 | grep 'Verify return code'` prints `0 (ok)`. A proxy can use several CAs,
   so a bundle holding the whole chain may pass where one certificate fails.
-- Builds trust the file's certificates on top of the public roots, for Node.js, Python, `pip`, `curl`, `git`
-  and the AWS SDKs, and the Actor's runs inherit it; the build log says how many were added. Java's
+- The build steps trust the file's certificates on top of the public roots, for Node.js, Python, `pip`, `curl`,
+  `git` and the AWS SDKs; the build log says how many were added. Runs of the Actor are not affected, so an
+  Actor that makes HTTPS calls through such a proxy at run time does not trust it. Java's
   `cacerts` and other tools with a store of their own are not configured.
 - The flag applies at start: stop the runtime, start it again with the file, then `apify push` again.
 

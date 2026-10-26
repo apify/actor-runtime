@@ -8,9 +8,23 @@ import {
 
 const COPY = 'COPY actor-runtime-ca-bundle.pem /actor-runtime-ca-bundle.pem';
 const B = '/actor-runtime-ca-bundle.pem';
-const ENV = `ENV NODE_EXTRA_CA_CERTS=${B} SSL_CERT_FILE=${B} REQUESTS_CA_BUNDLE=${B} PIP_CERT=${B} CURL_CA_BUNDLE=${B} GIT_SSL_CAINFO=${B} AWS_CA_BUNDLE=${B}`;
+const ENV = [
+	'NODE_EXTRA_CA_CERTS',
+	'SSL_CERT_FILE',
+	'REQUESTS_CA_BUNDLE',
+	'PIP_CERT',
+	'CURL_CA_BUNDLE',
+	'GIT_SSL_CAINFO',
+	'AWS_CA_BUNDLE',
+]
+	.map((name) => `ARG ${name}=${B}`)
+	.join('\n');
 
-describe('addCaBundleToDockerfile (a build trusts the CA bundle in every stage)', () => {
+describe('addCaBundleToDockerfile (a build trusts the CA bundle in every stage, through build arguments only)', () => {
+	it('never sets ENV, so the image and its runs keep the environment the Actor defined', () => {
+		expect(addCaBundleToDockerfile('FROM node:20').dockerfile).not.toMatch(/^ENV /m);
+	});
+
 	it('adds the bundle and the trust variables right after the FROM line', () => {
 		const result = addCaBundleToDockerfile('FROM node:20\nCOPY . .\nRUN npm install');
 		expect(result.dockerfile).toBe(`FROM node:20\n${COPY}\n${ENV}\nCOPY . .\nRUN npm install`);

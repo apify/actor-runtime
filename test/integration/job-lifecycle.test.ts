@@ -561,7 +561,7 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			],
 		};
 
-		it('adds only the certificates that are not public roots to the build context, and trusts them in the Dockerfile', async () => {
+		it('adds only the certificates that are not public roots to the build context, and trusts them in the Dockerfile for the build only', async () => {
 			const publicRoots = publicRootCertificates();
 			const known = publicRoots.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)![0];
 			const caDir = await mkdtemp(join(tmpdir(), 'extra-ca-'));
@@ -580,8 +580,9 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 				const files = driver.startBuildContexts[0]!.sourceFiles;
 				const dockerfile = files.find((file) => file.name === 'Dockerfile')!;
 				expect(dockerfile.content).toContain('COPY actor-runtime-ca-bundle.pem /actor-runtime-ca-bundle.pem\n');
-				expect(dockerfile.content).toContain('NODE_EXTRA_CA_CERTS=/actor-runtime-ca-bundle.pem');
-				expect(dockerfile.content).toContain('SSL_CERT_FILE=/actor-runtime-ca-bundle.pem');
+				expect(dockerfile.content).toContain('ARG NODE_EXTRA_CA_CERTS=/actor-runtime-ca-bundle.pem');
+				expect(dockerfile.content).not.toContain('ENV ');
+				expect(dockerfile.content).toContain('ARG SSL_CERT_FILE=/actor-runtime-ca-bundle.pem');
 				const bundle = files.find((file) => file.name === 'actor-runtime-ca-bundle.pem')!;
 				expect(bundle.content).toContain('EXTRA-CA');
 				expect(bundle.content.startsWith(publicRoots)).toBe(true);

@@ -8,8 +8,9 @@
  * each language runtime may bring its own), so nothing is installed into the image. After every `FROM`
  * one bundle is copied in and the variables the common tools read are pointed at it. The variables that
  * replace a tool's roots (`SSL_CERT_FILE`, `pip`, `curl`) need a bundle that also holds the public roots,
- * so the caller passes the extra CAs appended to those. The variables stay in the final image, so the
- * Actor's runs trust the same CAs.
+ * so the caller passes the extra CAs appended to those. The variables are build arguments, not `ENV`: the
+ * build steps see them, but the image's own environment, and so every run of it, stays as the Actor
+ * defined it. The bundle file itself is copied into the image and left unused.
  */
 import { rootCertificates } from 'node:tls';
 
@@ -63,7 +64,7 @@ export function certificatesMissingFrom(roots: string, candidates: string): stri
 export function addCaBundleToDockerfile(dockerfile: string): { dockerfile: string; stages: number } {
 	const instructions = [
 		`COPY ${CA_BUNDLE_CONTEXT_FILE} ${CA_BUNDLE_IMAGE_PATH}`,
-		`ENV ${CA_VARIABLES.map((name) => `${name}=${CA_BUNDLE_IMAGE_PATH}`).join(' ')}`,
+		...CA_VARIABLES.map((name) => `ARG ${name}=${CA_BUNDLE_IMAGE_PATH}`),
 	];
 
 	const lines = dockerfile.split('\n');
