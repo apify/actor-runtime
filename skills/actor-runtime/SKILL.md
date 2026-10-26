@@ -79,16 +79,19 @@ apify call
 ## Builds behind a TLS-intercepting proxy
 
 When outbound HTTPS is re-signed by a proxy, a build's `npm install` or `pip install` fails with a
-certificate error (or quietly uses the package index cached in the base image, so new package versions
-are not found). `apify runtime start` hands the runtime the CA certificates of the machine it runs on
-(`--no-host-ca` turns that off; `--ca-file`, or `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
-`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, adds more). A runtime started by hand names such a PEM file in
-`ACTOR_RUNTIME_EXTRA_CA_FILE`.
+certificate error (`SELF_SIGNED_CERT_IN_CHAIN`, `CERTIFICATE_VERIFY_FAILED`), or quietly uses the package
+index cached in the base image, so newer package versions are not found. Start the runtime with the CA
+certificate file of **your** environment: `apify runtime start --ca-file <pem>` (a runtime started by hand
+names the mounted file in `ACTOR_RUNTIME_EXTRA_CA_FILE`). Without such a proxy, pass nothing.
 
-- Builds trust the certificates their image lacks, on top of the public roots, for Node.js, Python, `pip`,
-  `curl`, `git` and the AWS SDKs, and the Actor's runs inherit it; the build log says how many were added.
-  A machine that trusts nothing special changes no build.
-- Java's `cacerts` and other tools with a store of their own are not configured.
+- Find the file for your environment; do not guess it, and never disable certificate checking instead. A
+  file is right when `openssl s_client -connect registry.npmjs.org:443 -servername registry.npmjs.org
+-CAfile <pem> </dev/null 2>&1 | grep 'Verify return code'` prints `0 (ok)`. A proxy can use several CAs,
+  so a bundle holding the whole chain may pass where one certificate fails.
+- Builds trust the file's certificates on top of the public roots, for Node.js, Python, `pip`, `curl`, `git`
+  and the AWS SDKs, and the Actor's runs inherit it; the build log says how many were added. Java's
+  `cacerts` and other tools with a store of their own are not configured.
+- The flag applies at start: stop the runtime, start it again with the file, then `apify push` again.
 
 ## Dataset schema validation
 

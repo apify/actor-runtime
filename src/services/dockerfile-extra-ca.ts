@@ -8,28 +8,19 @@
  * each language runtime may bring its own), so nothing is installed into the image. After every `FROM`
  * one bundle is copied in and the variables the common tools read are pointed at it. The variables that
  * replace a tool's roots (`SSL_CERT_FILE`, `pip`, `curl`) need a bundle that also holds the public roots,
- * so the caller passes the extra CA appended to the runtime's own. The variables stay in the final image,
- * so the Actor's runs trust the same CAs.
+ * so the caller passes the extra CAs appended to those. The variables stay in the final image, so the
+ * Actor's runs trust the same CAs.
  */
-import { readFile } from 'node:fs/promises';
+import { rootCertificates } from 'node:tls';
 
 export const CA_BUNDLE_CONTEXT_FILE = 'actor-runtime-ca-bundle.pem';
 export const CA_BUNDLE_IMAGE_PATH = '/actor-runtime-ca-bundle.pem';
 
-/** Where distributions keep their combined root bundle; the first one that exists is used. */
-const SYSTEM_CA_BUNDLE_PATHS = [
-	'/etc/ssl/certs/ca-certificates.crt', // Debian, Ubuntu, Alpine
-	'/etc/pki/tls/certs/ca-bundle.crt', // RHEL, Fedora, CentOS
-	'/etc/ssl/ca-bundle.pem', // openSUSE
-	'/etc/ca-certificates/extracted/tls-ca-bundle.pem', // Arch
-];
-
-/** Variables that add to a tool's own roots; safe with any bundle. */
-const ADDITIVE_CA_VARIABLES = ['NODE_EXTRA_CA_CERTS'];
-
-/** Variables that replace a tool's roots, so the bundle must be complete: OpenSSL-based tools, Python
- * `requests`, `pip`, `curl`, `git`, the AWS SDKs. */
-const REPLACING_CA_VARIABLES = [
+/** Variables that add to a tool's own roots (Node.js) and ones that replace them: OpenSSL-based tools,
+ * Python `requests`, `pip`, `curl`, `git`, the AWS SDKs. The latter need a bundle that also holds the
+ * public roots. */
+const CA_VARIABLES = [
+	'NODE_EXTRA_CA_CERTS',
 	'SSL_CERT_FILE',
 	'REQUESTS_CA_BUNDLE',
 	'PIP_CERT',
@@ -38,18 +29,11 @@ const REPLACING_CA_VARIABLES = [
 	'AWS_CA_BUNDLE',
 ];
 
-/** The runtime's own root bundle, or undefined when this image keeps it somewhere unknown. */
-export async function readSystemCaBundle(
-	paths: readonly string[] = SYSTEM_CA_BUNDLE_PATHS,
-): Promise<string | undefined> {
-	for (const path of paths) {
-		try {
-			return await readFile(path, 'utf8');
-		} catch {
-			// Next candidate.
-		}
-	}
-	return undefined;
+/** The public roots the extra certificates are added to: Mozilla's, as bundled with the runtime's Node.js.
+ * The runtime image keeps no system bundle (its slim base image has none), and a fixed set behaves the same
+ * on every host. */
+export function publicRootCertificates(): string {
+	return rootCertificates.join('\n');
 }
 
 const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
@@ -76,16 +60,10 @@ export function certificatesMissingFrom(roots: string, candidates: string): stri
 	return missing;
 }
 
-/** `replaceRoots` is false when the bundle holds only the extra CA: pointing a replacing variable at it
- * would leave that tool trusting nothing else. */
-export function addCaBundleToDockerfile(
-	dockerfile: string,
-	{ replaceRoots }: { replaceRoots: boolean },
-): { dockerfile: string; stages: number } {
-	const variables = replaceRoots ? [...ADDITIVE_CA_VARIABLES, ...REPLACING_CA_VARIABLES] : ADDITIVE_CA_VARIABLES;
+export function addCaBundleToDockerfile(dockerfile: string): { dockerfile: string; stages: number } {
 	const instructions = [
 		`COPY ${CA_BUNDLE_CONTEXT_FILE} ${CA_BUNDLE_IMAGE_PATH}`,
-		`ENV ${variables.map((name) => `${name}=${CA_BUNDLE_IMAGE_PATH}`).join(' ')}`,
+		`ENV ${CA_VARIABLES.map((name) => `${name}=${CA_BUNDLE_IMAGE_PATH}`).join(' ')}`,
 	];
 
 	const lines = dockerfile.split('\n');
