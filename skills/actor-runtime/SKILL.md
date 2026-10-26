@@ -78,55 +78,20 @@ apify call
 
 ## Builds behind a TLS-intercepting proxy
 
-**Only relevant if** the machine running the runtime reaches the internet through a proxy that re-signs HTTPS
-with its own CA (some corporate networks, CI systems and agent sandboxes). The runtime does not handle this
-for you: build and run containers never inherit the host's trust store, as on the platform. Behind such a
-proxy, **you add the proxy's CA to each Actor's own Dockerfile**; nothing changes in the runtime. Without
-such a proxy, add nothing.
+Only if your network re-signs HTTPS with its own CA (corporate networks, some sandboxes): build and run
+containers do not inherit the host's trust store, so builds and runs fail with certificate errors
+(`SELF_SIGNED_CERT_IN_CHAIN`, `x509: certificate signed by unknown authority`, ...), or `npm`/`pip` report "no
+matching version" because they fall back to the base image's cache. The platform has no such proxy, and the
+runtime does not handle it: add the CA to the Actor's own Dockerfile, for local runtime use only.
 
-**You are affected when** a build or run log shows `SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`,
-`unable to get local issuer certificate`, `CERTIFICATE_VERIFY_FAILED`, Go's `x509: certificate signed by unknown
-authority` or Cargo's `SSL peer certificate ... self-signed certificate in certificate chain`. Also when `npm` or
-`pip` reports no matching version for a version that exists: npm quietly falls back to the base image's own
-package cache when it cannot reach the registry.
-
-1. **Find the CA file of your own environment.** Do not guess it or copy a path from an example. Read the
-   environment's documentation first; otherwise look at the variables that name a PEM file
-   (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`). Use a file
-   only if it verifies a live connection: `openssl s_client -connect registry.npmjs.org:443 -servername
-registry.npmjs.org -CAfile <pem> </dev/null 2>&1 | grep 'Verify return code'` must print `0 (ok)`. A proxy can
-   use a chain of several CAs, so one certificate may fail where the bundle holding the whole chain passes.
-2. **Copy it into the Actor's folder** (for example `proxy-ca.pem`): a Dockerfile can only `COPY` from its build
-   context. The file is specific to your environment, so do not commit it or push it to the Apify cloud.
-3. **Trust it in the Dockerfile**, after every `FROM` whose stage runs network steps:
-
-    ```dockerfile
-    FROM apify/actor-node:24
-    COPY proxy-ca.pem /proxy-ca.pem
-    ENV NODE_EXTRA_CA_CERTS=/proxy-ca.pem
-    ```
-
-    `ENV` reaches both the build and the Actor's runs, which an Actor that makes HTTPS calls needs. Use `ARG`
-    instead of `ENV` to trust the proxy during the build only; the run then fails on HTTPS calls through it.
-
-4. **Push again** (`apify push`) so the Actor rebuilds.
-
-Variables per tool: Node.js `NODE_EXTRA_CA_CERTS`; Python `REQUESTS_CA_BUNDLE` and `PIP_CERT`; Go, Cargo,
-OpenSSL-based tools and `curl` `SSL_CERT_FILE` and `CURL_CA_BUNDLE`; `git` `GIT_SSL_CAINFO`. Only the Node.js one
-adds to the tool's roots; the others replace them, so the file must also hold the public roots (the full bundle
-that passed the check in step 1 does). Node.js (build and run), Go, Cargo and `pip` are known to work this way;
-Java's `cacerts` and other tools with a store of their own need their own steps.
-
-- Never turn certificate checking off to get past the error (`NODE_TLS_REJECT_UNAUTHORIZED=0`, `strict-ssl=false`,
-  `pip --trusted-host`).
-- Environment variables set on an Actor version persist in the runtime. If you set one of these in
-  `.actor/actor.json` earlier, a stale value keeps overriding the Dockerfile's `ENV` at run time: remove it with
-  `apify api DELETE v2/actors/<actorId>/versions/0.0/env-vars/<NAME>`.
-- These Dockerfile lines break a build on the real platform, where the CA file does not exist. Keep them in a
-  Dockerfile you use only against the runtime.
-- Related: `apify/actor-node:20` is a frozen image (Node 20 is end of life) with an old `apify-client` that calls
-  `/v2/acts/...`, which the runtime does not implement; client calls such as `Actor.call()` then fail with 404.
-  Use a current base image (`apify/actor-node:22` or `:24`), or depend on `apify-client` 2.24 or later.
+- Find your environment's CA file (its docs, or `NODE_EXTRA_CA_CERTS` / `SSL_CERT_FILE`) and accept it only if
+  `openssl s_client -connect registry.npmjs.org:443 -CAfile <pem> </dev/null 2>&1 | grep 'Verify return code'`
+  prints `0 (ok)`. Copy it into the Actor folder; do not commit or push it.
+- In the Dockerfile, `COPY` it in and point the tool's variable at it with `ENV` (build and runs) or `ARG`
+  (build only): `NODE_EXTRA_CA_CERTS` (adds to Node's roots); `SSL_CERT_FILE` (Go, Cargo, OpenSSL tools),
+  `REQUESTS_CA_BUNDLE`/`PIP_CERT` (Python), `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` (these replace the tool's roots, so
+  the file must also hold the public roots).
+- Never disable certificate checking.
 
 ## Dataset schema validation
 
