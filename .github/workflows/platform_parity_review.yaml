@@ -36,7 +36,7 @@ jobs:
             github.event.action != 'closed'
             && github.event.pull_request.head.repo.full_name == github.repository
             && !github.event.pull_request.draft
-        uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@claude/kind-curie-orivy7
+        uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@7bca4b020c38fe2ea6d497d97337f3e791a74ae9
         with:
             agent_dir: automations/actor-runtime-review/agents
             title: PR #${{ github.event.pull_request.number }}
@@ -52,7 +52,7 @@ jobs:
     archive:
         name: Archive the review session
         if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@claude/kind-curie-orivy7
+        uses: apify/apify-tooling-orchestration/.github/workflows/agent_session.yaml@7bca4b020c38fe2ea6d497d97337f3e791a74ae9
         with:
             action: archive
             agent_dir: automations/actor-runtime-review/agents
