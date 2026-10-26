@@ -560,10 +560,10 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			],
 		};
 
-		it('adds the bundle to the build context and trusts it in the Dockerfile, and the build log says so', async () => {
+		it('adds the extra CA to the system roots in the build context and trusts it in the Dockerfile, and the build log says so', async () => {
 			const caDir = await mkdtemp(join(tmpdir(), 'extra-ca-'));
 			const caFile = join(caDir, 'ca.pem');
-			await writeFile(caFile, '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n');
+			await writeFile(caFile, '-----BEGIN CERTIFICATE-----\nEXTRA-CA\n-----END CERTIFICATE-----\n');
 			vi.stubEnv('ACTOR_RUNTIME_EXTRA_CA_FILE', caFile);
 			try {
 				const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
@@ -576,14 +576,14 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 
 				const files = driver.startBuildContexts[0]!.sourceFiles;
 				const dockerfile = files.find((file) => file.name === 'Dockerfile')!;
-				expect(dockerfile.content).toBe(
-					'FROM docker.io/library/node:20\nCOPY actor-runtime-extra-ca.pem /actor-runtime-extra-ca.pem\n' +
-						'ENV NODE_EXTRA_CA_CERTS=/actor-runtime-extra-ca.pem\nCOPY . ./\n',
-				);
-				const bundle = files.find((file) => file.name === 'actor-runtime-extra-ca.pem')!;
-				expect(Buffer.from(bundle.content, 'base64').toString()).toContain('BEGIN CERTIFICATE');
+				expect(dockerfile.content).toContain('COPY actor-runtime-ca-bundle.pem /actor-runtime-ca-bundle.pem\n');
+				expect(dockerfile.content).toContain('NODE_EXTRA_CA_CERTS=/actor-runtime-ca-bundle.pem');
+				expect(dockerfile.content).toContain('SSL_CERT_FILE=/actor-runtime-ca-bundle.pem');
+				const bundle = files.find((file) => file.name === 'actor-runtime-ca-bundle.pem')!;
+				expect(bundle.content).toContain('EXTRA-CA');
+				expect(bundle.content.length).toBeGreaterThan('EXTRA-CA'.length + 100);
 				expect(await getFullLog(record.id)).toContain(
-					'Trusting the CA bundle from ACTOR_RUNTIME_EXTRA_CA_FILE',
+					'Trusting the CA certificates from ACTOR_RUNTIME_EXTRA_CA_FILE',
 				);
 			} finally {
 				vi.unstubAllEnvs();

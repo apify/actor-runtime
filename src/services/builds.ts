@@ -10,7 +10,7 @@ import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import { sourceFileToText } from './actor-source-files.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
-import { addExtraCaToDockerfile, EXTRA_CA_CONTEXT_FILE } from './dockerfile-extra-ca.js';
+import { addCaBundleToDockerfile, CA_BUNDLE_CONTEXT_FILE, readSystemCaBundle } from './dockerfile-extra-ca.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
 import { dockerContextFiles, nameInDockerContext, resolveDockerContext } from './docker-context.js';
 import { describeActorJsonDefect } from './actor-json-validation.js';
@@ -115,13 +115,13 @@ function qualifyDockerfileImages(
 	});
 }
 
-/** Name of the runtime's environment variable pointing at a PEM bundle the builds should trust (`actor-driver.md`). */
+/** Name of the runtime's environment variable pointing at a PEM file of extra CA certificates (`actor-driver.md`). */
 export const EXTRA_CA_FILE_ENV_VAR = 'ACTOR_RUNTIME_EXTRA_CA_FILE';
 
 /**
- * With `ACTOR_RUNTIME_EXTRA_CA_FILE` set, the bundle joins this build's context and its Dockerfile trusts
- * it (`dockerfile-extra-ca.ts`). Read per build so a replaced file applies to the next build. An unreadable
- * file is stated in the build log and the build goes on without it.
+ * With `ACTOR_RUNTIME_EXTRA_CA_FILE` set, the extra CA joins this build's context and its Dockerfile
+ * trusts it (`dockerfile-extra-ca.ts`). Read per build so a replaced file applies to the next build. An
+ * unreadable file is stated in the build log and the build goes on without it.
  */
 async function trustExtraCa(
 	sourceFiles: SourceFile[],
@@ -131,25 +131,32 @@ async function trustExtraCa(
 ): Promise<SourceFile[]> {
 	const caFile = env[EXTRA_CA_FILE_ENV_VAR]?.trim();
 	if (!caFile) return sourceFiles;
-	let bundle: Buffer;
+	let extraCa: string;
 	try {
-		bundle = await readFile(caFile);
+		extraCa = await readFile(caFile, 'utf8');
 	} catch (error) {
 		log(`Cannot read ${EXTRA_CA_FILE_ENV_VAR} (${caFile}): ${(error as Error).message}. Building without it.\n`);
 		return sourceFiles;
 	}
+	const systemRoots = await readSystemCaBundle();
+	const replaceRoots = systemRoots !== undefined;
 	let stages = 0;
 	const rewritten = sourceFiles.map((file) => {
 		if (normalizeEntryName(file.name) !== dockerfilePath) return file;
-		const result = addExtraCaToDockerfile(sourceFileToText(file));
+		const result = addCaBundleToDockerfile(sourceFileToText(file), { replaceRoots });
 		stages = result.stages;
 		return { ...file, format: 'TEXT' as const, content: result.dockerfile };
 	});
 	if (stages === 0) return sourceFiles;
-	log(`Trusting the CA bundle from ${EXTRA_CA_FILE_ENV_VAR} in ${stages} build stage(s) via NODE_EXTRA_CA_CERTS.\n`);
+	log(
+		replaceRoots
+			? `Trusting the CA certificates from ${EXTRA_CA_FILE_ENV_VAR}, added to the system roots, in ${stages} build stage(s).\n`
+			: `Trusting the CA certificates from ${EXTRA_CA_FILE_ENV_VAR} in ${stages} build stage(s) for Node.js tools only: the runtime found no system root bundle to add them to.\n`,
+	);
+	const bundle = replaceRoots ? `${systemRoots}\n${extraCa}` : extraCa;
 	return [
-		...rewritten.filter((file) => normalizeEntryName(file.name) !== EXTRA_CA_CONTEXT_FILE),
-		{ name: EXTRA_CA_CONTEXT_FILE, format: 'BASE64', content: bundle.toString('base64') },
+		...rewritten.filter((file) => normalizeEntryName(file.name) !== CA_BUNDLE_CONTEXT_FILE),
+		{ name: CA_BUNDLE_CONTEXT_FILE, format: 'TEXT', content: bundle },
 	];
 }
 
