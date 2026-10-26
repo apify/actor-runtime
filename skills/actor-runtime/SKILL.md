@@ -84,14 +84,7 @@ containers do not inherit the host's trust store, so builds and runs fail with c
 matching version" because they fall back to the base image's cache. The platform has no such proxy, and the
 runtime does not handle it: add the CA to the Actor's own Dockerfile, for local runtime use only.
 
-- Find your environment's CA file (its docs, or `NODE_EXTRA_CA_CERTS` / `SSL_CERT_FILE`) and accept it only if
-  `openssl s_client -connect registry.npmjs.org:443 -CAfile <pem> </dev/null 2>&1 | grep 'Verify return code'`
-  prints `0 (ok)`. Copy it into the Actor folder; do not commit or push it.
-- In the Dockerfile, `COPY` it in and point the tool's variable at it with `ENV` (build and runs) or `ARG`
-  (build only): `NODE_EXTRA_CA_CERTS` (adds to Node's roots); `SSL_CERT_FILE` (Go, Cargo, OpenSSL tools),
-  `REQUESTS_CA_BUNDLE`/`PIP_CERT` (Python), `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` (these replace the tool's roots, so
-  the file must also hold the public roots).
-- Never disable certificate checking.
+Add the proxy's CA certificate to the Actor's Dockerfile.
 
 ## Dataset schema validation
 
