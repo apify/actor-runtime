@@ -17,10 +17,6 @@
  * modules for exactly this purpose) so each scenario is driven deterministically via explicit awaits on
  * controllable promises, instead of racing real timers/timeouts.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -35,7 +31,6 @@ import { getRegistries } from '../../src/storage/registries.js';
 import { generateId } from '../../src/storage/ids.js';
 import { recordTaggedBuild, updateActor } from '../../src/services/actors.js';
 import { abortBuild, runBuildInBackground, startBuild } from '../../src/services/builds.js';
-import { publicRootCertificates } from '../../src/services/dockerfile-extra-ca.js';
 import {
 	abortRun,
 	reconcileOrphanedJobs,
@@ -540,100 +535,6 @@ describe('job lifecycle: TIMED-OUT mapping and abort/completion race guards', ()
 			expect(log).toContain(
 				'Using "docker.io/apify/actor-python-playwright:3.14-1.61.0" for FROM "apify/actor-python-playwright:3.14-1.61.0"',
 			);
-		});
-	});
-
-	describe('ACTOR_RUNTIME_EXTRA_CA_FILE makes a build trust an extra CA bundle', () => {
-		const startedBuildRecord = (actor: ActorRecord): BuildRecord => ({
-			id: generateId(),
-			userId: actor.userId,
-			actorId: actor.id,
-			versionNumber: '0.0',
-			buildNumber: '0.0.1',
-			tag: 'latest',
-			status: 'READY',
-			startedAt: new Date().toISOString(),
-		});
-		const dockerfileVersion: ActorVersionRecord = {
-			...VERSION,
-			sourceFiles: [
-				{ name: 'Dockerfile', format: 'TEXT', content: 'FROM docker.io/library/node:20\nCOPY . ./\n' },
-			],
-		};
-
-		it('adds only the certificates that are not public roots to the build context, and trusts them in the Dockerfile for the build only', async () => {
-			const publicRoots = publicRootCertificates();
-			const known = publicRoots.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)![0];
-			const caDir = await mkdtemp(join(tmpdir(), 'extra-ca-'));
-			const caFile = join(caDir, 'ca.pem');
-			await writeFile(caFile, `${known}\n-----BEGIN CERTIFICATE-----\nEXTRA-CA\n-----END CERTIFICATE-----\n`);
-			vi.stubEnv('ACTOR_RUNTIME_EXTRA_CA_FILE', caFile);
-			try {
-				const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
-				server = await startTestServer(driver);
-				const actor = await seedActor(server, 'extra-ca-actor');
-				const record = startedBuildRecord(actor);
-				await getRegistries().builds.set(record.id, record);
-
-				await runBuildInBackground(driver, actor, dockerfileVersion, record, { tag: 'latest', useCache: true });
-
-				const files = driver.startBuildContexts[0]!.sourceFiles;
-				const dockerfile = files.find((file) => file.name === 'Dockerfile')!;
-				expect(dockerfile.content).toContain('COPY actor-runtime-ca-bundle.pem /actor-runtime-ca-bundle.pem\n');
-				expect(dockerfile.content).toContain('ARG NODE_EXTRA_CA_CERTS=/actor-runtime-ca-bundle.pem');
-				expect(dockerfile.content).not.toContain('ENV ');
-				expect(dockerfile.content).toContain('ARG SSL_CERT_FILE=/actor-runtime-ca-bundle.pem');
-				const bundle = files.find((file) => file.name === 'actor-runtime-ca-bundle.pem')!;
-				expect(bundle.content).toContain('EXTRA-CA');
-				expect(bundle.content.startsWith(publicRoots)).toBe(true);
-				expect(await getFullLog(record.id)).toContain(
-					'Trusting 1 CA certificate(s) from ACTOR_RUNTIME_EXTRA_CA_FILE',
-				);
-			} finally {
-				vi.unstubAllEnvs();
-				await rm(caDir, { recursive: true, force: true });
-			}
-		});
-
-		it('leaves the build alone when the file holds only public roots', async () => {
-			const publicRoots = publicRootCertificates();
-			const caDir = await mkdtemp(join(tmpdir(), 'extra-ca-'));
-			const caFile = join(caDir, 'ca.pem');
-			await writeFile(caFile, publicRoots);
-			vi.stubEnv('ACTOR_RUNTIME_EXTRA_CA_FILE', caFile);
-			try {
-				const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
-				server = await startTestServer(driver);
-				const actor = await seedActor(server, 'extra-ca-none-actor');
-				const record = startedBuildRecord(actor);
-				await getRegistries().builds.set(record.id, record);
-
-				await runBuildInBackground(driver, actor, dockerfileVersion, record, { tag: 'latest', useCache: true });
-
-				expect(driver.startBuildContexts[0]!.sourceFiles).toEqual(dockerfileVersion.sourceFiles);
-			} finally {
-				vi.unstubAllEnvs();
-				await rm(caDir, { recursive: true, force: true });
-			}
-		});
-
-		it('an unreadable file is stated in the build log and the build goes on unchanged', async () => {
-			vi.stubEnv('ACTOR_RUNTIME_EXTRA_CA_FILE', '/nonexistent/ca.pem');
-			try {
-				const driver = fixedBuildOutcomeDriver({ imageId: 'x' });
-				server = await startTestServer(driver);
-				const actor = await seedActor(server, 'extra-ca-missing-actor');
-				const record = startedBuildRecord(actor);
-				await getRegistries().builds.set(record.id, record);
-
-				await runBuildInBackground(driver, actor, dockerfileVersion, record, { tag: 'latest', useCache: true });
-
-				expect(driver.startBuildContexts[0]!.sourceFiles).toEqual(dockerfileVersion.sourceFiles);
-				expect(await getFullLog(record.id)).toContain('Cannot read ACTOR_RUNTIME_EXTRA_CA_FILE');
-				expect((await getRegistries().builds.get(record.id))?.status).toBe('SUCCEEDED');
-			} finally {
-				vi.unstubAllEnvs();
-			}
 		});
 	});
 

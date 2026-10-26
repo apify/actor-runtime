@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-
 import { generateId } from '../storage/ids.js';
 import type { BuildRecord, JobStatus, SourceFile } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
@@ -10,12 +8,6 @@ import { DriverTimedOutError } from '../driver/types.js';
 import { normalizeEntryName } from '../driver/tar-entry-name.js';
 import { sourceFileToText } from './actor-source-files.js';
 import { qualifyDockerfileImageReferences } from './dockerfile-image-refs.js';
-import {
-	addCaBundleToDockerfile,
-	CA_BUNDLE_CONTEXT_FILE,
-	certificatesMissingFrom,
-	publicRootCertificates,
-} from './dockerfile-extra-ca.js';
 import { resolveDockerfileLocation } from './dockerfile-location.js';
 import { dockerContextFiles, nameInDockerContext, resolveDockerContext } from './docker-context.js';
 import { describeActorJsonDefect } from './actor-json-validation.js';
@@ -118,50 +110,6 @@ function qualifyDockerfileImages(
 		}
 		return { ...file, format: 'TEXT', content: dockerfile };
 	});
-}
-
-/** Name of the runtime's environment variable pointing at a PEM file of CA certificates for builds to trust (`actor-driver.md`). */
-export const EXTRA_CA_FILE_ENV_VAR = 'ACTOR_RUNTIME_EXTRA_CA_FILE';
-
-/**
- * With `ACTOR_RUNTIME_EXTRA_CA_FILE` set, the certificates in it that are not public roots join this
- * build's context and its Dockerfile trusts them (`dockerfile-extra-ca.ts`); with none missing the build is
- * left alone. Read per build so a replaced file applies to the next build. An unreadable file is stated in
- * the build log and the build goes on without it.
- */
-async function trustExtraCa(
-	sourceFiles: SourceFile[],
-	dockerfilePath: string,
-	log: (line: string) => void,
-	env: NodeJS.ProcessEnv = process.env,
-): Promise<SourceFile[]> {
-	const caFile = env[EXTRA_CA_FILE_ENV_VAR]?.trim();
-	if (!caFile) return sourceFiles;
-	let hostCertificates: string;
-	try {
-		hostCertificates = await readFile(caFile, 'utf8');
-	} catch (error) {
-		log(`Cannot read ${EXTRA_CA_FILE_ENV_VAR} (${caFile}): ${(error as Error).message}. Building without it.\n`);
-		return sourceFiles;
-	}
-	const publicRoots = publicRootCertificates();
-	const extra = certificatesMissingFrom(publicRoots, hostCertificates);
-	if (extra.length === 0) return sourceFiles;
-	let stages = 0;
-	const rewritten = sourceFiles.map((file) => {
-		if (normalizeEntryName(file.name) !== dockerfilePath) return file;
-		const result = addCaBundleToDockerfile(sourceFileToText(file));
-		stages = result.stages;
-		return { ...file, format: 'TEXT' as const, content: result.dockerfile };
-	});
-	if (stages === 0) return sourceFiles;
-	log(
-		`Trusting ${extra.length} CA certificate(s) from ${EXTRA_CA_FILE_ENV_VAR} on top of the public roots, in ${stages} build stage(s).\n`,
-	);
-	return [
-		...rewritten.filter((file) => normalizeEntryName(file.name) !== CA_BUNDLE_CONTEXT_FILE),
-		{ name: CA_BUNDLE_CONTEXT_FILE, format: 'TEXT', content: [publicRoots, ...extra].join('\n') },
-	];
 }
 
 export interface StartBuildOptions {
@@ -349,17 +297,13 @@ export async function runBuildInBackground(
 	const extraDatasetAliases = resolveExtraDatasetAliases(versionSourceFiles, actorPath);
 
 	const contextFiles = dockerContextFiles(versionSourceFiles, contextPath);
-	const sourceFiles: SourceFile[] = await trustExtraCa(
-		qualifyDockerfileImages(
-			dockerfileResolution.outcome === 'default'
-				? [
-						...contextFiles.filter((file) => normalizeEntryName(file.name) !== DEFAULT_DOCKERFILE_NAME),
-						dockerfileResolution.extraSourceFile,
-					]
-				: contextFiles,
-			dockerfilePath,
-			(line) => appendRuntimeLog(record.id, line),
-		),
+	const sourceFiles: SourceFile[] = qualifyDockerfileImages(
+		dockerfileResolution.outcome === 'default'
+			? [
+					...contextFiles.filter((file) => normalizeEntryName(file.name) !== DEFAULT_DOCKERFILE_NAME),
+					dockerfileResolution.extraSourceFile,
+				]
+			: contextFiles,
 		dockerfilePath,
 		(line) => appendRuntimeLog(record.id, line),
 	);

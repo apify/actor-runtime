@@ -27,7 +27,6 @@
   restarts (`storage.md`).
 - A build runs for the host's architecture; one whose base image has no manifest for it is retried
   once for `linux/amd64`, the architecture the platform builds and runs on, with the reason logged.
-- **Builds can trust extra CA certificates.** When the runtime is started with `ACTOR_RUNTIME_EXTRA_CA_FILE` naming a PEM file, the build steps of every build trust the certificates in it that are not public roots, in addition to the public roots, for Node.js, Python, `pip`, `curl`, `git` and other tools that honour the standard CA environment variables; the build log says so. Only builds are affected: the image's own environment, and so every run of it, is unchanged. It is meant for networks that re-sign outbound TLS. A file holding only public roots changes no build, and a file that cannot be read is reported in the build log and the build proceeds without it.
 - **The Dockerfile to build is resolved from the Actor's pushed source**, not Docker's implicit default. `.actor/actor.json` is parsed as JSON5; an unparseable file fails the build with a "Could not parse .actor/actor.json" message. Resolution order, stopping at the first hit:
     1. the `dockerfile` field of `.actor/actor.json`, relative to `.actor/` - a path escaping the Actor root fails with "points outside the Actor root directory"; a non-string value fails with `"dockerfile" must be a string`; a value naming no pushed file (including empty) falls through instead of failing.
     2. `.actor/Dockerfile`
