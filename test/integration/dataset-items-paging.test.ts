@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import axios from 'axios';
 
-import { DEFAULT_ITEMS_PAGE_LIMIT } from '../../src/api/routes/datasets.js';
+import { DEFAULT_DATASET_PAGE_LIMIT as DEFAULT_ITEMS_PAGE_LIMIT } from '../../src/config.js';
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
 
 describe('dataset items paging', () => {
@@ -16,6 +16,7 @@ describe('dataset items paging', () => {
 	});
 
 	afterEach(async () => {
+		delete process.env.ACTOR_RUNTIME_DATASET_PAGE_LIMIT;
 		await server.close();
 	});
 
@@ -45,5 +46,15 @@ describe('dataset items paging', () => {
 
 		const explicit = await items(dataset.id, '?limit=5&offset=10');
 		expect(explicit.data.map((item: { n: number }) => item.n)).toEqual([10, 11, 12, 13, 14]);
+	});
+
+	it('takes the page size from ACTOR_RUNTIME_DATASET_PAGE_LIMIT', async () => {
+		const dataset = await server.client.datasets().getOrCreate('configured');
+		await server.client.dataset(dataset.id).pushItems(Array.from({ length: 10 }, (_, n) => ({ n })));
+		process.env.ACTOR_RUNTIME_DATASET_PAGE_LIMIT = '3';
+
+		const page = await items(dataset.id);
+		expect(page.data.map((item: { n: number }) => item.n)).toEqual([0, 1, 2]);
+		expect(page.headers['x-apify-pagination-limit']).toBe('3');
 	});
 });

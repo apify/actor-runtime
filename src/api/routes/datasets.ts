@@ -26,13 +26,6 @@ import type { ApiServerDeps } from '../server.js';
 
 type ResolveDataset = (req: Request) => Promise<StorageRecord | null>;
 
-/**
- * Items served when the caller gives no `limit`. A local dataset can hold millions of items, and a
- * bare `get-items` from the CLI or an agent then floods a terminal; a page keeps the first look cheap
- * while `offset`/`limit` still reach everything.
- */
-export const DEFAULT_ITEMS_PAGE_LIMIT = 250;
-
 /** Answers with a page of the dataset's items, honouring the items endpoint's query parameters. */
 export async function sendDatasetItems(
 	req: Request,
@@ -44,7 +37,9 @@ export async function sendDatasetItems(
 	const dataset = await openDataset(record.id);
 
 	const offset = queryNumber(req, 'offset') ?? 0;
-	const limit = queryNumber(req, 'limit') ?? DEFAULT_ITEMS_PAGE_LIMIT;
+	// A local dataset can hold millions of items, and a bare `get-items` from the CLI or an agent then
+	// floods a terminal; a page keeps the first look cheap while `offset`/`limit` still reach everything.
+	const limit = queryNumber(req, 'limit') ?? datasetPageLimit();
 	const desc = queryBoolean(req, 'desc') ?? false;
 
 	const page = await dataset.getData({ offset, limit, desc });
