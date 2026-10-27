@@ -51,7 +51,7 @@ apify push                      # upload + build, once
 apify call --input '{"maxPages":3}'
 apify runs ls --json
 apify runs log <runId>
-apify datasets get-items <datasetId> --format json
+apify datasets get-items <datasetId> --format json   # the first 250 items; --offset/--limit for the rest
 ```
 
 ### Apple Silicon and other arm64 hosts
