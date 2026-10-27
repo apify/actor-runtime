@@ -76,17 +76,3 @@ export function browserViewerVersionFilePath(): string {
 export function skillFilePath(): string {
 	return process.env.ACTOR_RUNTIME_SKILL_PATH ?? 'skills/actor-runtime/SKILL.md';
 }
-
-/** Items the dataset items endpoint serves when the caller gives no `limit`. */
-export const DEFAULT_DATASET_PAGE_LIMIT = 250;
-
-/** Read per request (not cached) so tests can set `ACTOR_RUNTIME_DATASET_PAGE_LIMIT` on the fly. */
-export function datasetPageLimit(env: NodeJS.ProcessEnv = process.env): number {
-	const raw = env.ACTOR_RUNTIME_DATASET_PAGE_LIMIT;
-	if (raw === undefined || raw === '') return DEFAULT_DATASET_PAGE_LIMIT;
-	const parsed = Number(raw);
-	if (!Number.isInteger(parsed) || parsed < 1) {
-		throw new Error(`ACTOR_RUNTIME_DATASET_PAGE_LIMIT must be a positive integer, got ${JSON.stringify(raw)}.`);
-	}
-	return parsed;
-}

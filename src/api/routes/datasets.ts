@@ -23,9 +23,14 @@ import type { DatasetSchema, StorageRecord } from '../../storage/entities.js';
 import { findInvalidDatasetItems } from '../../services/dataset-schema.js';
 import { recordDefaultDatasetItems } from '../../services/charging.js';
 import type { ApiServerDeps } from '../server.js';
-import { datasetPageLimit } from '../../config.js';
 
 type ResolveDataset = (req: Request) => Promise<StorageRecord | null>;
+
+/**
+ * What the platform reports as `x-apify-pagination-limit` when the caller gives no `limit`: every
+ * item from `offset` on is served, and the header carries apify-core's "almost infinity" stand-in.
+ */
+const PLATFORM_UNLIMITED_PAGE = 999_999_999_999;
 
 /** Answers with a page of the dataset's items, honouring the items endpoint's query parameters. */
 export async function sendDatasetItems(
@@ -38,9 +43,7 @@ export async function sendDatasetItems(
 	const dataset = await openDataset(record.id);
 
 	const offset = queryNumber(req, 'offset') ?? 0;
-	// A local dataset can hold millions of items, and a bare `get-items` from the CLI or an agent then
-	// floods a terminal; a page keeps the first look cheap while `offset`/`limit` still reach everything.
-	const limit = queryNumber(req, 'limit') ?? datasetPageLimit();
+	const limit = queryNumber(req, 'limit');
 	const desc = queryBoolean(req, 'desc') ?? false;
 
 	const page = await dataset.getData({ offset, limit, desc });
@@ -61,7 +64,7 @@ export async function sendDatasetItems(
 		'x-apify-pagination-total': String(page.total),
 		'x-apify-pagination-offset': String(page.offset),
 		'x-apify-pagination-count': String(items.length),
-		'x-apify-pagination-limit': String(page.limit ?? items.length),
+		'x-apify-pagination-limit': String(limit ?? PLATFORM_UNLIMITED_PAGE),
 		'x-apify-pagination-desc': String(desc),
 	});
 	res.status(status).json(items);
