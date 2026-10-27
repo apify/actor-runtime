@@ -2,8 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-<!-- git-cliff-unreleased-start -->
-## 0.1.3 - **not yet released**
+## [0.1.3](https://github.com/apify/actor-runtime/releases/tag/v0.1.3) (2026-10-27)
 
 ### 🚀 Features
 
@@ -15,7 +14,6 @@ All notable changes to this project will be documented in this file.
 - Honour waitForFinish on GET run&#x2F;build, serve standby and container proxies under &#x2F;v2 ([#105](https://github.com/apify/actor-runtime/pull/105)) ([058ccea](https://github.com/apify/actor-runtime/commit/058ccea6c0731fc562dd7f8d4c3c383ec203ebbc)) by [@Pijukatel](https://github.com/Pijukatel)
 
 
-<!-- git-cliff-unreleased-end -->
 ## [0.1.2](https://github.com/apify/actor-runtime/releases/tag/v0.1.2) (2026-10-12)
 
 ### 🚀 Features
