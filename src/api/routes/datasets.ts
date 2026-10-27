@@ -23,6 +23,7 @@ import type { DatasetSchema, StorageRecord } from '../../storage/entities.js';
 import { findInvalidDatasetItems } from '../../services/dataset-schema.js';
 import { recordDefaultDatasetItems } from '../../services/charging.js';
 import type { ApiServerDeps } from '../server.js';
+import { datasetPageLimit } from '../../config.js';
 
 type ResolveDataset = (req: Request) => Promise<StorageRecord | null>;
 
