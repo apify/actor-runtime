@@ -175,6 +175,40 @@ describe('identity resolution against the real platform (stubbed upstream)', () 
 			await stub.close();
 		}
 	});
+
+	it('a new token of an already-known account joins that user, and its earlier tokens keep resolving after a restart', async () => {
+		const stub = await startStubUpstream({
+			data: {
+				id: 'rotating-real-id',
+				username: 'rotating-real-username',
+				proxy: { password: 'rotating-password' },
+			},
+		});
+		process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+		try {
+			const first = clientWithToken(server.baseUrl, 'rotating-token-1');
+			const second = clientWithToken(server.baseUrl, 'rotating-token-2');
+
+			expect(((await first.user('me').get()) as unknown as UserMeResponse).id).toBe('rotating-real-id');
+			expect(((await second.user('me').get()) as unknown as UserMeResponse).id).toBe('rotating-real-id');
+			expect(stub.hitCount()).toBe(2);
+
+			// One record: the latest token is the one handed out, the earlier one is still known.
+			const all = (await getRegistries().users.list()).filter((user) => user.id === 'rotating-real-id');
+			expect(all).toHaveLength(1);
+			expect(all[0]?.token).toBe('rotating-token-2');
+			expect(all[0]?.tokens).toEqual(['rotating-token-1', 'rotating-token-2']);
+
+			const { resetUsersForTests } = await import('../../src/services/users.js');
+			resetUsersForTests();
+
+			// A run container started with the first token is still that user, with no re-probe.
+			expect(((await first.user('me').get()) as unknown as UserMeResponse).id).toBe('rotating-real-id');
+			expect(stub.hitCount()).toBe(2);
+		} finally {
+			await stub.close();
+		}
+	});
 });
 
 describe('harvested proxy password flows into Actor run containers, per user', () => {

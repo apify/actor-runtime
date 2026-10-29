@@ -37,6 +37,9 @@
       identity").
 - Both real and fabricated users are persisted across runtime restarts: the same token resolves to
   the same user on every subsequent request.
+- A new token that resolves to a real account the runtime already knows joins that user rather than
+  creating another one, and the user's earlier tokens keep resolving (the CLI's OAuth login rotates
+  its token every hour).
 - **Proxy password**: the adopted real proxy password (when known) is forwarded as
   `APIFY_PROXY_PASSWORD` into every Actor run container, with the runtime's own
   `APIFY_PROXY_PASSWORD` environment variable taking precedence when set (see `actor-driver.md`).

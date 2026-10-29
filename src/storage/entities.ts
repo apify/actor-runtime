@@ -38,7 +38,10 @@ export interface DatasetSchema {
 export interface UserRecord {
 	id: string;
 	username: string;
+	/** The token seen last, handed to new runs, schedules and standby links. */
 	token: string;
+	/** Every token this user was seen with, oldest first; absent on records written before tokens rotated. */
+	tokens?: string[];
 	createdAt: string;
 	/** Real Apify Proxy password for this account, harvested from the upstream `/v2/users/me` response
 	 * at creation time when the token resolved against the real platform (see
