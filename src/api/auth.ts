@@ -7,6 +7,8 @@ import { sendError } from './envelope.js';
 declare module 'express-serve-static-core' {
 	interface Request {
 		user?: UserRecord;
+		/** The token this request presented, as distinct from `user.token`, the user's latest one. */
+		token?: string;
 	}
 }
 
@@ -40,6 +42,7 @@ export function auth(): RequestHandler {
 		// already produces the same 500/`internal-error` envelope and (unlike a local catch) logs the real
 		// error via `console.error` first.
 		req.user = await getOrCreateUserForToken(token);
+		req.token = token;
 		next();
 	};
 }
