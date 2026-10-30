@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+<!-- git-cliff-unreleased-start -->
+## 0.1.4 - **not yet released**
+
+### 🚀 Features
+
+- Allow multiple tokens per user ([#115](https://github.com/apify/actor-runtime/pull/115)) ([9e3da43](https://github.com/apify/actor-runtime/commit/9e3da433e89aeb0e8cc97f45161ba784363801fb)) by [@Pijukatel](https://github.com/Pijukatel)
+
+
+<!-- git-cliff-unreleased-end -->
 ## [0.1.3](https://github.com/apify/actor-runtime/releases/tag/v0.1.3) (2026-10-27)
 
 ### 🚀 Features
