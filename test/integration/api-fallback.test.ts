@@ -892,6 +892,33 @@ describe('api-fallback: eligibility, relay, and fail-closed behaviour', () => {
 			}
 		});
 
+		it("relays the token the caller sent, not the user's latest one, when a user has several tokens", async () => {
+			// Both tokens resolve to the same real account, so the second joins the first's user and becomes
+			// its latest token (`services/users.ts`).
+			const identity = await startStubUpstream(() => ({
+				status: 200,
+				body: { data: { id: 'rotated-real-id', username: 'rotated-real-username' } },
+			}));
+			process.env.APIFY_UPSTREAM_API_BASE_URL = identity.baseUrl;
+			try {
+				await warmUpIdentity(server.baseUrl, 'rotated-token-earlier');
+				await warmUpIdentity(server.baseUrl, 'rotated-token-latest');
+			} finally {
+				await identity.close();
+			}
+			expect((await getRegistries().users.get('rotated-real-id'))?.token).toBe('rotated-token-latest');
+
+			const stub = await startStubUpstream(fixedOkResponse('rotated-token-check'));
+			process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;
+			try {
+				await call('get', '/v2/totally-made-up-path', { token: 'rotated-token-earlier' });
+				expect(stub.hitCount()).toBe(1);
+				expect(stub.requests()[0]?.headers.authorization).toBe('Bearer rotated-token-earlier');
+			} finally {
+				await stub.close();
+			}
+		});
+
 		it('a request with no token at all never reaches the stub (rejected by auth() first)', async () => {
 			const stub = await startStubUpstream(fixedOkResponse('no-token-check'));
 			process.env.APIFY_UPSTREAM_API_BASE_URL = stub.baseUrl;

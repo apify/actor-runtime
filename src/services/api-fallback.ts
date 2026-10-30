@@ -147,7 +147,7 @@ export interface LocalError {
  * all, e.g. one outside `/v2` entirely). All HTTP methods are eligible once these hold, writes included.
  *
  * Replay is `<upstreamApiBaseUrl()><req.originalUrl>` (byte-exact, percent-encoding intact), the
- * caller's own presented token (`req.user.token`, unconditionally - see `services/users.ts`) as the only
+ * caller's own presented token (`req.token`, never `req.user.token`, which is the user's latest) as the only
  * `Authorization` header, `content-type`/`accept` forwarded when the inbound request carried them,
  * nothing else. One attempt, redirects followed, a 30s timeout. Only a final `2xx` is relayed: status
  * and body unchanged, headers minus the hop-by-hop exclusion set below. `Set-Cookie` is always relayed
@@ -183,10 +183,10 @@ export async function attemptFallback(req: Request, res: Response, localError: L
 	if (!toggleOn) return false;
 
 	if (!isEligibleUpstreamPath(req.originalUrl)) return false;
-	if (!req.user) return false;
+	if (!req.user || !req.token) return false;
 
 	const method = req.method.toUpperCase();
-	const headers: Record<string, string> = { authorization: `Bearer ${req.user.token}` };
+	const headers: Record<string, string> = { authorization: `Bearer ${req.token}` };
 	const contentType = req.header('content-type');
 	if (contentType) headers['content-type'] = contentType;
 	const accept = req.header('accept');

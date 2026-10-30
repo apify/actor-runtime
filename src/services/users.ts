@@ -2,7 +2,7 @@ import type { UserRecord } from '../storage/entities.js';
 import { getRegistries } from '../storage/registries.js';
 import { KeyedMutex } from '../storage/mutex.js';
 import { isApifyProxyEnabled } from './apify-proxy.js';
-import { fetchRealIdentity, upstreamApiBaseUrl } from './identity-resolution.js';
+import { fetchRealIdentity, type RealIdentity, upstreamApiBaseUrl } from './identity-resolution.js';
 
 /** Serialises "resolve token -> create-if-missing" per token, so two concurrent first-requests for the
  * same brand-new token can never both pass the not-found check and mint two users - the same
@@ -43,13 +43,34 @@ async function fabricateUser(token: string): Promise<UserRecord> {
 		id: `0000000000000000${n}`,
 		username: `local-user-${n}`,
 		token,
+		tokens: [token],
 		createdAt: new Date().toISOString(),
 	};
 }
 
+/** Enough for a run container started with a token that has since rotated hourly for days. */
+const MAX_REMEMBERED_TOKENS = 100;
+
+function tokensOf(user: UserRecord): string[] {
+	return user.tokens ?? [user.token];
+}
+
 async function findUserByToken(token: string): Promise<UserRecord | null> {
 	const all = await getRegistries().users.list();
-	return all.find((user) => user.token === token) ?? null;
+	return all.find((user) => tokensOf(user).includes(token)) ?? null;
+}
+
+/** A token that resolved to an account the runtime already knows (an OAuth login's token rotates every
+ * hour) joins that user: its earlier tokens keep resolving, so a run container or a restart does not
+ * lose the account, and the new one becomes the token handed out from now on. */
+function withToken(existing: UserRecord, token: string, identity: RealIdentity): UserRecord {
+	return {
+		...existing,
+		username: identity.username,
+		token,
+		tokens: [...tokensOf(existing).filter((known) => known !== token), token].slice(-MAX_REMEMBERED_TOKENS),
+		proxyPassword: identity.proxyPassword ?? existing.proxyPassword,
+	};
 }
 
 /**
@@ -90,19 +111,27 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 		const identity = await fetchRealIdentity(token);
 		let user: UserRecord;
 		if (identity) {
-			user = {
-				id: identity.id,
-				username: identity.username,
-				token,
-				createdAt: new Date().toISOString(),
-				proxyPassword: identity.proxyPassword,
-			};
+			const existing = await getRegistries().users.get(identity.id);
+			user = existing
+				? withToken(existing, token, identity)
+				: {
+						id: identity.id,
+						username: identity.username,
+						token,
+						tokens: [token],
+						createdAt: new Date().toISOString(),
+						proxyPassword: identity.proxyPassword,
+					};
 		} else {
 			console.log(`could not resolve token against ${upstreamApiBaseUrl()}, using local identity`);
 			user = await fabricateUser(token);
 		}
 
 		await getRegistries().users.set(user.id, user);
+		// Requests still carrying an earlier token of this user get the updated record too.
+		for (const [knownToken, knownUser] of userByToken) {
+			if (knownUser.id === user.id) userByToken.set(knownToken, user);
+		}
 		userByToken.set(token, user);
 		return user;
 	});
