@@ -32,12 +32,6 @@ references:
       and the Actor-side behaviour in `src/packages/actor/` and `src/packages/actor-server/`. Compare
       the endpoint the pull request implements or changes with its handler here: status codes, error
       types and messages, field names and types, defaults, ordering, pagination and limits.
-    when:
-      - src/api/**
-      - src/storage/**
-      - src/services/**
-      - src/console/**
-      - requirements/**
 
   - repository: apify/apify-worker
     instructions: |
@@ -46,22 +40,9 @@ references:
       Entry points: `src/runtime/` (the container runtimes, Docker and containerd), `src/actor/`
       (the run's preparation and lifecycle), `src/builds/` (how an image is built), `src/consts/` and
       `src/config/`. Compare what the runtime's driver and build do with what the worker does.
-    when:
-      - src/driver/**
-      - src/api/**
-      - src/services/**
-      - docker/**
-      - Dockerfile
-      - requirements/**
 
   - repository: apify/apify-containerd-proxy
     instructions: |
       How the platform routes and proxies traffic to and from a run's container (Go, under
       `internal/`): the container's web server and Standby, request and response handling, headers,
       timeouts and limits. Compare the runtime's container, HTTP and Standby proxies with it.
-    when:
-      - src/api/container-proxy.ts
-      - src/api/http-proxy.ts
-      - src/api/standby-proxy.ts
-      - src/services/**
-      - requirements/**
