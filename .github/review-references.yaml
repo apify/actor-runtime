@@ -2,31 +2,31 @@
 version: 1
 
 instructions: |
-  This repository emulates the Apify platform for local Actor development. Find where the pull request
-  makes the runtime behave differently from the real platform in a way a user would notice: status
-  codes, error types and messages, field names and types, defaults, ordering, pagination, limits, run
-  and build lifecycle, events, and what an Actor sees in its container. A difference documented in
-  `requirements/` (`unsupported.md`, the `501` list in `api.md`, the "Known differences" sections) is
-  not a finding. Back every finding with the reference file and line (create public github link fixed
-  to a commit you have seen).
+    This repository emulates the Apify platform for local Actor development. Find where the pull request
+    makes the runtime behave differently from the real platform in a way a user would notice: status
+    codes, error types and messages, field names and types, defaults, ordering, pagination, limits, run
+    and build lifecycle, events, and what an Actor sees in its container. A difference documented in
+    `requirements/` (`unsupported.md`, the `501` list in `api.md`, the "Known differences" sections) is
+    not a finding. Back every finding with the reference file and line (create public github link fixed
+    to a commit you have seen).
 
 references:
-  - repository: apify/apify-core
-    ref: latest-release
-    paths:
-      - src/api/**
-      - src/packages/**
-      - src/daemons/**
-    instructions: |
-      The real platform: the API, storages, runs, builds, webhooks, schedules. Route handlers live under
-      `src/api/src/routes/<resource>/`, constants and limits in `src/packages/consts/`. Compare the
-      endpoint the pull request implements or changes with its handler here.
-  - repository: apify/apify-worker
-    instructions: |
-      How the platform starts a run's container: environment variables, resources and limits, lifecycle,
-      events and timeouts (`src/runtime/`, `src/actor/`, `src/builds/`). Compare the runtime's driver
-      and build with it.
-  - repository: apify/apify-containerd-proxy
-    instructions: |
-      How the platform routes and proxies traffic to and from a run's container (`internal/`). Compare
-      the runtime's container, HTTP and Standby proxies with it.
+    - repository: apify/apify-core
+      ref: latest-release
+      paths:
+          - src/api/**
+          - src/packages/**
+          - src/daemons/**
+      instructions: |
+          The real platform: the API, storages, runs, builds, webhooks, schedules. Route handlers live under
+          `src/api/src/routes/<resource>/`, constants and limits in `src/packages/consts/`. Compare the
+          endpoint the pull request implements or changes with its handler here.
+    - repository: apify/apify-worker
+      instructions: |
+          How the platform starts a run's container: environment variables, resources and limits, lifecycle,
+          events and timeouts (`src/runtime/`, `src/actor/`, `src/builds/`). Compare the runtime's driver
+          and build with it.
+    - repository: apify/apify-containerd-proxy
+      instructions: |
+          How the platform routes and proxies traffic to and from a run's container (`internal/`). Compare
+          the runtime's container, HTTP and Standby proxies with it.
