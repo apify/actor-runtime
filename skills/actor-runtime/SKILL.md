@@ -318,7 +318,8 @@ Cap a run's spend like a user would: `apify api POST '/v2/actors/<actorId>/runs?
 (there is no `apify call` flag for it). When the charges reach the cap the run is aborted gracefully,
 its status message and log say so, and `chargingStoppedAt` is set on the run. An SDK with budget left
 for the next event stops charging by itself below the cap, so the abort only fires on a charge that
-crosses it - the JavaScript SDK's deliberate one-event overshoot does, the Python SDK never does.
+crosses it: both SDKs deliberately charge one event past an exhausted budget so the platform notices,
+and that charge is the one the runtime aborts on.
 
 Read the outcome off the run object, `apify api GET actor-runs/<runId>`, or the run's console page:
 
