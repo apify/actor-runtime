@@ -28,8 +28,8 @@ jobs:
         # Paths never auto-approved here, on top of the pipeline's defaults. Proposed from the
         # repository's layout when this workflow was added; edit them like any other code.
         with:
-            # The draft of the cross-repository references, to compare with the platform parity
-            # review. Back to `main` once it lands there.
+            # The cross-repository references are drafted on this ai-developer branch; back to
+            # `main` once they land there.
             ai-developer-ref: claude/review-references
             policy: |
                 {
