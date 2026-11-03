@@ -66,13 +66,13 @@ describe('key-value-stores API (via real apify-client)', () => {
 		expect(posted.status).toBe(201);
 		expect((await store.getRecord('OUTPUT'))?.value).toEqual({ via: 'post' });
 
-		// Overwrites like PUT does, keeping the content type it was sent with.
+		// Overwrites like PUT does, keeping the content type it was sent with; an overwrite is a 200.
 		const overwritten = await fetch(`${server.baseUrl}/v2/key-value-stores/${id}/records/OUTPUT`, {
 			method: 'POST',
 			headers: { Authorization: `Bearer ${server.token}`, 'Content-Type': 'text/plain' },
 			body: 'plain',
 		});
-		expect(overwritten.status).toBe(201);
+		expect(overwritten.status).toBe(200);
 		const record = await store.getRecord('OUTPUT');
 		expect(record?.value).toBe('plain');
 		expect(record?.contentType).toMatch(/^text\/plain/);
