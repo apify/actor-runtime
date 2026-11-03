@@ -250,7 +250,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			expect(priced.data.pricingInfos).toHaveLength(1);
 
 			// $0.02 leaves room for exactly one page after the $0.005 start event, so the crawl stops on its
-			// own. The $0.02 final event does not fit, and the SDK charges it as its one overshoot past the
+			// own. The $0.01 final event does not fit, and the SDK charges it as its one overshoot past the
 			// budget, which the runtime aborts on.
 			const started = JSON.parse(
 				apify(
@@ -271,7 +271,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			});
 			expect(run.statusMessage).toMatch(/maximum total charge of \$0\.02 was reached/);
 			expect(typeof run.chargingStoppedAt).toBe('string');
-			expect(run.usageTotalUsd).toBeCloseTo(0.035 + run.usageUsd.ACTOR_COMPUTE_UNITS, 6);
+			expect(run.usageTotalUsd).toBeCloseTo(0.025 + run.usageUsd.ACTOR_COMPUTE_UNITS, 6);
 
 			const log = storedLog(run.id, env);
 			expect(log).toContain('Pay-per-event pricing in effect, max total charge: $0.02.');
