@@ -1,0 +1,67 @@
+# Cross-repository references for the apify-factory review (apify/ai-developer, `review-references`).
+# The runtime emulates the Apify platform, so a pull request here is reviewed against the platform's
+# own code: the reviewer gets these repositories as source trees next to the pull request and
+# compares. Read from the default branch, never from the pull request; gathered only for a pull
+# request by a human member of the organization, on a branch of this repository.
+version: 1
+
+instructions: |
+  This repository emulates the Apify platform for local Actor development. Find where the pull
+  request makes the runtime behave differently from the real platform in a way a user would notice,
+  and report it when the requirements do not already admit it. Only what a user can observe counts:
+  status codes, error types and messages, field names and types, defaults, ordering, pagination,
+  limits, run and build lifecycle, events, and what an Actor sees in its container. Before reporting
+  a difference, search `requirements/` for a statement covering it: `unsupported.md` (behaviour not
+  emulated at all), the `501` list in `api.md`, and the "Known differences" sections such as the one
+  in `storage.md`. A documented difference is not a finding; one that is not documented, or is
+  documented the opposite way, is. Back every finding with the reference file and line.
+
+references:
+  - repository: apify/apify-core
+    ref: latest-release
+    paths:
+      - src/api/**
+      - src/packages/**
+      - src/daemons/**
+    instructions: |
+      The real platform: the API, storages, runs, builds, webhooks, schedules. Entry points: the
+      route handlers under `src/api/src/routes/<resource>/` (actor_runs, actor_builds, actors,
+      actor_tasks, datasets, key_value_stores, request_queues, webhooks, logs, users, store), the
+      request and response shapes next to them, shared constants and limits in
+      `src/packages/consts/`, error types in `src/packages/errors/`, schemas in `src/packages/schemas/`
+      and the Actor-side behaviour in `src/packages/actor/` and `src/packages/actor-server/`. Compare
+      the endpoint the pull request implements or changes with its handler here: status codes, error
+      types and messages, field names and types, defaults, ordering, pagination and limits.
+    when:
+      - src/api/**
+      - src/storage/**
+      - src/services/**
+      - src/console/**
+      - requirements/**
+
+  - repository: apify/apify-worker
+    instructions: |
+      How the platform starts a run's container: the environment variables an Actor sees, the
+      resources and limits it is given, its lifecycle, events, timeouts and how it is stopped.
+      Entry points: `src/runtime/` (the container runtimes, Docker and containerd), `src/actor/`
+      (the run's preparation and lifecycle), `src/builds/` (how an image is built), `src/consts/` and
+      `src/config/`. Compare what the runtime's driver and build do with what the worker does.
+    when:
+      - src/driver/**
+      - src/api/**
+      - src/services/**
+      - docker/**
+      - Dockerfile
+      - requirements/**
+
+  - repository: apify/apify-containerd-proxy
+    instructions: |
+      How the platform routes and proxies traffic to and from a run's container (Go, under
+      `internal/`): the container's web server and Standby, request and response handling, headers,
+      timeouts and limits. Compare the runtime's container, HTTP and Standby proxies with it.
+    when:
+      - src/api/container-proxy.ts
+      - src/api/http-proxy.ts
+      - src/api/standby-proxy.ts
+      - src/services/**
+      - requirements/**

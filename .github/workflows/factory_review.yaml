@@ -1,7 +1,11 @@
 name: apify-factory review (AI review, and auto-approval)
 
-# Calls the review and auto-approval pipeline in apify/ai-developer. Approvals additionally need the
-# repository's `factory_auto_approve` custom property set to true.
+# Calls the review and auto-approval pipeline in apify/ai-developer, through the public reusable
+# workflow in apify/workflows. Approvals additionally need the repository's `factory_auto_approve`
+# custom property set to true.
+#
+# `.github/review-references.yaml` names the platform repositories the reviewer compares a pull
+# request with; it is read from the base branch by the pipeline, nothing here has to pass it.
 on:
     # Taken from the default branch, never from the pull request, so a pull request cannot rewrite
     # its own review pipeline. Pull request code is never checked out or executed.
@@ -19,11 +23,14 @@ permissions:
 
 jobs:
     factory-review:
-        uses: apify/ai-developer/.github/workflows/_factory_review.yaml@main
+        uses: apify/workflows/.github/workflows/factory_review.yaml@main
         secrets: inherit
         # Paths never auto-approved here, on top of the pipeline's defaults. Proposed from the
         # repository's layout when this workflow was added; edit them like any other code.
         with:
+            # The draft of the cross-repository references, to compare with the platform parity
+            # review. Back to `main` once it lands there.
+            ai-developer-ref: claude/ecstatic-euler-ki5zev
             policy: |
                 {
                   "denyGlobs": [
