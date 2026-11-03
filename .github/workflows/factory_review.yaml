@@ -30,7 +30,7 @@ jobs:
         with:
             # The draft of the cross-repository references, to compare with the platform parity
             # review. Back to `main` once it lands there.
-            ai-developer-ref: claude/ecstatic-euler-ki5zev
+            ai-developer-ref: claude/review-references
             policy: |
                 {
                   "denyGlobs": [
