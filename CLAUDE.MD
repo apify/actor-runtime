@@ -34,6 +34,11 @@ does not emulate). When a change alters what the runtime does for
 its users, update `skills/actor-runtime/SKILL.md` in the same commit - it is shipped documentation,
 not a README.
 
+### Additional context
+
+The runtime emulates code that lives in other repositories. The most important references are defined in
+[review references](./.github/review-references.yaml).
+
 ## Contribution conventions
 
 ### Requirements (`requirements/*.md`)
