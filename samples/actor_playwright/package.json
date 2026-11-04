@@ -8,7 +8,7 @@
 	},
 	"dependencies": {
 		"apify": "3.7.2",
-		"@crawlee/playwright": "3.18.1",
+		"@crawlee/playwright": "3.18.2",
 		"playwright": "1.61.1"
 	},
 	"devDependencies": {
