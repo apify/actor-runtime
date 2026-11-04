@@ -85,7 +85,8 @@ async def main() -> None:
         await summary_dataset.push_data({'startUrl': start_url, 'pagesCrawled': len(crawled_urls), 'urls': crawled_urls})
 
         if pricing.is_pay_per_event:
-            # Charged once the work is done, so a run that hit its cap mid-crawl charges nothing here.
+            # Charged once the work is done. A budget that cannot cover it is overshot by this one event,
+            # which is how the platform learns the budget is exhausted and aborts the run.
             charge = await Actor.charge('crawl-finished')
             Actor.log.info(f"Charged {charge.charged_count} 'crawl-finished' event(s).")
 

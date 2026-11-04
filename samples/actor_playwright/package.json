@@ -7,8 +7,8 @@
 		"node": ">=18.0.0"
 	},
 	"dependencies": {
-		"apify": "^3.7.0",
-		"@crawlee/playwright": "^3.15.3",
+		"apify": "3.7.2",
+		"@crawlee/playwright": "3.18.2",
 		"playwright": "1.61.1"
 	},
 	"devDependencies": {

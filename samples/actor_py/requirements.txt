@@ -1,2 +1,2 @@
-apify
-crawlee[parsel]
+apify==4.2.0
+crawlee[parsel]==1.11.0
