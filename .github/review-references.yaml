@@ -18,15 +18,13 @@ references:
           - src/packages/**
           - src/daemons/**
       instructions: |
-          The real platform: the API, storages, runs, builds, webhooks, schedules. Route handlers live under
-          `src/api/src/routes/<resource>/`, constants and limits in `src/packages/consts/`. Compare the
-          endpoint the pull request implements or changes with its handler here.
+          The real platform: the API, storages, runs, builds, webhooks, schedules. Compare the endpoint
+          the pull request implements or changes with its handler here.
     - repository: apify/apify-worker
       instructions: |
           How the platform starts a run's container: environment variables, resources and limits, lifecycle,
-          events and timeouts (`src/runtime/`, `src/actor/`, `src/builds/`). Compare the runtime's driver
-          and build with it.
+          events and timeouts. Compare the runtime's driver and build with it.
     - repository: apify/apify-containerd-proxy
       instructions: |
-          How the platform routes and proxies traffic to and from a run's container (`internal/`). Compare
-          the runtime's container, HTTP and Standby proxies with it.
+          How the platform routes and proxies traffic to and from a run's container. Compare the runtime's
+          container, HTTP and Standby proxies with it.
