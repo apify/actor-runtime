@@ -7,7 +7,7 @@
 		"node": ">=18.0.0"
 	},
 	"dependencies": {
-		"apify": "^3.7.0",
+		"apify": "3.7.2",
 		"ws": "^8.18.0"
 	},
 	"devDependencies": {

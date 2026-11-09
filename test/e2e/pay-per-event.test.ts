@@ -233,7 +233,7 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 	);
 
 	it(
-		'the Python sample charges the same events through the Python SDK, and a capped run of it stays within the cap instead of being aborted',
+		'the Python sample charges the same events through the Python SDK, and a capped run of it overshoots by one event at the end, which the runtime aborts',
 		() => {
 			const env = apifyEnv(isolatedApifyHome);
 
@@ -249,8 +249,9 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			) as ApiEnvelope<{ pricingInfos: unknown[] }>;
 			expect(priced.data.pricingInfos).toHaveLength(1);
 
-			// $0.02 leaves room for exactly one page after the $0.005 start event. Unlike the JavaScript
-			// one, this SDK never charges past the cap, so the runtime has nothing to stop.
+			// $0.02 leaves room for exactly one page after the $0.005 start event, so the crawl stops on its
+			// own. The $0.01 final event does not fit, and the SDK charges it as its one overshoot past the
+			// budget, which the runtime aborts on.
 			const started = JSON.parse(
 				apify(
 					[
@@ -265,16 +266,18 @@ describe('pay-per-event pricing and the run cost estimate via apify-cli (require
 			) as ApiEnvelope<RunObject>;
 			const run = getRun(started.data.id, env);
 			expect({ status: run.status, charged: run.chargedEventCounts }).toEqual({
-				status: 'SUCCEEDED',
-				charged: { [PAGE_EVENT]: 1, [FINISHED_EVENT]: 0, 'apify-actor-start': 1 },
+				status: 'ABORTED',
+				charged: { [PAGE_EVENT]: 1, [FINISHED_EVENT]: 1, 'apify-actor-start': 1 },
 			});
-			expect(run.chargingStoppedAt).toBeUndefined();
-			expect(run.usageTotalUsd).toBeCloseTo(0.015 + run.usageUsd.ACTOR_COMPUTE_UNITS, 6);
+			expect(run.statusMessage).toMatch(/maximum total charge of \$0\.02 was reached/);
+			expect(typeof run.chargingStoppedAt).toBe('string');
+			expect(run.usageTotalUsd).toBeCloseTo(0.025 + run.usageUsd.ACTOR_COMPUTE_UNITS, 6);
 
 			const log = storedLog(run.id, env);
 			expect(log).toContain('Pay-per-event pricing in effect, max total charge: $0.02.');
 			expect(log).toContain("Charged 1 'page-scraped' event(s); limit reached: True.");
-			expect(log).toContain("Charged 0 'crawl-finished' event(s).");
+			expect(log).toContain("Charged 1 'crawl-finished' event(s).");
+			expect(log).toContain('maximum total charge of $0.02 was reached');
 		},
 		10 * 60 * 1000,
 	);
