@@ -26,7 +26,7 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
-		"@apify/actor-memory-expression": "^1.0.1",
+		"@apify/actor-memory-expression": "^1.0.2",
 		"@apify/input_schema": "^3.29.2",
 		"@apify/input_secrets": "^1.2.60",
 		"@apify/json_schemas": "^1.0.1",

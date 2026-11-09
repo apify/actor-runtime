@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@apify/actor-memory-expression':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: ^1.0.2
+        version: 1.0.2
       '@apify/input_schema':
         specifier: ^3.29.2
         version: 3.29.2(ajv@8.20.0)
@@ -108,8 +108,8 @@ importers:
 
 packages:
 
-  '@apify/actor-memory-expression@1.0.1':
-    resolution: {integrity: sha512-8ki7KeFG8p+2KiX3y29ta0giWGtxHOKKTy1pTpJ3P/ZlLhYs+hM7H03e6BiShNGPzb8iR7PfvYiT1SxIXRsmPg==}
+  '@apify/actor-memory-expression@1.0.2':
+    resolution: {integrity: sha512-vYYoCwTj/jDxaQ+pOJJxOWKe4ysKN1Hyk2DlmjrJ3E8FuuDNaESSF1R81mvTKDzXd5TLgl+0WNVDD2Eljc24eQ==}
     engines: {node: '>=22'}
 
   '@apify/consts@2.57.2':
@@ -2359,7 +2359,7 @@ packages:
 
 snapshots:
 
-  '@apify/actor-memory-expression@1.0.1':
+  '@apify/actor-memory-expression@1.0.2':
     dependencies:
       '@apify/consts': 3.0.1
       '@apify/log': 3.0.1
