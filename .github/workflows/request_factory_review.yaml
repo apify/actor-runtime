@@ -12,16 +12,62 @@ permissions: {}
 
 jobs:
     request-review:
+        # When apify-factory is already requested, factory_review.yaml handles the event itself.
         if: >-
             !github.event.pull_request.draft
             && github.event.pull_request.user.login != 'apify-factory'
+            && !contains(github.event.pull_request.requested_reviewers.*.login, 'apify-factory')
         runs-on: ubuntu-latest
         timeout-minutes: 5
+        permissions:
+            pull-requests: write
         steps:
-            # Requested with apify-factory's own token: a request made with GITHUB_TOKEN wouldn't
-            # trigger the `review_requested` run of factory_review.yaml.
             - env:
-                  GH_TOKEN: ${{ secrets.APIFY_FACTORY_GITHUB_TOKEN }}
+                  GH_TOKEN: ${{ github.token }}
                   REPO: ${{ github.repository }}
                   PR_NUMBER: ${{ github.event.pull_request.number }}
               run: gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" -f 'reviewers[]=apify-factory' --silent
+
+    # A request made with GITHUB_TOKEN doesn't trigger factory_review.yaml, so run its review job
+    # here, as for a `review_requested` event. Keep in sync with apify/workflows factory_review.yaml.
+    review:
+        name: AI review
+        needs: request-review
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        permissions:
+            contents: read
+            pull-requests: write
+        concurrency:
+            group: factory-review-${{ github.event.pull_request.number }}
+            cancel-in-progress: false
+        steps:
+            - name: Check out apify/ai-developer
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  repository: apify/ai-developer
+                  ref: claude/review-references
+                  token: ${{ secrets.APIFY_FACTORY_GITHUB_TOKEN }}
+                  path: .ai-developer
+                  persist-credentials: false
+
+            # The action checks the repository under review out itself, at its base branch.
+            - name: Review, and approve when nothing needs a human
+              uses: ./.ai-developer/actions/auto-approve
+              with:
+                  pr-number: ${{ github.event.pull_request.number }}
+                  trigger: review_requested
+                  actor: ${{ github.actor }}
+                  github-token: ${{ github.token }}
+                  factory-github-token: ${{ secrets.APIFY_FACTORY_GITHUB_TOKEN }}
+                  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY_APIFY_FACTORY_REVIEW }}
+                  # Same policy as factory_review.yaml.
+                  policy: |
+                      {
+                        "denyGlobs": [
+                          "skills/**",
+                          "src/services/secrets.ts"
+                        ]
+                      }
+                  callback-token: ${{ secrets.APIFY_FACTORY_CALLBACK_TOKEN }}
+                  factory-public-url: ${{ vars.FACTORY_PUBLIC_URL }}
