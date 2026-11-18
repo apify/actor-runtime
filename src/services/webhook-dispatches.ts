@@ -21,7 +21,7 @@ import type {
 import { generateId } from '../storage/ids.js';
 import { getRegistries } from '../storage/registries.js';
 import { isTerminalJobStatus } from './job-status.js';
-import { getUserById } from './users.js';
+import { getUserById, tokenOf } from './users.js';
 import { deleteWebhook, getWebhookById, listAllWebhooks, updateWebhook } from './webhooks.js';
 
 type Resource = Record<string, unknown>;
@@ -399,7 +399,15 @@ async function deliver(dispatch: WebhookDispatchRecord, call: WebhookDispatchCal
 	// As on the platform, a request to the Apify API without a token is authenticated as the webhook's owner.
 	if (ownApi && !url.searchParams.get('token')) {
 		const user = await getUserById(dispatch.userId);
-		if (user?.token !== undefined) headers.Authorization = `Bearer ${user.token}`;
+		if (user) {
+			try {
+				headers.Authorization = `Bearer ${tokenOf(user)}`;
+			} catch (error) {
+				// Unauthenticated, the call could only fail with a 401 that does not say why.
+				call.errorMessage = (error as Error).message;
+				return 'FAILED';
+			}
+		}
 	}
 
 	try {

@@ -55,7 +55,8 @@
   creates there, readable by the runtime's own user and root alone. A data directory written before this
   is rewritten on start.
     - If the key file is deleted, logins keep working, but a user's schedules and standby Actors cannot
-      start runs until that user makes an API request again; the runtime warns. Secret env vars set before
+      start runs, and their webhooks to the runtime's own API fail, until that user makes an API request
+      again; the runtime warns. Secret env vars set before
       then must be set again.
 - **Docker and Podman are equally supported**, rootful or rootless: everything the system offers works
   the same on either engine. The user picks the engine by mounting its Docker-compatible API socket in

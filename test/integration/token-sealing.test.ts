@@ -1,23 +1,14 @@
-import { chmod, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ApifyClient } from 'apify-client';
 
+import { filesContaining } from './helpers/data-dir.js';
 import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
 import { getRegistries } from '../../src/storage/registries.js';
 import { openKeyValueStore } from '../../src/storage/open.js';
 import { initTokenVault } from '../../src/services/token-vault.js';
 import { resetUsersForTests, sealStoredCredentials, tokenOf } from '../../src/services/users.js';
-
-async function filesContaining(dir: string, needle: string): Promise<string[]> {
-	const hits: string[] = [];
-	for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
-		if (!entry.isFile() || entry.name === '.token-vault.key') continue;
-		const path = join(entry.parentPath, entry.name);
-		if ((await readFile(path, 'utf8')).includes(needle)) hits.push(path);
-	}
-	return hits;
-}
 
 describe('login tokens at rest', () => {
 	let server: TestServerHandle;

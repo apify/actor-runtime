@@ -15,6 +15,8 @@ import {
 	stopWebhookDispatcherForTests,
 } from '../../src/services/webhook-dispatches.js';
 import { generateId } from '../../src/storage/ids.js';
+import { initTokenVault } from '../../src/services/token-vault.js';
+import { resetUsersForTests } from '../../src/services/users.js';
 import { getRegistries } from '../../src/storage/registries.js';
 import type { WebhookDispatchRecord } from '../../src/storage/entities.js';
 
@@ -348,6 +350,40 @@ describe('webhooks', () => {
 		const [dispatch] = await finishedDispatches(webhook.id, 1);
 		expect(dispatch).toMatchObject({ status: 'SUCCEEDED', calls: [{ responseStatus: 201 }] });
 		expect(await server.client.keyValueStores().getOrCreate('from-webhook')).toMatchObject({ userId });
+	});
+
+	it("fails a call to the runtime's own API with a clear error when the owner's token cannot be read", async () => {
+		const webhook = await server.client.webhooks().create({
+			eventTypes: ['ACTOR.BUILD.FAILED'],
+			condition: { actorId },
+			requestUrl: `${server.baseUrl}/v2/key-value-stores?name=from-webhook`,
+		} as never);
+		// A key other than the one the token was sealed with, as after the key file was deleted.
+		expect(initTokenVault(server.dataDir).created).toBe(true);
+		resetUsersForTests();
+
+		// No API request from here on: one carrying the owner's token would restore it.
+		const buildId = generateId();
+		await getRegistries().builds.set(buildId, {
+			id: buildId,
+			userId,
+			actorId,
+			versionNumber: '0.0',
+			buildNumber: '0.0.2',
+			tag: 'latest',
+			status: 'RUNNING',
+			startedAt: new Date().toISOString(),
+		});
+		await transitionJobStatus(getRegistries().builds, buildId, 'FAILED', { finishedAt: new Date().toISOString() });
+		const dispatch = await waitFor(async () =>
+			(await getRegistries().webhookDispatches.list()).find(
+				(candidate) => candidate.webhookId === webhook.id && candidate.status !== 'ACTIVE',
+			),
+		);
+		expect(dispatch.status).toBe('FAILED');
+		expect(dispatch.calls).toEqual([
+			expect.objectContaining({ errorMessage: expect.stringMatching(/cannot be read/) }),
+		]);
 	});
 
 	it('delivers build events', async () => {
