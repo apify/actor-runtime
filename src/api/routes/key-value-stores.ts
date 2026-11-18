@@ -98,9 +98,12 @@ export function mountKeyValueStoreOperations(router: Router, basePath: string, r
 		const store = await openKeyValueStore(record.id);
 		const contentType = req.header('content-type') ?? 'application/octet-stream';
 		const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-		await store.setValue(req.params.recordKey as string, body, { contentType });
+		const recordKey = req.params.recordKey as string;
+		// A record is created once and overwritten afterwards; the status tells the client which.
+		const existed = (await store.getRecord(recordKey)) !== null;
+		await store.setValue(recordKey, body, { contentType });
 		await touchStorage(record.id);
-		res.status(201).end();
+		res.status(existed ? 200 : 201).end();
 	});
 	router.put(`${basePath}/records/:recordKey`, setRecord);
 	// The spec's "Store record (POST)": an alias of the PUT, for clients that cannot send PUT.
