@@ -38,10 +38,12 @@ export interface DatasetSchema {
 export interface UserRecord {
 	id: string;
 	username: string;
-	/** The token seen last, handed to new runs, schedules and standby links. */
-	token: string;
-	/** Every token this user was seen with, oldest first; absent on records written before tokens rotated. */
-	tokens?: string[];
+	/** The token seen last, handed to new runs, schedules and standby links. Never written to disk as is
+	 * (`services/user-codec.ts`). Absent when it was sealed under a runtime key that is gone, until the
+	 * user's next request brings a token again. */
+	token?: string;
+	/** SHA-256 of every token this user was seen with, oldest first - what a login is matched against. */
+	tokenHashes: string[];
 	createdAt: string;
 	/** Real Apify Proxy password for this account, harvested from the upstream `/v2/users/me` response
 	 * at creation time when the token resolved against the real platform (see

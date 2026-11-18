@@ -5,6 +5,7 @@
  */
 import { Registry } from './registry.js';
 import { openKeyValueStore } from './open.js';
+import { userCodec } from '../services/user-codec.js';
 import type {
 	ActorRecord,
 	BuildRecord,
@@ -38,7 +39,7 @@ export async function openRegistries(): Promise<Registries> {
 	if (current) return current;
 	current = {
 		storages: await Registry.open<StorageRecord>('__STORAGES__'),
-		users: await Registry.open<UserRecord>('__USERS__'),
+		users: await Registry.open<UserRecord>('__USERS__', userCodec),
 		actors: await Registry.open<ActorRecord>('__ACTORS__'),
 		runs: await Registry.open<RunRecord>('__RUNS__'),
 		builds: await Registry.open<BuildRecord>('__BUILDS__'),

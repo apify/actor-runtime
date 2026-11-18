@@ -39,6 +39,10 @@ export const CONSOLE_BASE_URL = `http://localhost:${CONSOLE_PORT}`;
 
 export const DEFAULT_DATA_DIR = process.env.ACTOR_RUNTIME_DATA_DIR ?? '/data';
 
+/** Holds the key login tokens are sealed with (`services/token-vault.ts`). Never inside the data
+ * directory: in the image it is a Docker volume of its own, out of reach of a scan of the host's files. */
+export const KEY_DIR = process.env.ACTOR_RUNTIME_KEY_DIR ?? '/var/lib/actor-runtime';
+
 /** Where the Python debug-mode payload lives inside the runtime's own image. Read fresh on every call
  * (not cached) so tests can point `ACTOR_RUNTIME_DEBUGPY_PAYLOAD_DIR` at a fixture directory. */
 function debugpyPayloadDir(): string {

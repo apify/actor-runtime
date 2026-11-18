@@ -1,0 +1,94 @@
+import { mkdtempSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ApifyClient } from 'apify-client';
+
+import { startTestServer, type TestServerHandle } from './helpers/test-server.js';
+import { getRegistries } from '../../src/storage/registries.js';
+import { openKeyValueStore } from '../../src/storage/open.js';
+import { initTokenVault } from '../../src/services/token-vault.js';
+import { resetUsersForTests, sealStoredUsers, tokenOf } from '../../src/services/users.js';
+
+async function filesContaining(dir: string, needle: string): Promise<string[]> {
+	const hits: string[] = [];
+	for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+		if (!entry.isFile()) continue;
+		const path = join(entry.parentPath, entry.name);
+		if ((await readFile(path, 'utf8')).includes(needle)) hits.push(path);
+	}
+	return hits;
+}
+
+const newKeyDir = () => mkdtempSync(join(tmpdir(), 'actor-runtime-test-key-'));
+
+describe('login tokens at rest', () => {
+	let server: TestServerHandle;
+
+	beforeEach(async () => {
+		initTokenVault(newKeyDir());
+		server = await startTestServer(undefined, 'apify_api_never-on-disk-0123456789');
+	});
+
+	afterEach(async () => {
+		await server.close();
+	});
+
+	it('a token, current or earlier, and a proxy password never appear in the data directory', async () => {
+		const me = await server.client.user('me').get();
+		await getRegistries().users.update(me.id, (user) => user && { ...user, proxyPassword: 'proxy-secret-42' });
+		await server.client.actors().create({ name: 'some-actor' });
+
+		expect(await filesContaining(server.dataDir, server.token)).toEqual([]);
+		expect(await filesContaining(server.dataDir, 'proxy-secret-42')).toEqual([]);
+		const stored = await getRegistries().users.get(me.id);
+		expect(stored?.token).toBe(server.token);
+		expect(stored?.proxyPassword).toBe('proxy-secret-42');
+	});
+
+	it('a user stored with a plain-text token before sealing existed is rewritten sealed and still logs in', async () => {
+		const legacy = {
+			id: 'legacy-user-id',
+			username: 'legacy-user',
+			createdAt: new Date().toISOString(),
+			token: 'legacy-plain-token',
+			tokens: ['legacy-older-token', 'legacy-plain-token'],
+			proxyPassword: 'legacy-proxy',
+		};
+		await (await openKeyValueStore('__USERS__')).setValue(legacy.id, legacy);
+
+		await sealStoredUsers();
+
+		for (const secret of ['legacy-plain-token', 'legacy-older-token', 'legacy-proxy']) {
+			expect(await filesContaining(server.dataDir, secret)).toEqual([]);
+		}
+		for (const token of ['legacy-plain-token', 'legacy-older-token']) {
+			const client = new ApifyClient({ baseUrl: server.baseUrl, token, maxRetries: 0 });
+			expect((await client.user('me').get()).id).toBe(legacy.id);
+		}
+	});
+
+	it('with the key gone, logins still resolve and the next request restores the token', async () => {
+		const me = await server.client.user('me').get();
+
+		resetUsersForTests();
+		expect(initTokenVault(newKeyDir()).created).toBe(true);
+		expect(await sealStoredUsers()).toEqual({ unreadable: 1 });
+		const orphaned = await getRegistries().users.get(me.id);
+		expect(orphaned?.token).toBeUndefined();
+		expect(() => tokenOf(orphaned!)).toThrow(/cannot be read/);
+
+		expect((await server.client.user('me').get()).id).toBe(me.id);
+		expect((await getRegistries().users.get(me.id))?.token).toBe(server.token);
+	});
+
+	it('a sealed value copied onto another user does not open there', async () => {
+		const me = await server.client.user('me').get();
+		const store = await openKeyValueStore('__USERS__');
+		const raw = (await store.getValue(me.id)) as Record<string, unknown>;
+		await store.setValue('someone-else', { ...raw, id: 'someone-else', tokenHashes: [] });
+
+		expect((await getRegistries().users.get('someone-else'))?.token).toBeUndefined();
+	});
+});

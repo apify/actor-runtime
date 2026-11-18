@@ -234,7 +234,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Express {
 		const pool = standbyPoolSnapshot(service);
 		return (
 			'<h2>Actor Standby</h2>' +
-			(owner
+			(owner?.token !== undefined
 				? "<p>Open or copy the standby URL with the owner's token already in it:</p>" +
 					standbyLink(url, owner.token)
 				: '') +

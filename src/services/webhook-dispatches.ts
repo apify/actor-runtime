@@ -399,7 +399,7 @@ async function deliver(dispatch: WebhookDispatchRecord, call: WebhookDispatchCal
 	// As on the platform, a request to the Apify API without a token is authenticated as the webhook's owner.
 	if (ownApi && !url.searchParams.get('token')) {
 		const user = await getUserById(dispatch.userId);
-		if (user) headers.Authorization = `Bearer ${user.token}`;
+		if (user?.token !== undefined) headers.Authorization = `Bearer ${user.token}`;
 	}
 
 	try {

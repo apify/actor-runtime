@@ -26,7 +26,7 @@ import { listOwnedRuns, startRun } from './runs.js';
 import { MAX_LOG_MESSAGES, nextRunAtOf } from './schedules.js';
 import { standbyUrl } from './standby-config.js';
 import { getOwnedTask } from './tasks.js';
-import { getUserById, resolveProxyPassword } from './users.js';
+import { getUserById, resolveProxyPassword, tokenOf } from './users.js';
 
 /** `setTimeout` overflows past this; a longer wait is re-armed when it elapses. */
 const MAX_TIMER_DELAY_MILLIS = 2 ** 31 - 1;
@@ -231,7 +231,7 @@ async function startActionRun(
 		standbyUrl: standbyUrl(actor, user.username),
 		proxyPassword: resolveProxyPassword(user),
 		apiBaseUrl: CONTAINER_API_BASE_URL,
-		token: user.token,
+		token: tokenOf(user),
 	});
 }
 
