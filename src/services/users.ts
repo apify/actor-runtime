@@ -107,7 +107,7 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 			return stored;
 		}
 		if (stored) {
-			// Its credentials were sealed under a runtime key that is gone: this token is the first chance
+			// Its credentials were sealed under a key file that was deleted: this token is the first chance
 			// to recover them. The probe brings back the proxy password too, for a real account.
 			const user = withToken(stored, token, await fetchRealIdentity(token));
 			await getRegistries().users.set(user.id, user);
@@ -147,7 +147,7 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 /**
  * Rewrites every stored user with its credentials sealed under the current key, so a data directory from
  * before tokens were sealed holds none in plain text after the first start. Returns how many users have
- * credentials that no longer open (their key is gone) - their next request with a token recovers them.
+ * credentials that no longer open (their key file was deleted) - their next request with a token recovers them.
  */
 export async function sealStoredUsers(): Promise<{ unreadable: number }> {
 	const { users } = getRegistries();
@@ -163,7 +163,7 @@ export async function sealStoredUsers(): Promise<{ unreadable: number }> {
 export function tokenOf(user: UserRecord): string {
 	if (user.token !== undefined) return user.token;
 	throw new Error(
-		`The token of user ${user.username} cannot be read: the runtime's key it was sealed with is gone. ` +
+		`The token of user ${user.username} cannot be read: the runtime's key file it was sealed with was deleted. ` +
 			'Any API request with that token restores it.',
 	);
 }

@@ -208,7 +208,6 @@ mkdir -p data
 podman run --rm -p 3333:3333 -p 3000:3000 \
   -v "$XDG_RUNTIME_DIR/podman/podman.sock:/var/run/docker.sock" \
   -v "$(pwd)/data:/data" \
-  -v actor-runtime-keys:/var/lib/actor-runtime \
   docker.io/apify/actor-runtime
 ```
 
@@ -233,8 +232,6 @@ podman run --rm -p 3333:3333 -p 3000:3000 \
 - Under rootless Podman 3.x, add `--network slirp4netns:allow_host_loopback=true` to the `podman run`
   above (`apify runtime start` does) so the runtime reaches the web servers of runs; without it only
   standby runs' servers are reachable.
-- Rootless Podman keeps the `actor-runtime-keys` volume under your home directory, where a process
-  running as you can read it. Rootful Podman and Docker keep it out of reach of your user (`system.md`).
 - Podman does not create a missing bind-mount directory, hence `mkdir -p data`. `apify runtime start`
   creates its data directory itself.
 - Short image names in an Actor's `FROM` line (`apify/actor-node:20`) resolve to Docker Hub, as on the

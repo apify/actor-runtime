@@ -38,8 +38,7 @@
   (`-v /var/run/docker.sock:/var/run/docker.sock`) so the runtime can build and run Actor containers,
   and mount a persistent data directory (`-v <host-dir>:/data`, e.g. `-v "$(pwd)/data:/data"`) so
   storages survive a restart and are easy to inspect from the host; the directory must exist before the
-  runtime starts. Mount a named volume at `/var/lib/actor-runtime` (`-v actor-runtime-keys:/var/lib/actor-runtime`)
-  to keep the runtime's key across restarts. Publish both ports
+  runtime starts. Publish both ports
   (`-p 3333:3333 -p 3000:3000`). The canonical start command is:
 
     ```bash
@@ -48,15 +47,14 @@
     docker run --rm -p 3333:3333 -p 3000:3000 \
       -v /var/run/docker.sock:/var/run/docker.sock \
       -v "$(pwd)/data:/data" \
-      -v actor-runtime-keys:/var/lib/actor-runtime \
       actor-runtime
     ```
 
-- **Login tokens are never stored in plain text.** Neither tokens nor proxy passwords appear anywhere
-  in the data directory: they can be read back only with a key the runtime keeps outside it, in the
-  `/var/lib/actor-runtime` volume. A data directory written before this is rewritten on start.
-    - Without that volume the key is new on every start: logins keep working, but a user's schedules and
-      standby Actors cannot start runs until that user makes an API request again; the runtime warns.
+- **Login tokens are never stored in plain text.** Tokens and proxy passwords in the data directory can
+  be read only with a key file the runtime creates there, readable by the runtime's own user and root
+  alone. A data directory written before this is rewritten on start.
+    - If the key file is deleted, logins keep working, but a user's schedules and standby Actors cannot
+      start runs until that user makes an API request again; the runtime warns.
 - **Docker and Podman are equally supported**, rootful or rootless: everything the system offers works
   the same on either engine. The user picks the engine by mounting its Docker-compatible API socket in
   place of the Docker one (e.g. `-v /run/podman/podman.sock:/var/run/docker.sock`). One exception:

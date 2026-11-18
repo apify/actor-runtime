@@ -22,7 +22,6 @@ mkdir -p data
 docker run --rm -p 3333:3333 -p 3000:3000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd)/data:/data" \
-  -v actor-runtime-keys:/var/lib/actor-runtime \
   actor-runtime
 ```
 

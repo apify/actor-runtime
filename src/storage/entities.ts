@@ -39,7 +39,7 @@ export interface UserRecord {
 	id: string;
 	username: string;
 	/** The token seen last, handed to new runs, schedules and standby links. Never written to disk as is
-	 * (`services/user-codec.ts`). Absent when it was sealed under a runtime key that is gone, until the
+	 * (`services/user-codec.ts`). Absent when it was sealed under a key file that was deleted, until the
 	 * user's next request brings a token again. */
 	token?: string;
 	/** SHA-256 of every token this user was seen with, oldest first - what a login is matched against. */

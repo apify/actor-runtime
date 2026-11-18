@@ -3,13 +3,13 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Keeps login tokens out of the data directory in plain text (`storage.md`): a token is stored only as
- * its SHA-256 (enough to recognise a login) and sealed with AES-256-GCM under a key that lives in its own
- * directory, never inside the data directory. In the image that directory is a Docker volume, so a scan of
- * the host's files finds neither the tokens nor the key that opens them.
+ * Keeps login tokens out of the data directory in plain text (`system.md`): a token is stored only as its
+ * SHA-256 (enough to recognise a login) and sealed with AES-256-GCM under a key file the runtime creates in
+ * the data directory, readable only by the runtime's own user. Root and that user can still open the
+ * tokens; any other user on the host, reading the rest of the data directory, cannot.
  */
 
-const KEY_FILE = 'token-vault.key';
+const KEY_FILE = '.token-vault.key';
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
@@ -17,14 +17,16 @@ const SEALED_PREFIX = 'v1:';
 
 let key: Buffer | undefined;
 
-/** Loads the key from `keyDir`, creating it on first start. `created` with users already stored means the
- * previous key is gone (e.g. the key volume was not mounted), so their sealed tokens no longer open. */
-export function initTokenVault(keyDir: string): { created: boolean } {
-	mkdirSync(keyDir, { recursive: true, mode: 0o700 });
-	const path = join(keyDir, KEY_FILE);
+/** Loads the key from `dataDir`, creating it on first start. `created` with users already stored means the
+ * previous key file was deleted, so their sealed tokens no longer open. */
+export function initTokenVault(dataDir: string): { created: boolean } {
+	mkdirSync(dataDir, { recursive: true });
+	const path = join(dataDir, KEY_FILE);
 	try {
 		const existing = readFileSync(path);
 		if (existing.length !== KEY_BYTES) throw new Error(`${path} is not a ${KEY_BYTES}-byte key`);
+		// Re-tightened on every start: a copy or restore of the data directory may have loosened it.
+		chmodSync(path, 0o600);
 		key = existing;
 		return { created: false };
 	} catch (error) {
@@ -33,6 +35,7 @@ export function initTokenVault(keyDir: string): { created: boolean } {
 	const fresh = randomBytes(KEY_BYTES);
 	// `wx`: never overwrite a key another process wrote in the meantime - that would orphan its tokens.
 	writeFileSync(path, fresh, { mode: 0o600, flag: 'wx' });
+	// `mode` above is narrowed by the umask only, never widened; this pins it whatever the umask.
 	chmodSync(path, 0o600);
 	key = fresh;
 	return { created: true };

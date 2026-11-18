@@ -5,7 +5,6 @@
 *.db-wal
 *.db-shm
 /data/
-/data-key/
 ca-bundle.crt
 
 # Durable run-pipeline data directory - never a project artifact.
