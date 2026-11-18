@@ -54,9 +54,12 @@ export function auth(): RequestHandler {
  * practice (surfaces as a 500 through `h`'s error middleware, not a user-facing error) - a route that
  * calls this without `auth()` having run first is a wiring bug, not a request the caller can cause.
  */
-export function requireUser(req: Request): UserRecord {
-	if (!req.user) {
+export function requireUser(req: Request): UserRecord & { token: string } {
+	const { user } = req;
+	if (!user) {
 		throw new Error('requireUser() called outside the authenticated router - auth() did not run first');
 	}
-	return req.user;
+	// `getOrCreateUserForToken` always hands back a user holding a token: the request just brought one.
+	if (user.token === undefined) throw new Error(`User ${user.id} has no token after authenticating`);
+	return { ...user, token: user.token };
 }

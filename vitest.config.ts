@@ -6,5 +6,6 @@ export default defineConfig({
 		testTimeout: 30_000,
 		hookTimeout: 30_000,
 		globals: false,
+		setupFiles: ['test/setup-token-vault.ts'],
 	},
 });

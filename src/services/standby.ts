@@ -17,7 +17,7 @@ import { publishAborting, publishPersistState } from './events-channel.js';
 import { isTerminalJobStatus } from './job-status.js';
 import { resolveTaggedBuild } from './builds.js';
 import { resolveBuildInput } from './input-schema.js';
-import { resolveProxyPassword } from './users.js';
+import { resolveProxyPassword, tokenOf } from './users.js';
 import { containerServerPortFor, startRun } from './runs.js';
 import { findVersion } from './actors.js';
 import { markStandbyRunFinishing } from './standby-finish.js';
@@ -167,7 +167,7 @@ async function startStandbyRun(
 		standbyUrl: standbyUrl(task ?? actor, user.username),
 		proxyPassword: resolveProxyPassword(user),
 		apiBaseUrl: CONTAINER_API_BASE_URL,
-		token: user.token,
+		token: tokenOf(user),
 	});
 }
 

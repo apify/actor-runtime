@@ -17,6 +17,7 @@ import { ApifyClient } from 'apify-client';
 
 import { capturingDriver, startTestServer, type TestServerHandle } from './helpers/test-server.js';
 import { getRegistries } from '../../src/storage/registries.js';
+import { hashToken } from '../../src/services/token-vault.js';
 
 interface StubUpstream {
 	baseUrl: string;
@@ -197,7 +198,7 @@ describe('identity resolution against the real platform (stubbed upstream)', () 
 			const all = (await getRegistries().users.list()).filter((user) => user.id === 'rotating-real-id');
 			expect(all).toHaveLength(1);
 			expect(all[0]?.token).toBe('rotating-token-2');
-			expect(all[0]?.tokens).toEqual(['rotating-token-1', 'rotating-token-2']);
+			expect(all[0]?.tokenHashes).toEqual(['rotating-token-1', 'rotating-token-2'].map(hashToken));
 
 			const { resetUsersForTests } = await import('../../src/services/users.js');
 			resetUsersForTests();

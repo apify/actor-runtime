@@ -107,17 +107,28 @@ export function inputSecretsEnv(secretKeys: ActorSecretKeys): Record<string, str
 export function decryptedEnvVars(actor: ActorRecord, envVars: ActorEnvVarRecord[] | undefined): ActorEnvVarRecord[] {
 	const sealed = (envVars ?? []).filter((envVar) => envVar.isSecret && envVar.encryptedAes256Password);
 	if (sealed.length === 0) return envVars ?? [];
-	if (!actor.secretKeys) throw new Error(`Actor ${actor.id} has an encrypted secret but no key pair`);
+	const cannotDecrypt = (name: string) =>
+		new Error(
+			`Secret env var "${name}" of Actor ${actor.id} cannot be decrypted: the runtime's key file was deleted. ` +
+				'Set it again.',
+		);
+	// No key pair: the one it was sealed with no longer opens (`actor-codec.ts`).
+	if (!actor.secretKeys) throw cannotDecrypt(sealed[0]!.name);
 	const privateKey = createPrivateKey({ key: actor.secretKeys.privateKey, passphrase: actor.secretKeys.passphrase });
 	return (envVars ?? []).map((envVar) => {
 		if (!sealed.includes(envVar)) return envVar;
-		const opened = JSON.parse(
-			privateDecrypt({
+		let plain: string;
+		try {
+			plain = privateDecrypt({
 				privateKey,
 				encryptedPassword: envVar.encryptedAes256Password!,
 				encryptedValue: envVar.value,
-			}),
-		) as { actId?: string; name?: string; value?: string };
+			});
+		} catch {
+			// Sealed under a key pair replaced since (`ensureSecretKeys`), after the old one stopped opening.
+			throw cannotDecrypt(envVar.name);
+		}
+		const opened = JSON.parse(plain) as { actId?: string; name?: string; value?: string };
 		if (opened.actId !== actor.id || opened.name !== envVar.name || typeof opened.value !== 'string') {
 			throw new Error(`Secret env var "${envVar.name}" was not encrypted for Actor ${actor.id}`);
 		}

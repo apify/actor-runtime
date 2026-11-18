@@ -13,17 +13,38 @@ import { KeyedMutex } from './mutex.js';
 /** Called after a write lands, inside the same per-id lock, with the record before and after it. */
 export type RegistryChangeListener<T> = (previous: T | null, next: T | null) => void;
 
+/** Translates between a record and what is written to disk, for a registry whose records must not be
+ * stored as they are held in memory (`__USERS__`' tokens, `services/user-codec.ts`). */
+export interface RecordCodec<T> {
+	encode(value: T): unknown;
+	decode(stored: unknown): T;
+	/** A record still in an older on-disk form, which `rewriteOutdated` brings up to date. */
+	isOutdated?(stored: unknown): boolean;
+}
+
+const identityCodec: RecordCodec<never> = { encode: (value) => value, decode: (stored) => stored as never };
+
 export class Registry<T> {
 	private readonly listeners = new Set<RegistryChangeListener<T>>();
 
 	private constructor(
 		private readonly store: KeyValueStore,
 		private readonly mutex: KeyedMutex,
+		private readonly codec: RecordCodec<T>,
 	) {}
 
-	static async open<T>(name: string): Promise<Registry<T>> {
+	static async open<T>(name: string, codec: RecordCodec<T> = identityCodec): Promise<Registry<T>> {
 		const store = await openKeyValueStore(name);
-		return new Registry<T>(store, new KeyedMutex());
+		return new Registry<T>(store, new KeyedMutex(), codec);
+	}
+
+	private async load(id: string): Promise<T | null> {
+		const stored = await this.store.getValue(id);
+		return stored === null || stored === undefined ? null : this.codec.decode(stored);
+	}
+
+	private save(id: string, value: T | null): Promise<void> {
+		return this.store.setValue(id, value === null ? null : this.codec.encode(value));
 	}
 
 	/** Serialised with writes to the same id: a read racing a delete can otherwise fail in the store. */
@@ -32,13 +53,13 @@ export class Registry<T> {
 	}
 
 	private read(id: string): Promise<T | null> {
-		return this.mutex.run(id, () => this.store.getValue<T>(id));
+		return this.mutex.run(id, () => this.load(id));
 	}
 
 	async set(id: string, value: T): Promise<void> {
 		await this.mutex.run(id, async () => {
-			const previous = this.listeners.size > 0 ? await this.store.getValue<T>(id) : null;
-			await this.store.setValue(id, value);
+			const previous = this.listeners.size > 0 ? await this.load(id) : null;
+			await this.save(id, value);
 			this.notify(previous, value);
 		});
 	}
@@ -46,9 +67,9 @@ export class Registry<T> {
 	/** Read-modify-write, serialised per id. Returning `null` from `mutator` deletes the record. */
 	async update(id: string, mutator: (current: T | null) => T | null): Promise<T | null> {
 		return this.mutex.run(id, async () => {
-			const current = await this.store.getValue<T>(id);
+			const current = await this.load(id);
 			const next = mutator(current);
-			await this.store.setValue(id, next);
+			await this.save(id, next);
 			this.notify(current, next);
 			return next;
 		});
@@ -71,6 +92,25 @@ export class Registry<T> {
 			} catch (error) {
 				console.error('Registry change listener failed:', error);
 			}
+		}
+	}
+
+	/** Rewrites every record the codec reports outdated. Only those: a record that is current but no longer
+	 * opens (its key file was deleted) is left as it is, in case that file comes back. */
+	async rewriteOutdated(): Promise<void> {
+		const { isOutdated } = this.codec;
+		if (!isOutdated) return;
+		const ids: string[] = [];
+		await this.store.forEachKey(async (id) => {
+			ids.push(id);
+		});
+		for (const id of ids) {
+			await this.mutex.run(id, async () => {
+				const stored = await this.store.getValue(id);
+				if (stored !== null && stored !== undefined && isOutdated(stored)) {
+					await this.store.setValue(id, this.codec.encode(this.codec.decode(stored)));
+				}
+			});
 		}
 	}
 

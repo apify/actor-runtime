@@ -38,8 +38,7 @@
     - `key` is the `userId`
     - `value` is the metadata of the user
         - name
-        - token
-        - proxyPassword (optional)
+        - token, every earlier token, and proxyPassword (optional) - never in plain text (`system.md`)
 - The system stores Actors in dedicated key-value store called `__ACTORS__`:
     - `key` is the id of the Actor `actorId`
     - `value` is the metadata of the Actor

@@ -3,6 +3,7 @@ import { getRegistries } from '../storage/registries.js';
 import { KeyedMutex } from '../storage/mutex.js';
 import { isApifyProxyEnabled } from './apify-proxy.js';
 import { fetchRealIdentity, type RealIdentity, upstreamApiBaseUrl } from './identity-resolution.js';
+import { hashToken } from './token-vault.js';
 
 /** Serialises "resolve token -> create-if-missing" per token, so two concurrent first-requests for the
  * same brand-new token can never both pass the not-found check and mint two users - the same
@@ -43,7 +44,7 @@ async function fabricateUser(token: string): Promise<UserRecord> {
 		id: `0000000000000000${n}`,
 		username: `local-user-${n}`,
 		token,
-		tokens: [token],
+		tokenHashes: [hashToken(token)],
 		createdAt: new Date().toISOString(),
 	};
 }
@@ -51,25 +52,23 @@ async function fabricateUser(token: string): Promise<UserRecord> {
 /** Enough for a run container started with a token that has since rotated hourly for days. */
 const MAX_REMEMBERED_TOKENS = 100;
 
-function tokensOf(user: UserRecord): string[] {
-	return user.tokens ?? [user.token];
-}
-
 async function findUserByToken(token: string): Promise<UserRecord | null> {
+	const hash = hashToken(token);
 	const all = await getRegistries().users.list();
-	return all.find((user) => tokensOf(user).includes(token)) ?? null;
+	return all.find((user) => user.tokenHashes.includes(hash)) ?? null;
 }
 
 /** A token that resolved to an account the runtime already knows (an OAuth login's token rotates every
  * hour) joins that user: its earlier tokens keep resolving, so a run container or a restart does not
  * lose the account, and the new one becomes the token handed out from now on. */
-function withToken(existing: UserRecord, token: string, identity: RealIdentity): UserRecord {
+function withToken(existing: UserRecord, token: string, identity: RealIdentity | null): UserRecord {
+	const hash = hashToken(token);
 	return {
 		...existing,
-		username: identity.username,
+		username: identity?.username ?? existing.username,
 		token,
-		tokens: [...tokensOf(existing).filter((known) => known !== token), token].slice(-MAX_REMEMBERED_TOKENS),
-		proxyPassword: identity.proxyPassword ?? existing.proxyPassword,
+		tokenHashes: [...existing.tokenHashes.filter((known) => known !== hash), hash].slice(-MAX_REMEMBERED_TOKENS),
+		proxyPassword: identity?.proxyPassword ?? existing.proxyPassword,
 	};
 }
 
@@ -103,9 +102,17 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 		if (resolved) return resolved;
 
 		const stored = await findUserByToken(token);
-		if (stored) {
+		if (stored?.token !== undefined) {
 			userByToken.set(token, stored);
 			return stored;
+		}
+		if (stored) {
+			// Its credentials were sealed under a key file that was deleted: this token is the first chance
+			// to recover them. The probe brings back the proxy password too, for a real account.
+			const user = withToken(stored, token, await fetchRealIdentity(token));
+			await getRegistries().users.set(user.id, user);
+			userByToken.set(token, user);
+			return user;
 		}
 
 		const identity = await fetchRealIdentity(token);
@@ -118,7 +125,7 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 						id: identity.id,
 						username: identity.username,
 						token,
-						tokens: [token],
+						tokenHashes: [hashToken(token)],
 						createdAt: new Date().toISOString(),
 						proxyPassword: identity.proxyPassword,
 					};
@@ -135,6 +142,28 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 		userByToken.set(token, user);
 		return user;
 	});
+}
+
+/**
+ * Rewrites the stored records that still hold credentials in plain text, users' tokens and proxy passwords
+ * and Actors' secret passphrases, so none are left after the first start. Returns how many users have
+ * credentials that no longer open (their key file was deleted) - their next request with a token recovers them.
+ */
+export async function sealStoredCredentials(): Promise<{ unreadableUsers: number }> {
+	const { users, actors } = getRegistries();
+	await users.rewriteOutdated();
+	await actors.rewriteOutdated();
+	const unreadableUsers = (await users.list()).filter((user) => user.token === undefined).length;
+	return { unreadableUsers };
+}
+
+/** The user's token for work the runtime starts on its own (schedules, standby). */
+export function tokenOf(user: UserRecord): string {
+	if (user.token !== undefined) return user.token;
+	throw new Error(
+		`The token of user ${user.username} cannot be read: the runtime's key file it was sealed with was deleted. ` +
+			'Any API request with that token restores it.',
+	);
 }
 
 export async function getUserById(userId: string): Promise<UserRecord | null> {
