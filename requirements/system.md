@@ -50,11 +50,13 @@
       actor-runtime
     ```
 
-- **Login tokens are never stored in plain text.** Tokens and proxy passwords in the data directory can
-  be read only with a key file the runtime creates there, readable by the runtime's own user and root
-  alone. A data directory written before this is rewritten on start.
+- **Credentials are never stored in plain text.** Tokens, proxy passwords and the keys to Actors'
+  secret env vars and secret input in the data directory can be read only with a key file the runtime
+  creates there, readable by the runtime's own user and root alone. A data directory written before this
+  is rewritten on start.
     - If the key file is deleted, logins keep working, but a user's schedules and standby Actors cannot
-      start runs until that user makes an API request again; the runtime warns.
+      start runs until that user makes an API request again; the runtime warns. Secret env vars set before
+      then must be set again.
 - **Docker and Podman are equally supported**, rootful or rootless: everything the system offers works
   the same on either engine. The user picks the engine by mounting its Docker-compatible API socket in
   place of the Docker one (e.g. `-v /run/podman/podman.sock:/var/run/docker.sock`). One exception:

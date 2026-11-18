@@ -145,18 +145,16 @@ export async function getOrCreateUserForToken(token: string): Promise<UserRecord
 }
 
 /**
- * Rewrites every stored user with its credentials sealed under the current key, so a data directory from
- * before tokens were sealed holds none in plain text after the first start. Returns how many users have
+ * Rewrites the stored records that still hold credentials in plain text, users' tokens and proxy passwords
+ * and Actors' secret passphrases, so none are left after the first start. Returns how many users have
  * credentials that no longer open (their key file was deleted) - their next request with a token recovers them.
  */
-export async function sealStoredUsers(): Promise<{ unreadable: number }> {
-	const { users } = getRegistries();
-	let unreadable = 0;
-	for (const user of await users.list()) {
-		if (user.token === undefined) unreadable++;
-		await users.update(user.id, (current) => current);
-	}
-	return { unreadable };
+export async function sealStoredCredentials(): Promise<{ unreadableUsers: number }> {
+	const { users, actors } = getRegistries();
+	await users.rewriteOutdated();
+	await actors.rewriteOutdated();
+	const unreadableUsers = (await users.list()).filter((user) => user.token === undefined).length;
+	return { unreadableUsers };
 }
 
 /** The user's token for work the runtime starts on its own (schedules, standby). */

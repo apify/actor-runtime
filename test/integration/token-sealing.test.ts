@@ -7,7 +7,7 @@ import { startTestServer, type TestServerHandle } from './helpers/test-server.js
 import { getRegistries } from '../../src/storage/registries.js';
 import { openKeyValueStore } from '../../src/storage/open.js';
 import { initTokenVault } from '../../src/services/token-vault.js';
-import { resetUsersForTests, sealStoredUsers, tokenOf } from '../../src/services/users.js';
+import { resetUsersForTests, sealStoredCredentials, tokenOf } from '../../src/services/users.js';
 
 async function filesContaining(dir: string, needle: string): Promise<string[]> {
 	const hits: string[] = [];
@@ -63,7 +63,7 @@ describe('login tokens at rest', () => {
 		};
 		await (await openKeyValueStore('__USERS__')).setValue(legacy.id, legacy);
 
-		await sealStoredUsers();
+		await sealStoredCredentials();
 
 		for (const secret of ['legacy-plain-token', 'legacy-older-token', 'legacy-proxy']) {
 			expect(await filesContaining(server.dataDir, secret)).toEqual([]);
@@ -80,7 +80,7 @@ describe('login tokens at rest', () => {
 		resetUsersForTests();
 		await rm(join(server.dataDir, '.token-vault.key'));
 		expect(initTokenVault(server.dataDir).created).toBe(true);
-		expect(await sealStoredUsers()).toEqual({ unreadable: 1 });
+		expect(await sealStoredCredentials()).toEqual({ unreadableUsers: 1 });
 		const orphaned = await getRegistries().users.get(me.id);
 		expect(orphaned?.token).toBeUndefined();
 		expect(() => tokenOf(orphaned!)).toThrow(/cannot be read/);

@@ -83,7 +83,7 @@ export interface ActorEnvVarRecord {
 }
 
 /** PEM-encoded, the private key protected by `passphrase`; created with the Actor and never returned by
- * the API. */
+ * the API. `passphrase` is never written to disk as is (`services/actor-codec.ts`). */
 export interface ActorSecretKeys {
 	publicKey: string;
 	privateKey: string;

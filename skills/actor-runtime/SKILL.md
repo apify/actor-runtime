@@ -35,10 +35,10 @@ Any non-empty token authenticates - `apify login --token local-dev-token` is eno
 `APIFY_DISABLE_KEYRING=1` first in a sandbox with no OS keyring. To act as a second user, pass a
 different token on a single call: `apify api v2/datasets -H '{"authorization": "Bearer OTHER"}'`.
 
-Tokens are never written to the data directory in plain text, so do not look for them there. Never
-delete `.token-vault.key` in the data directory: it is the key to them. If a schedule or standby Actor
-fails with "the token of user ... cannot be read", it was deleted: any API call with that user's token
-fixes it.
+Tokens and secret env vars are never readable in the data directory, so do not look for them there.
+Never delete `.token-vault.key` in the data directory: it is the key to them. If it was deleted, a
+schedule or standby Actor fails with "the token of user ... cannot be read" until any API call with that
+user's token, and a run with "Secret env var ... cannot be decrypted" until that env var is set again.
 
 ### Other ports
 

@@ -16,7 +16,7 @@ interface SealedCredentials {
 	proxyPassword?: string;
 }
 
-/** A record written before tokens were sealed, read once and rewritten sealed (`sealStoredUsers`). */
+/** A record written before tokens were sealed, rewritten sealed on start (`Registry.rewriteOutdated`). */
 interface LegacyUser {
 	id: string;
 	username: string;
@@ -26,11 +26,12 @@ interface LegacyUser {
 	proxyPassword?: string;
 }
 
-export function isLegacyUser(stored: unknown): stored is LegacyUser {
+function isLegacyUser(stored: unknown): stored is LegacyUser {
 	return typeof (stored as LegacyUser).token === 'string';
 }
 
 export const userCodec: RecordCodec<UserRecord> = {
+	isOutdated: isLegacyUser,
 	encode({ id, username, createdAt, tokenHashes, token, proxyPassword }): StoredUser {
 		const credentials: SealedCredentials = { token, proxyPassword };
 		return { id, username, createdAt, tokenHashes, sealed: seal(credentials, id) };

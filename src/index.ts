@@ -16,13 +16,13 @@ import { buildDto, runDto } from './api/dto/actors.js';
 import { gracefulShutdown } from './shutdown.js';
 import { API_PORT, CONSOLE_PORT, DEFAULT_DATA_DIR } from './config.js';
 import { initTokenVault } from './services/token-vault.js';
-import { sealStoredUsers } from './services/users.js';
+import { sealStoredCredentials } from './services/users.js';
 
 async function main(): Promise<void> {
 	const vault = initTokenVault(DEFAULT_DATA_DIR);
 	bootstrapStorage(DEFAULT_DATA_DIR);
 	await openRegistries();
-	const { unreadable } = await sealStoredUsers();
+	const { unreadableUsers: unreadable } = await sealStoredCredentials();
 	if (vault.created && unreadable > 0) {
 		console.warn(
 			`The runtime's key file was missing, so the tokens of ${unreadable} user(s) cannot be read. Their ` +

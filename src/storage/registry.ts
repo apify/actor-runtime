@@ -18,6 +18,8 @@ export type RegistryChangeListener<T> = (previous: T | null, next: T | null) => 
 export interface RecordCodec<T> {
 	encode(value: T): unknown;
 	decode(stored: unknown): T;
+	/** A record still in an older on-disk form, which `rewriteOutdated` brings up to date. */
+	isOutdated?(stored: unknown): boolean;
 }
 
 const identityCodec: RecordCodec<never> = { encode: (value) => value, decode: (stored) => stored as never };
@@ -90,6 +92,25 @@ export class Registry<T> {
 			} catch (error) {
 				console.error('Registry change listener failed:', error);
 			}
+		}
+	}
+
+	/** Rewrites every record the codec reports outdated. Only those: a record that is current but no longer
+	 * opens (its key file was deleted) is left as it is, in case that file comes back. */
+	async rewriteOutdated(): Promise<void> {
+		const { isOutdated } = this.codec;
+		if (!isOutdated) return;
+		const ids: string[] = [];
+		await this.store.forEachKey(async (id) => {
+			ids.push(id);
+		});
+		for (const id of ids) {
+			await this.mutex.run(id, async () => {
+				const stored = await this.store.getValue(id);
+				if (stored !== null && stored !== undefined && isOutdated(stored)) {
+					await this.store.setValue(id, this.codec.encode(this.codec.decode(stored)));
+				}
+			});
 		}
 	}
 
