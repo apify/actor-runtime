@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 ### 🚀 Features
 
 - Allow multiple tokens per user ([#115](https://github.com/apify/actor-runtime/pull/115)) ([9e3da43](https://github.com/apify/actor-runtime/commit/9e3da433e89aeb0e8cc97f45161ba784363801fb)) by [@Pijukatel](https://github.com/Pijukatel)
+- Never store credentials in plain text ([#124](https://github.com/apify/actor-runtime/pull/124)) ([428fdad](https://github.com/apify/actor-runtime/commit/428fdadf7f44c1a161f0a98e5fb221f025268edd)) by [@Pijukatel](https://github.com/Pijukatel)
 
 
 <!-- git-cliff-unreleased-end -->
