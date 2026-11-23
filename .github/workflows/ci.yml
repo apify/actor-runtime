@@ -6,10 +6,10 @@ on:
     pull_request:
 
 env:
-    # The apify-cli branch the runtime is developed against. Every e2e job below drives the runtime
+    # The apify-cli branch the runtime is tested against. Every e2e job below drives the runtime
     # with the CLI built from it (the `apify-cli` job), not the one published on npm, so a change on
     # either side that breaks the other shows up here, before either is released.
-    APIFY_CLI_REF: actor-runtime
+    APIFY_CLI_REF: master
 
 jobs:
     checks:
@@ -34,7 +34,7 @@ jobs:
     apify-cli:
         # The CLI the e2e jobs drive the runtime with, built once here and installed by each of them
         # (`.github/scripts/install-apify-cli-package.sh`) - see `APIFY_CLI_REF` above.
-        name: Build apify-cli from its development branch
+        name: Build apify-cli from master
         runs-on: ubuntu-latest
         timeout-minutes: 15
         steps:
