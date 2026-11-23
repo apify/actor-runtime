@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs a packed `apify-cli` tarball - `ci.yml`'s `apify-cli` job builds one from the CLI's
-# `actor-runtime` branch, the unreleased CLI the runtime is developed against - into a directory of
+# `master` branch, the unreleased CLI the runtime is tested against - into a directory of
 # its own and points the e2e suite at it (`ACTOR_RUNTIME_E2E_APIFY_CLI`, `test/e2e/helpers/apify-cli.ts`),
 # so every e2e job drives the runtime with that CLI rather than the one published on npm: the two are
 # developed together, and this is what keeps them compatible. Local use: the same, with the export
