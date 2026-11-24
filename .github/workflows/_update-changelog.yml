@@ -28,7 +28,9 @@ jobs:
     update_changelog:
         name: Update changelog
         runs-on: ubuntu-latest
-        environment: automation
+        environment:
+            name: automation
+            deployment: false
         outputs:
             changelog_commitish: ${{ steps.commit.outputs.commit_long_sha }}
         steps:
