@@ -17,15 +17,26 @@ permissions:
 
 jobs:
     factory-review:
-        uses: apify/workflows/.github/workflows/factory_review.yaml@main
-        secrets: inherit
-        # Paths never auto-approved here, on top of the pipeline's defaults. Proposed from the
-        # repository's layout when this workflow was added; edit them like any other code.
-        with:
-            policy: |
-                {
-                  "denyGlobs": [
-                    "skills/**",
-                    "src/services/secrets.ts"
-                  ]
-                }
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        # Never cancel a running review: the action posts nothing from a cancelled run.
+        concurrency:
+            group: factory-review-job-${{ github.event.pull_request.number }}
+            cancel-in-progress: false
+        steps:
+            - name: apify-factory review
+              uses: apify/actions/factory-review@v1.9.0
+              with:
+                  apify-factory-github-token: ${{ secrets.APIFY_FACTORY_GITHUB_TOKEN }}
+                  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY_APIFY_FACTORY_REVIEW }}
+                  apify-factory-callback-token: ${{ secrets.APIFY_FACTORY_CALLBACK_TOKEN }}
+                  factory-public-url: ${{ vars.FACTORY_PUBLIC_URL }}
+                  # Paths never auto-approved here, on top of the pipeline's defaults. Proposed from the
+                  # repository's layout when this workflow was added; edit them like any other code.
+                  policy: |
+                      {
+                        "denyGlobs": [
+                          "skills/**",
+                          "src/services/secrets.ts"
+                        ]
+                      }

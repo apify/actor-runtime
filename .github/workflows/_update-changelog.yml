@@ -35,7 +35,7 @@ jobs:
             changelog_commitish: ${{ steps.commit.outputs.commit_long_sha }}
         steps:
             # The service account's token, so the commit can be pushed to the protected master.
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v4.4.0
               with:
                   token: ${{ secrets.APIFY_SERVICE_ACCOUNT_GITHUB_TOKEN }}
 
@@ -47,7 +47,7 @@ jobs:
 
             # An artifact rather than a string input: inputs reach a step as environment variables, which
             # Linux caps at 128 KiB each, and the full changelog outgrows that.
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v4.3.0
               with:
                   name: ${{ inputs.changelog_artifact_name }}
                   path: ${{ runner.temp }}/changelog

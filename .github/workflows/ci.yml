@@ -17,11 +17,11 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 15
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v4.4.0
             # Installs the pnpm version pinned by package.json's `packageManager` field; must run
             # before setup-node so its `cache: pnpm` can find the pnpm store.
-            - uses: pnpm/action-setup@v4
-            - uses: actions/setup-node@v4
+            - uses: pnpm/action-setup@v4.3.0
+            - uses: actions/setup-node@v4.4.0
               with:
                   node-version: 24
                   cache: pnpm
@@ -38,15 +38,15 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 15
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v4.4.0
               with:
                   repository: apify/apify-cli
                   ref: ${{ env.APIFY_CLI_REF }}
             - name: Record the CLI commit
               run: echo "apify-cli \`$APIFY_CLI_REF\` @ $(git rev-parse HEAD) - $(git log -1 --format=%s)" >> "$GITHUB_STEP_SUMMARY"
             # The CLI's own pnpm (its `packageManager`) and Node: the checkout is the CLI's repository.
-            - uses: pnpm/action-setup@v4
-            - uses: actions/setup-node@v4
+            - uses: pnpm/action-setup@v4.3.0
+            - uses: actions/setup-node@v4.4.0
               with:
                   node-version: 24
                   cache: pnpm
@@ -54,7 +54,7 @@ jobs:
             # `pnpm pack` runs the CLI's `prepack` (its build included) and produces the same package
             # `pnpm publish` would, the published `files` only - what `npm install -g apify-cli` gets.
             - run: pnpm pack --out apify-cli.tgz
-            - uses: actions/upload-artifact@v4
+            - uses: actions/upload-artifact@v4.6.2
               with:
                   name: apify-cli-package
                   path: apify-cli.tgz
@@ -94,14 +94,14 @@ jobs:
                     - standby
                     - web-server
         steps:
-            - uses: actions/checkout@v4
-            - uses: pnpm/action-setup@v4
-            - uses: actions/setup-node@v4
+            - uses: actions/checkout@v4.4.0
+            - uses: pnpm/action-setup@v4.3.0
+            - uses: actions/setup-node@v4.4.0
               with:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v4.3.0
               with:
                   name: apify-cli-package
                   path: ${{ runner.temp }}/apify-cli-package
@@ -144,14 +144,14 @@ jobs:
         runs-on: ubuntu-24.04-arm
         timeout-minutes: 30
         steps:
-            - uses: actions/checkout@v4
-            - uses: pnpm/action-setup@v4
-            - uses: actions/setup-node@v4
+            - uses: actions/checkout@v4.4.0
+            - uses: pnpm/action-setup@v4.3.0
+            - uses: actions/setup-node@v4.4.0
               with:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v4.3.0
               with:
                   name: apify-cli-package
                   path: ${{ runner.temp }}/apify-cli-package
@@ -213,7 +213,7 @@ jobs:
                     - podman-rootless
                     - podman-rootful
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v4.4.0
             # Starts the VM (for Docker: after downloading the pinned pieces into one directory under the
             # runner user's home, removed again in the last step) and smoke-tests the socket and home
             # mounts the suite relies on. Exports the engine's env (`CONTAINER_CLI`, `TMPDIR`, and for
@@ -234,13 +234,13 @@ jobs:
             # than letting the container start fail deep in `beforeAll`.
             - name: Clean up leftovers of earlier runs
               run: .github/scripts/e2e-host-cleanup.sh --require-free-ports
-            - uses: pnpm/action-setup@v4
-            - uses: actions/setup-node@v4
+            - uses: pnpm/action-setup@v4.3.0
+            - uses: actions/setup-node@v4.4.0
               with:
                   node-version: 24
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v4.3.0
               with:
                   name: apify-cli-package
                   path: ${{ runner.temp }}/apify-cli-package
