@@ -2,8 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-<!-- git-cliff-unreleased-start -->
-## 0.1.4 - **not yet released**
+## [0.1.4](https://github.com/apify/actor-runtime/releases/tag/v0.1.4) (2026-11-24)
 
 ### 🚀 Features
 
@@ -11,7 +10,6 @@ All notable changes to this project will be documented in this file.
 - Never store credentials in plain text ([#124](https://github.com/apify/actor-runtime/pull/124)) ([428fdad](https://github.com/apify/actor-runtime/commit/428fdadf7f44c1a161f0a98e5fb221f025268edd)) by [@Pijukatel](https://github.com/Pijukatel)
 
 
-<!-- git-cliff-unreleased-end -->
 ## [0.1.3](https://github.com/apify/actor-runtime/releases/tag/v0.1.3) (2026-10-27)
 
 ### 🚀 Features
